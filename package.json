@@ -26,6 +26,7 @@
     "check:phase9": "npm run typecheck && npm test && npm run build:web && npm run build:mobile && npm run build",
     "check:phase10": "npm run typecheck && npm test && npm run build:web && npm run build:mobile && npm run build",
     "check:phase11": "npm run typecheck && npm test && npm run build:web && npm run build:mobile && npm run build",
+  "check:phase12": "npm run typecheck && npm test && npm run build:web && npm run build:mobile && npm run build",
     "cloud:dev": "tsx cloud/src/server.ts",
     "cloud:test": "vitest run --config vitest.config.ts cloud/tests",
     "php:test": "php cloud/php/tests/run.php",

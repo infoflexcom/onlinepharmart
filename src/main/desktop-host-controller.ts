@@ -71,6 +71,8 @@ import type {
   StocktakeVarianceRecord,
   WeighedPriceResult,
 } from '../shared/inventory/types'
+import type { DemoDataService } from '../services/demo-data-service'
+import type { DemoDatasetState, DemoLoadResult } from '../shared/demo/types'
 import { fallbackLicenseSummary } from './license-summary-fallback'
 
 const PAGE_LABELS: readonly NavigationItem[] = [
@@ -117,6 +119,7 @@ export class DesktopHostController {
     private readonly mobileAccess?: MobileAccessService,
     private readonly backup?: BackupService,
     private readonly approvals?: ApprovalQueueService,
+    private readonly demoData?: DemoDataService,
   ) {}
 
   async initialize(): Promise<void> {
@@ -698,6 +701,27 @@ export class DesktopHostController {
     const admin = this.requireMobileAdmin(senderId)
     this.requireMobileAccessService().totp.disable(admin.id)
     return Promise.resolve(this.requireMobileAccessService().totp.status(admin.id))
+  }
+
+  // ------------------------------------------------------------------ demonstration data
+
+  getDemoDataStatus(senderId: number): DemoDatasetState {
+    this.requireAdmin(senderId)
+    return this.requireDemoData().status()
+  }
+
+  /** Loading and removing are Admin-only and audited; the service enforces both, this only names the caller. */
+  loadDemoData(senderId: number): DemoLoadResult {
+    return this.requireDemoData().load(this.requireSignedIn(senderId)!)
+  }
+
+  removeDemoData(senderId: number): { products: number; users: number; promotions: number } {
+    return this.requireDemoData().remove(this.requireSignedIn(senderId)!)
+  }
+
+  private requireDemoData(): DemoDataService {
+    if (!this.demoData) throw new Error('The demonstration catalogue is only available in the installed desktop app.')
+    return this.demoData
   }
 
   // ------------------------------------------------------------------ the approvals queue

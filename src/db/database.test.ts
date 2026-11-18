@@ -71,10 +71,11 @@ describe('database migrations and schema', () => {
     expect(database.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([
       { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 },
       { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 },
+      { version: 15 },
     ])
     expect(database.prepare('SELECT COUNT(*) AS count FROM currencies').get()).toEqual({ count: 54 })
     migrateDatabase(database)
-    expect(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 14 })
+    expect(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 15 })
     database.close()
   })
 
@@ -185,7 +186,7 @@ describe('database migrations and schema', () => {
     })
     expect(database.prepare('SELECT description_snapshot, expiry_tracking_snapshot FROM sale_items WHERE id = ?')
       .get('v9-sale-item')).toEqual({ description_snapshot: 'Legacy item', expiry_tracking_snapshot: 0 })
-    expect(database.prepare('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1').get()).toEqual({ version: 14 })
+    expect(database.prepare('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1').get()).toEqual({ version: 15 })
     database.close()
   })
 

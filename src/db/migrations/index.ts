@@ -13,6 +13,7 @@ import { migrateAccountingReports } from './011_accounting_reports'
 import { migrateMobileSessions } from './012_mobile_sessions'
 import { migrateOperationalSettings } from './013_operational_settings'
 import { migrateMobileLogin } from './014_mobile_login'
+import { migrateDemoDataRemoval } from './015_demo_data_removal'
 
 export interface Migration {
   version: number
@@ -35,4 +36,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 12, name: 'mobile-device-session-expiry-and-refresh-rotation', up: migrateMobileSessions },
   { version: 13, name: 'operational-settings-and-backup-log', up: migrateOperationalSettings },
   { version: 14, name: 'mobile-two-factor-login-and-device-approval', up: migrateMobileLogin },
+  { version: 15, name: 'removable-demonstration-stock-seed', up: migrateDemoDataRemoval },
 ]

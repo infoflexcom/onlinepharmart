@@ -16,6 +16,7 @@ separately in [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md) and is never marked d
 | 7 | Mobile access: Admin-only LAN HTTPS PWA, TLS root/leaf lifecycle in `safeStorage`, pairing, 15-minute access tokens with rotating 90-day refresh tokens, device revocation, mobile accounting summary/PDF, mobile return approvals, LAN-only enforcement, static-only service-worker caching | **DONE (software); 3 hardware gates owed** |
 | 8–10 | Settings/backup/security review; Admin-only mobile host with device approval, two-factor login and firewall repair; the Admin phone app as a served PWA | DONE (software) |
 | 11 | Vendor Cloud: licence server API (two builds — Node with the internet relay, PHP+MySQL without), vendor portal with mandatory TOTP and full licence lifecycle, the internet relay and the desktop's half of it, deployment/privacy/relay-limit documents | **DONE (software); 2 hardware gates owed** |
+| 12 | Polish and test everything: one navy/gold/off-white palette across desktop and phone, optional demonstration datasets the Admin can load or remove, and the full unit / API-security / end-to-end test sweep with an honest pass/fail matrix | **DONE (software); emulator and hardware gates owed — see the matrix below** |
 
 ### Report surface delivered in Phases 6–7 (and re-verified at Phase 7 close-out)
 
@@ -204,6 +205,128 @@ test-only signer seam, because the WebAssembly PHP available here has no Ed25519
 click-by-click instructions that no test can perform. The relay's documentation of its own limit is a deliberate
 choice, not a gap papered over: nobody reading it is told the traffic is end-to-end encrypted.
 
+## Phase 12 — Polish and test everything
+
+### What was built
+
+| Item | Where |
+| --- | --- |
+| Demonstration dataset: 30 pharmacy SKUs with batches, 60 supermarket SKUs across `Fresh`/`Grocery` (6 weighed, priced per kg), 2 promotions, 3 sample accounts | `src/services/demo-data-service.ts`, types in `src/shared/demo/types.ts` |
+| Load / remove, Admin-only, in one transaction, removable before real use | `DemoDataService`, migration `015_demo_data_removal.ts`, IPC `demo:get-status` / `demo:load` / `demo:remove` |
+| The Admin's panel: counts, sample logins, in-use warning, confirm-gated load and remove | `DemoDataPanel` in `src/renderer/src/ui/SettingsPanels.tsx`, shown by `SettingsScreen.tsx` |
+| Prices scaled to the shop's currency: integers for 0-decimal currencies, three places for 3-decimal, never zero or negative | `CURRENCY_SCALE` / `scaleMajor()` |
+| One palette on every surface | `styles.css`, `mobile-access.css`, `mobile/src/style.css` |
+| A currency-parsing bug found by the sweep and fixed | `stripCurrencyToken` in `src/currency/parse.ts` |
+
+### Test matrix — the brief's checklist
+
+Legend: **Pass** = an automated test asserts it here. **Emulator only** = no browser or phone exists in this
+build environment (`npx playwright install` cannot fetch a browser), so it is proved at the API or DOM level and
+the pixel-level step is carried to [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md). **Manual** = a physical step.
+
+#### Unit tests (§3 of the brief)
+
+| Requirement | Result | Evidence |
+| --- | --- | --- |
+| Retail vs wholesale pricing | Pass | `point-of-sale-service.test.ts`, `product-inventory-service.test.ts` |
+| Wholesale permission enforcement | Pass | `point-of-sale-service.test.ts`; live round trip in `pos-currency-end-to-end.test.ts` (`canMakeWholesaleSale` true for the wholesale-on cashier, false for the off one) |
+| FEFO | Pass | `point-of-sale-service.test.ts` (batch snapshots, expiry blocking), `product-inventory-service.test.ts` |
+| Promotions and loyalty | Pass | `point-of-sale-service.test.ts` (percent/fixed promotions, loyalty earn and debt repayment) |
+| Return limits | Pass | `return-service.test.ts` (over-limit pending, self-approval refused, window override) |
+| Daily and monthly totals | Pass | `accounting-report-service.test.ts`, hand-calculated per currency incl. the 30/31-day monthly rows |
+| Licence dates | Pass | `license-manager.test.ts` (exclusive end date, grace, expiry keeps data) |
+| Signatures | Pass | `license-crypto.test.ts` (Ed25519, altered payload, untrusted key) |
+| Machine binding | Pass | `license-crypto.test.ts`, `license-manager.test.ts` (copied binding, rebind paths) |
+| Edition flags | Pass | `accounting-report-service.test.ts` (Pharmacy vs Supermarket report sections), `product-inventory-service.test.ts` |
+| On-site licence periods: no cap by default, optional cap | Pass | `license-manager.test.ts` ("1, 3, and 5 years when no maximum is configured", "enforces an optional Build Studio maximum") |
+| Store-name snapshot | Pass | `point-of-sale-service.test.ts` receipt snapshots, `return-service.test.ts`, `report-export-sections.test.ts` |
+| Idempotency | Pass | `idempotency.test.ts`; replay in `cross-device-consistency.test.ts` |
+| Optimistic locking | Pass | `product-inventory-service.test.ts` (stale writes), `cross-device-consistency.test.ts` (stale phone read refused, no partial write) |
+| Currency module: formatting/parsing for **every** built-in currency, 0/2/3 decimals, symbol position, separators, round half up, minor-unit arithmetic, lock after first transaction, vendor-locked currency, custom currency | Pass | `currency.test.ts` — the per-currency sweep covers all 54 codes; lock rows in `settings-phase8.test.ts`, vendor lock in `first-run-authentication.test.ts` and `license-manager.test.ts`, custom currency in `currency.test.ts` + `database.test.ts` |
+
+#### API security tests (§4)
+
+| Requirement | Result | Evidence |
+| --- | --- | --- |
+| Unauthenticated caller | Pass | `admin-only-enforcement.test.ts`, `mobile-admin-routes.test.ts` |
+| Unapproved device | Pass | `admin-only-enforcement.test.ts` |
+| Revoked device | Pass | `admin-only-enforcement.test.ts`, `mobile-access-integration.test.ts` (refresh-token reuse revokes) |
+| Cashier **and** Supervisor phone login refused at login, at refresh and on every route | Pass | `admin-only-enforcement.test.ts` (identical error, code and audit trail as a wrong password; seven routes swept) |
+| Cashier's device-less raw API calls | Pass | `admin-only-enforcement.test.ts` |
+| Demoting an Admin cuts the phone off | Pass | `admin-only-enforcement.test.ts` (sessions revoked, devices revoked) |
+| Cashier without wholesale permission asking for wholesale on the desktop | Pass | `point-of-sale-service.test.ts`, `pos-currency-end-to-end.test.ts` |
+| Expired licence | Pass | `admin-only-enforcement.test.ts`, `license-manager.test.ts` |
+| Rate limiting and lockout | Pass | `admin-only-enforcement.test.ts` (five wrong passwords per phone), `rate-limit-state.test.ts` |
+| Admin remote login without TOTP | Pass | `admin-only-enforcement.test.ts` (required over the internet, not on the LAN) |
+| Changing a locked currency through IPC **and** the API | Pass | `locked-currency-channels.test.ts` — real IPC handler, host controller, and seven guessed phone routes |
+
+#### End-to-end tests (§5)
+
+No browser can be installed in this environment (`playwright install` fails; there is no system Chromium), so the
+"desktop" end-to-end rows run the **real host** — real SQLite, real migrations, real services, the real
+`DesktopHostController` that IPC and the mobile API both sit on — rather than a driver clicking pixels. That
+proves the behaviour and the arithmetic; it does not prove layout.
+
+| Scenario | Desktop result | iPhone / Android emulator |
+| --- | --- | --- |
+| Installer currency carried into first-run | Pass — `first-run-authentication.test.ts` | n/a (desktop) |
+| Activation per edition: online | Pass — `license-manager.test.ts` | n/a |
+| Activation per edition: file | Pass — `license-manager.test.ts` (bound to its machine) | n/a |
+| Activation per edition: on-site with internet disabled, multi-year period | Pass — `license-manager.test.ts` (1/3/5 years, no network, optional cap) | n/a |
+| First-run with store name + currency | Pass — `first-run-authentication.test.ts` | n/a |
+| First-run rejects an empty store name | Pass — `first-run-authentication.test.ts`, `pos-currency-end-to-end.test.ts` | n/a |
+| Desktop login per role | Pass — `first-run-authentication.test.ts` (Admin, Supervisor, Cashier) | n/a |
+| A sale to receipt in NGN, USD, JPY, KWD | Pass — `pos-currency-end-to-end.test.ts` (sale → receipt → reprint → report, per currency) | Emulator only — receipt rendering is asserted as markup, not a screenshot |
+| A wholesale sale by a cashier on desktop | Pass — `pos-currency-end-to-end.test.ts` | n/a |
+| A return | Pass — `return-service.test.ts` | Emulator only |
+| Reports and Excel export | Pass — `accounting-report-service.test.ts` (opened with `exceljs`, real cell values and formats), `report-export-sections.test.ts` | n/a |
+| Expiry lock | Pass — `license-manager.test.ts` | n/a |
+| Online renewal | Pass — `license-manager.test.ts` (vendor renews, next check-in unlocks, no customer password) | n/a |
+| On-site renewal | Pass — `license-manager.test.ts` | n/a |
+| Pairing and approval | Pass — `mobile-access-integration.test.ts` over a real HTTPS listener | Emulator only — a real camera scan and install prompt need a handset |
+| Admin editing stock on the phone | Pass — `mobile-admin-service.test.ts` | Emulator only — touch layout unproven |
+| Admin approving a cashier's request from the phone | Pass — `mobile-access-integration.test.ts`, `approval-queue-service.test.ts` | Emulator only |
+| Cashier blocked from the phone | Pass — `admin-only-enforcement.test.ts` | Emulator only |
+
+#### Cross-device scenario (§6)
+
+| Scenario | Result | Evidence |
+| --- | --- | --- |
+| Admin adjusts stock on the phone while a cashier sells the same item on desktop; totals, stock and audit log stay consistent | Pass | `cross-device-consistency.test.ts` — the phone's stale read is refused rather than overwriting the sale, the refusal is a no-op, a retry succeeds, a replay is idempotent, stock reaches zero exactly, an over-sell is refused, and the report total and audit actors agree |
+
+#### Per edition, per currency, per platform
+
+| Edition | NGN | USD | JPY | KWD | Other built-ins |
+| --- | --- | --- | --- | --- | --- |
+| Pharmacy (desktop) | Pass | Pass | Pass | Pass | Pass (currency module sweep) |
+| Supermarket (desktop) | Pass | Pass | Pass | Pass | Pass (currency module sweep) |
+| Both (desktop) | Pass | Pass | Pass | Pass | Pass (currency module sweep) |
+| Pharmacy / Supermarket / Both (phone API) | Pass | Pass | Pass | Pass | Pass (currency module sweep) |
+
+| Platform | Automated here | Owed to hardware/emulator |
+| --- | --- | --- |
+| Windows desktop (Electron) | Host, IPC, preload bridge and DOM tests | Installer, DPAPI `safeStorage`, tray, print output (Gate 1) |
+| Desktop web preview | `build:web` succeeds; components render | Nothing functional |
+| Admin PWA in Chromium (Android profile) | Served shell, cache and route tests | Install prompt, splash, camera scan, touch layout |
+| Admin PWA in WebKit (iPhone profile) | Same served shell and cache tests | Safari install, certificate trust, safe-area layout |
+| Physical iOS / Android phone | Not possible here | Gate 2 in the release checklist |
+
+### What could only be tested on emulators, or not at all
+
+- **No browser exists in this build environment.** `npx playwright --version` reports 1.65.1 but
+  `npx playwright install chromium` cannot download a browser, and there is no system Chromium. Every "emulator"
+  row above is therefore proved at the level below the browser — real HTTP through Fastify's `inject` or a real
+  HTTPS listener, real DOM through `mobile/src/test-dom.ts` and jsdom — and the pixel-level step is a manual
+  checklist item, not a claim.
+- **No phone, no Windows machine, no printer.** Camera scanning, install prompts, certificate trust, safe-area
+  insets, printing and DPAPI are Gates 1–4 in [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md).
+- **`npm run php:test` cannot run here** (no PHP binary); the identical suite runs through `php-wasm` inside
+  `cloud:test` and reports 32 passed.
+
+### Verification commands
+
+`npm run check:phase12` runs typecheck, the full suite, the web build, the PWA build and the Electron bundle.
+
 ## Verification commands
 
 | Command | What it proves |
@@ -217,7 +340,8 @@ choice, not a gap papered over: nobody reading it is told the traffic is end-to-
 | `npm run check:phase8` | All of the above in sequence (Phase 8 bundle). |
 | `npm run check:phase9` | All of the above in sequence. |
 | `npm run check:phase10` | All of the above in sequence. |
-| `npm run check:phase11` | All of the above in sequence, including the cloud and PHP suites (current phase bundle). |
+| `npm run check:phase11` | All of the above in sequence, including the cloud and PHP suites. |
+| `npm run check:phase12` | All of the above in sequence (current phase bundle). |
 | `npm run cloud:test` | The cloud suites only (8 files: schema, auth, licence flow, portal, relay, maintenance, secrets, PHP build). |
 | `npm run php:test` | The PHP build's own 32-check suite, needs a local PHP 8 binary (none exists in the environment this phase was built in, so here the identical suite runs inside `php-wasm` as part of `cloud:test` and reports `32 passed, 0 failed`). |
 | `npx tsx scripts/verify-qr-code.ts` | The QR images decode with an independent decoder (needs `npm install --no-save jsqr`; not part of `npm test`). |

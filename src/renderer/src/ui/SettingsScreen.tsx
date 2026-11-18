@@ -6,7 +6,7 @@ import type { AppPage } from '@shared/auth/types'
 import type { LicenseSummary } from '@shared/license/types'
 import type { ShopProfile, ShopSettings } from '@shared/shop/types'
 import { TRANSACTION_CURRENCY_LOCK_MESSAGE, VENDOR_CURRENCY_LOCK_MESSAGE } from '@shared/currency/lock-messages'
-import { BackupPanel, LicensePanel, ReceiptPreviewPanel, ReceiptSettingsPanel } from './SettingsPanels'
+import { BackupPanel, DemoDataPanel, LicensePanel, ReceiptPreviewPanel, ReceiptSettingsPanel } from './SettingsPanels'
 
 interface Props {
   bridge: InfoflexBridge
@@ -231,6 +231,7 @@ export function SettingsScreen({ bridge, settings, license, onSaved, onNavigate 
       </section>
 
       <BackupPanel bridge={bridge} />
+      {licenseSummary.canUse && <DemoDataPanel bridge={bridge} edition={licenseSummary.edition} />}
 
       {error && <div className="form-error" role="alert"><span>!</span>{error}</div>}
       {status && <div className="success-message" role="status">{status}</div>}

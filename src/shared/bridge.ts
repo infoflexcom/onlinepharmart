@@ -54,6 +54,7 @@ import type {
   WeighedPriceResult,
 } from './inventory/types'
 import type { ApprovalRequestView } from './approvals/types'
+import type { DemoDatasetState, DemoLoadResult } from './demo/types'
 import type {
   MobileAccessStatus, MobileConnectionTest, MobileKeepRunningSettings, MobilePairingInfo,
   MobileTotpEnrollment, PairedMobileDevice, PendingMobileApproval, TotpStatus,
@@ -178,6 +179,10 @@ export interface InfoflexBridge {
   listBackupFiles(folder: string): Promise<BackupSummary[]>
   restoreBackup(input: RestoreBackupInput): Promise<RestoreResult>
   chooseBackupFolder(): Promise<string | null>
+  /** The optional demonstration catalogue: load it to try the app, remove it before real use. */
+  getDemoDataStatus(): Promise<DemoDatasetState>
+  loadDemoData(): Promise<DemoLoadResult>
+  removeDemoData(): Promise<{ products: number; users: number; promotions: number }>
 }
 
 declare global {

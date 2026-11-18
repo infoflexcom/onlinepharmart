@@ -106,6 +106,9 @@ const bridge: InfoflexBridge = {
   listBackupFiles: (folder) => ipcRenderer.invoke('backup:list-files', folder),
   restoreBackup: (input) => ipcRenderer.invoke('backup:restore', input),
   chooseBackupFolder: () => ipcRenderer.invoke('backup:choose-folder'),
+  getDemoDataStatus: () => ipcRenderer.invoke('demo:get-status'),
+  loadDemoData: () => ipcRenderer.invoke('demo:load'),
+  removeDemoData: () => ipcRenderer.invoke('demo:remove'),
 }
 
 contextBridge.exposeInMainWorld('infoflex', bridge)

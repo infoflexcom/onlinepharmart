@@ -51,8 +51,13 @@ export function parseMoneyExact(
 
 function stripCurrencyToken(text: string, currency: CurrencyDefinition): string {
   if (typeof text !== 'string') throw new Error('Enter a valid amount.')
-  let normalized = text.trim()
+  // `formatMoney` writes negatives with a true minus sign (U+2212) in front of the symbol, so anything this module
+  // prints must also parse. The sign is lifted off first, the currency token stripped from what follows, and the
+  // sign put back — otherwise "-₦1,234" would look like it does not start with the currency symbol.
+  let normalized = text.trim().replace(/\u2212/gu, '-')
   if (!normalized) throw new Error('Enter an amount.')
+  const negative = normalized.startsWith('-')
+  if (negative) normalized = normalized.slice(1).trim()
   for (const token of [currency.code, currency.symbol]) {
     if (!token) continue
     const upper = normalized.toUpperCase()
@@ -60,7 +65,8 @@ function stripCurrencyToken(text: string, currency: CurrencyDefinition): string 
     if (upper.startsWith(upperToken)) normalized = normalized.slice(token.length)
     else if (upper.endsWith(upperToken)) normalized = normalized.slice(0, -token.length)
   }
-  return normalized.trim()
+  normalized = normalized.trim()
+  return negative ? `-${normalized}` : normalized
 }
 
 /** Parse an ungrouped decimal string into exact integer minor units. */

@@ -429,3 +429,37 @@ Each item below is written so somebody with the deployed system can tick it.
 - [ ] Create a licence in the PHP portal, activate a real shop PC against it, and confirm the offline `.lic` download and a renewal check-in both work.
 - [ ] Confirm the PHP build has no relay page and that the desktop reports "this licence server does not offer internet access".
 
+## Phase 12 — Polish, demonstration data, and the screens a person actually sees
+
+`npm run check:phase12` proves the behaviour: the demonstration dataset loads and removes without locking the
+currency, a locked currency cannot be moved through IPC or the API, a sale in NGN/USD/JPY/KWD reaches its receipt
+and its report, an Admin's phone adjustment and a cashier's sale stay consistent, and every component that this
+phase touched renders. It cannot prove what any of that **looks like**, because no browser can be installed in the
+build environment (`npx playwright install chromium` cannot download one) and no phone or Windows machine is
+attached. The items below are the pixel-and-hardware half, and they are the reason Phase 12 is "DONE (software)"
+rather than "done".
+
+### The palette, on a screen
+- [ ] On Windows at 1280×800 and at 1024×768, open each workspace (Setup, Login, POS, Inventory, Returns, Reports, Settings, Mobile Access, Licence) and confirm one navy (`#1F3F73`), one gold (`#C9A24B`) and one off-white; no purple, no second blue, no stray legacy gold.
+- [ ] Do the same in the Admin phone app in an iPhone-Safari-sized window and an Android-Chrome-sized window (390×844 and 360×800). The two must look like the same product as the desktop.
+- [ ] Check contrast on the gold-on-navy buttons and the muted grey body text with the browser's accessibility panel; nothing below WCAG AA for body text.
+- [ ] Tab through the Settings screen: every control must show the gold focus ring, and the demo panel's buttons must be reachable in order.
+
+### Loading, empty and confirmation states
+- [ ] Start the app on a slow disk and confirm the loading screen appears and then leaves; it must never sit forever on a real machine.
+- [ ] With an empty catalogue, open Inventory, POS, Returns, Reports, Approvals and Mobile Access, and confirm each says in plain words what to do next rather than showing a blank panel.
+- [ ] Trigger every destructive action and confirm the dialog names the thing it will destroy: change currency, deactivate a user, revoke one phone, revoke all phones, regenerate the certificate, turn off mobile access, turn off the authenticator, discard a held cart, remove demonstration data. Cancel each one and confirm nothing changed.
+- [ ] Type an invalid price, an out-of-range discount, a bad store name and an invalid phone pairing code, and confirm each message is a friendly sentence a shopkeeper understands, not an exception name.
+
+### The demonstration dataset, on a real screen
+- [ ] Settings → Demonstration data on a fresh install: load it. Confirm 30 products on the Pharmacy edition, 60 on the Supermarket edition (and 90 on Both), the Fresh and Grocery departments, six weighed lines with a PLU and a price per kilogram, and two active promotions.
+- [ ] Confirm the three sample logins appear and that `Demo-Pass!2026` signs each in: `demo.cashier.on` may sell wholesale, `demo.cashier.off` may not, and `demo.supervisor` only exists on the Supermarket edition.
+- [ ] Confirm the prices read sensibly in the chosen currency — no ₦0.00 items, no three decimals on a two-decimal currency, and whole numbers on a 0-decimal currency.
+- [ ] Ring up one demonstration sale, then try to remove the dataset: removal must refuse and explain that a sale depends on it.
+- [ ] On a second fresh install, load the dataset and remove it straight away. Confirm the catalogue is empty, the demonstration users are gone, and **Settings still lets you change the currency** — the lock must not have engaged.
+- [ ] Print a demonstration receipt on the real printer and confirm it carries the shop name, the currency and the demonstration product names.
+
+### Emulator and hardware items carried from Phase 12
+- [ ] Run the PWA in a Playwright iPhone 14 profile and an Android Pixel 7 profile against a real listener; pair, sign in, read a report, adjust stock, approve a request, and confirm the layout does not scroll sideways and the touch targets are at least 44 px.
+- [ ] On a physical iPhone and a physical Android phone, install the PWA from the browser prompt, confirm the splash, use the camera to scan a barcode, and print a receipt through the share sheet.
+- [ ] These overlap with Gates 1–4 above; do not close a gate twice or claim one from a desktop-only check.

@@ -100,6 +100,75 @@ describe('integer minor-unit money', () => {
     expect(formatMoney(1234567n, kwd)).toBe(`1,234.567 ${kwd.symbol}`)
   })
 
+  it('formats, parses and rounds every built-in currency through its own separators, symbol side and precision', () => {
+    // The brief asks for formatting and parsing to be proved for *every* built-in currency, not a sample. Sweeping
+    // the catalogue means a typo in one row — a thousand separator equal to the decimal one, a symbol on the wrong
+    // side, a three-decimal currency catalogued as two — fails here rather than at a customer's till.
+    for (const currency of CURRENCIES) {
+      const scale = 10n ** BigInt(currency.decimalPlaces)
+      // A round amount with digits either side of both separators, so grouping is exercised.
+      const amount = 1_234_567n * scale + 89n
+      const formatted = formatMoney(amount, currency)
+
+      // The symbol is present, on the requested side, and never mixed with the separators or ISO code.
+      expect(formatted, currency.code).toContain(currency.symbol)
+      if (currency.symbolPosition === 'before') {
+        expect(formatted.startsWith(currency.symbol), `${currency.code}: ${formatted}`).toBe(true)
+      } else {
+        expect(formatted.endsWith(currency.symbol), `${currency.code}: ${formatted}`).toBe(true)
+      }
+      // Where the symbol is its own ISO code (SSP, for one), that text is expected and correct.
+      if (currency.symbol !== currency.code) expect(formatted, currency.code).not.toContain(currency.code)
+
+      // Grouping really happened: the thousands separator appears, and the decimal part has exactly the
+      // currency's number of places and nothing else.
+      expect(formatted, currency.code).toContain(currency.thousandsSeparator)
+      // A currency shown after the amount may be separated from it by a space ("1.234,56 €"), which the
+      // formatter is entitled to add; trim it so the digits alone are measured.
+      const digits = (currency.symbolPosition === 'before'
+        ? formatted.slice(currency.symbol.length)
+        : formatted.slice(0, -currency.symbol.length)).trim()
+      const parts = digits.split(currency.decimalSeparator)
+      const whole = parts[0] ?? ''
+      const fraction = parts[1]
+      expect(parts.length, `${currency.code}: ${formatted}`).toBe(currency.decimalPlaces === 0 ? 1 : 2)
+      expect(whole.split(currency.thousandsSeparator).join(''), `${currency.code}: ${formatted}`).toMatch(/^\d+$/u)
+      expect(whole, currency.code).not.toBe(whole.split(currency.thousandsSeparator).join(''))
+      if (currency.decimalPlaces === 0) {
+        expect(fraction, `${currency.code} must have no decimal part`).toBeUndefined()
+      } else {
+        expect(fraction, currency.code).toBe('89'.padStart(currency.decimalPlaces, '0'))
+      }
+
+      // The formatted text parses back to the exact same integer minor units, which is the whole promise of the
+      // minor-unit model: what the customer sees is what the ledger holds.
+      expect(parseMoney(formatted, currency), `${currency.code}: ${formatted}`).toBe(amount)
+      expect(parseMoneyExact(formatted, currency), `${currency.code}: ${formatted}`).toBe(amount)
+      // The canonical decimal string carries the same digits, so an export or a receipt body cannot drift from it.
+      expect(fromMinor(amount, currency).replace('.', currency.decimalSeparator), currency.code).toBe(
+        `${whole.split(currency.thousandsSeparator).join('')}${currency.decimalPlaces === 0 ? '' : `${currency.decimalSeparator}${fraction}`}`,
+      )
+
+      // Negative amounts keep a true minus sign in front of the whole thing, never inside it.
+      const negative = formatMoney(-amount, currency)
+      // A real minus sign (U+2212), placed outside the symbol so the symbol still reads on its own side.
+      expect(negative.startsWith('\u2212'), `${currency.code}: ${negative}`).toBe(true)
+      expect(negative.slice(1), `${currency.code}: ${negative}`).toBe(formatted)
+      expect(parseMoney(negative, currency), currency.code).toBe(-amount)
+
+      // Half-up rounding at the currency's own precision: adding half a minor unit rounds away from zero.
+      expect(roundHalfUp(amount * 10n + 5n, 10n), currency.code).toBe(amount + 1n)
+      expect(roundHalfUp(-(amount * 10n + 5n), 10n), currency.code).toBe(-(amount + 1n))
+      expect(roundHalfUp(amount * 10n + 4n, 10n), currency.code).toBe(amount)
+
+      // Arithmetic never leaves integer minor units.
+      const doubled = applyRateHalfUp(amount, 2_000n, 1_000n)
+      expect(doubled, currency.code).toBe(amount * 2n)
+      // And a rate that does not divide evenly still rounds half up, exactly once.
+      expect(applyRateHalfUp(10n, 1n, 4n), currency.code).toBe(3n)
+    }
+  })
+
   it('parses using configured separators and round-trips canonical decimal strings', () => {
     const ngn = getCurrency('NGN')!
     const eur = getCurrency('EUR')!

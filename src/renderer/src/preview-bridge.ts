@@ -1387,6 +1387,21 @@ export function createPreviewBridge(): InfoflexBridge {
       requireAdmin()
       return null
     },
+    async getDemoDataStatus() {
+      requireAdmin()
+      return {
+        loaded: false, products: 0, users: 0, demoUsers: [], inUse: false, inUseReason: null,
+        currency: settings.currency.code,
+      }
+    },
+    async loadDemoData() {
+      requireAdmin()
+      throw new Error('The demonstration catalogue is available in the installed desktop app, not this browser preview.')
+    },
+    async removeDemoData() {
+      requireAdmin()
+      throw new Error('The demonstration catalogue is available in the installed desktop app, not this browser preview.')
+    },
   }
 }
 

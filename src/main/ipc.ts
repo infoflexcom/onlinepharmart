@@ -194,6 +194,10 @@ export function registerDesktopIpc(
     return result
   })
   handle('backup:choose-folder', () => options.chooseFolder?.() ?? null)
+
+  handle('demo:get-status', (event) => host.getDemoDataStatus(sender(event)))
+  handle('demo:load', (event) => host.loadDemoData(sender(event)))
+  handle('demo:remove', (event) => host.removeDemoData(sender(event)))
 }
 
 /** The renderer only ever sends short identifiers and names; anything else is rejected here, not in a service. */

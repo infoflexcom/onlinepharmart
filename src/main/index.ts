@@ -23,6 +23,7 @@ import { RelayClient } from './relay-client'
 import { createMobileAdminSurface } from '../api/mobile-admin-surface'
 import { LicenseManager } from '../license/license-manager'
 import { ElectronLicenseSecretStore } from '../license/secret-store'
+import { DemoDataService } from '../services/demo-data-service'
 import { DesktopHostController } from './desktop-host-controller'
 import { registerDesktopIpc } from './ipc'
 import { createWindowsFirewallProbe } from './mobile-firewall'
@@ -41,6 +42,7 @@ let licenseManager: LicenseManager | undefined
 let mobileAccessService: MobileAccessService | undefined
 let backupService: BackupService | undefined
 let approvalQueue: ApprovalQueueService | undefined
+let demoDataService: DemoDataService | undefined
 let databasePath = ''
 let shutdownInProgress = false
 let backupTimer: NodeJS.Timeout | undefined
@@ -170,6 +172,15 @@ app.whenReady().then(async () => {
   const returnService = new ReturnService(database, repository, { workstation: hostname() })
   const accountingReportService = new AccountingReportService(database, repository)
   approvalQueue = new ApprovalQueueService(database)
+  // The optional demonstration catalogue. Its edition comes from the live licence, never from a setting, so a
+  // Pharmacy shop can never load supermarket products.
+  const licenceForDemo = licenseManager
+  demoDataService = new DemoDataService(database, repository, userRepository, inventoryService, {
+    edition: () => {
+      const snapshot = licenceForDemo?.getSnapshot()
+      return snapshot?.canUse ? snapshot.edition : null
+    },
+  })
   backupService = new BackupService(repository, {
     databasePath,
     automaticFolder: join(app.getPath('userData'), 'backups'),
@@ -261,6 +272,7 @@ app.whenReady().then(async () => {
     mobileAccessService,
     backupService,
     approvalQueue,
+    demoDataService,
   )
   await hostController.initialize()
   licenseManager.startBackgroundCheckIns()

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import type { InfoflexBridge } from '@shared/bridge'
+import type { DemoDatasetState } from '@shared/demo/types'
 import type { CurrencyDefinition } from '@shared/currency/catalog'
 import { formatMoney, type MoneyDisplayOptions } from '@shared/currency/money'
 import type { LicenseSummary } from '@shared/license/types'
@@ -471,6 +472,96 @@ function errorMessage(error: unknown): string {
 
 function safeFormat(currency: CurrencyDefinition, display: MoneyDisplayOptions, minor: bigint = 123_456_789n): string {
   try { return formatMoney(minor, currency, display) } catch { return 'Check separator settings.' }
+}
+
+/**
+ * The optional demonstration catalogue. Everything here is worded so an Admin knows two things before pressing
+ * anything: the demo is not their data, and removing it before real use leaves the shop exactly as it was.
+ */
+export function DemoDataPanel({ bridge, edition }: { bridge: InfoflexBridge; edition: string | null }) {
+  const [state, setState] = useState<DemoDatasetState | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+
+  const refresh = useCallback(async () => {
+    try {
+      setState(await bridge.getDemoDataStatus())
+    } catch (caught) {
+      setError(errorMessage(caught))
+    }
+  }, [bridge])
+
+  useEffect(() => { void refresh() }, [refresh])
+
+  async function load(): Promise<void> {
+    if (!window.confirm(
+      `Load the demonstration catalogue? It adds ${edition === 'SUPERMARKET' ? '60 supermarket' : edition === 'PHARMACY' ? '30 pharmacy' : '90'} products with opening stock, two sample cashiers and a supervisor, plus two example promotions.\n\nNo sale is created, so your currency stays unlocked and you can still change it.`,
+    )) return
+    setBusy(true); setError(''); setMessage('')
+    try {
+      const result = await bridge.loadDemoData()
+      setMessage(`Loaded ${result.products} products and ${result.users} sample accounts. Example price: ${result.samplePrice}.`)
+      await refresh()
+    } catch (caught) {
+      setError(errorMessage(caught))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove(): Promise<void> {
+    if (!window.confirm(
+      'Remove the demonstration products and sample accounts? Anything you created yourself is kept. This cannot be undone.',
+    )) return
+    setBusy(true); setError(''); setMessage('')
+    try {
+      const result = await bridge.removeDemoData()
+      setMessage(`Removed ${result.products} demonstration products and ${result.users} sample accounts.`)
+      await refresh()
+    } catch (caught) {
+      setError(errorMessage(caught))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="management-card">
+      <div className="management-card__header">
+        <div>
+          <span className="eyebrow eyebrow--gold">DEMONSTRATION DATA</span>
+          <h2>Try the app before you start</h2>
+          <p>Optional sample products and staff accounts. Load them to explore, then remove them before you enter real stock.</p>
+        </div>
+      </div>
+      {!state && <p className="settings-note">Checking the demonstration catalogue…</p>}
+      {state && (
+        <>
+          <p className="settings-note">
+            {state.loaded
+              ? `${state.products} demonstration products and ${state.users} sample accounts are loaded. Prices are scaled to your shop currency (${state.currency}).`
+              : 'No demonstration data is loaded. Your catalogue is entirely your own.'}
+          </p>
+          {state.loaded && state.demoUsers.length > 0 && (
+            <ul className="settings-note">
+              {state.demoUsers.map((user) => <li key={user.username}>Sample login <code>{user.username}</code> — {user.fullName} ({user.role === 'SUPERVISOR' ? 'Supervisor' : 'Cashier'})</li>)}
+              <li>Sample password for these accounts: <code>Demo-Pass!2026</code>. Change or remove them before going live.</li>
+            </ul>
+          )}
+          {state.inUse && state.inUseReason && (
+            <div className="settings-warning" role="alert"><span>!</span>{state.inUseReason}</div>
+          )}
+          <div className="settings-form-actions">
+            {!state.loaded && <button className="primary-button" type="button" disabled={busy} onClick={() => void load()}>{busy ? 'Loading…' : 'Load demonstration data'}</button>}
+            {state.loaded && <button className="secondary-button" type="button" disabled={busy || state.inUse} onClick={() => void remove()}>{busy ? 'Removing…' : 'Remove demonstration data'}</button>}
+          </div>
+        </>
+      )}
+      {error && <div className="form-error" role="alert"><span>!</span>{error}</div>}
+      {message && <div className="success-message" role="status">{message}</div>}
+    </section>
+  )
 }
 
 export { DEFAULT_OPERATIONAL_SETTINGS }
