@@ -177,19 +177,19 @@ their customers the same licensing behaviour.
 | Terminal-free deployment, costs, and an honest list of what needs a developer | `cloud/docs/DEPLOYMENT.md` is click-by-click for both builds; `cloud/docs/COSTS.md` gives monthly figures for each; Part 10 names the two steps that genuinely need a command line | `cloud/docs/DEPLOYMENT.md` |
 | Desktop half of the relay | `src/main/relay-client.ts` dials out, answers with the shop's own listener, and mints the phone's link from a per-shop key; the Admin's switch lives on the Mobile Access screen and is off by default | `src/main/relay-client.test.ts` (real relay, real client, real listener) |
 
-Verification for this phase: `npm run check:phase11` — 56 test files, 508 tests, all passing, plus typecheck, the web/PWA builds and the Electron bundle.
+Verification for this phase: `npm run check:phase11` — 56 test files, 509 tests, all passing, plus typecheck, the web/PWA builds and the Electron bundle.
 
 ### The DONE WHEN list, as proved by the suite
 
 | Criterion | Where it is proved |
 | --- | --- |
-| 1. Portal-created licence activates and preselects its currency | `license-flow.test.ts` "activates a portal-created licence and preselects the default currency"; the desktop's own `setup-service.test.ts` covers the preselection |
-| 2. A locked currency cannot be changed by the customer | claims carry `lockCurrency`; `license-manager` re-applies the lock on every check-in; `portal.test.ts` refuses a locked currency with no code |
+| 1. Portal-created licence activates and preselects its currency | `cloud/tests/license-flow.test.ts`, and end to end on the real desktop in `src/license/license-manager.test.ts` ("a licence sold in the vendor portal, on the real desktop"): the real `LicenseManager` activates against the cloud's real API and `SetupService` preselects the locked currency |
+| 2. A locked currency cannot be changed by the customer | the same desktop test completes setup on the locked currency and then fails the very guard Settings calls (`assertCurrencyChangeAllowed`); the claims carry `lockCurrency` and the lock is re-applied on every check-in |
 | 3. The end date locks the app | `license-flow.test.ts` signs an expired licence; `src/license` runtime tests cover the lock, and a lock never deletes data |
-| 4. Vendor extends from a phone and the app unlocks by itself | `license-flow.test.ts` "delivers a renewal on the next check-in with no customer password"; polling is 24 h active / 60 s expired, ticking every 15 s |
-| 5. Suspend/unsuspend with grace, including a reported on-site licence | two `license-flow.test.ts` cases, one of them on-site; the relay additionally drops the tunnel (`relay.test.ts`, `relay-client.test.ts`) |
+| 4. Vendor extends from a phone and the app unlocks by itself | the desktop test extends at the portal on an expired licence and the real manager's next check-in makes it usable again, with no customer password; polling is 24 h active / 60 s expired, ticking every 15 s |
+| 5. Suspend/unsuspend with grace, including a reported on-site licence | two `license-flow.test.ts` cases, one of them on-site, plus suspend → unsuspend observed on the real desktop manager; the relay additionally drops the tunnel (`relay.test.ts`, `relay-client.test.ts`) |
 | 6. A licence file for another machine is rejected | `license-flow.test.ts` "refuses a licence file issued for a different machine" |
-| 7. Rebind only from the portal | `license-flow.test.ts` "rejects a second machine until the vendor rebinds"; the desktop has no rebind command |
+| 7. Rebind only from the portal | `license-flow.test.ts` "rejects a second machine until the vendor rebinds", and the real desktop's second machine is refused in `license-manager.test.ts`; the desktop has no rebind command |
 | 8. Admin phone on mobile data reaches the PC; cashier refused | `src/main/relay-client.test.ts` (real cloud relay + real client + real listener: Admin 200, no credential 401, cashier 403) |
 | 9. The relay cannot read traffic, or the limitation is documented | **Documented** — `cloud/docs/RELAY-LIMITS.md`, repeated in the portal and on the screen |
 | 10. No private key or master password in plain text | `cloud/tests/secrets.test.ts` walks the repository, the example environment file and the installers' inputs |

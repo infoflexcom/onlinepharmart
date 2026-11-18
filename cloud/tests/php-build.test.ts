@@ -84,6 +84,7 @@ describe('the PHP and MySQL build', () => {
     expect(output).not.toMatch(/^FAIL /mu)
     expect(output).toMatch(/\d+ passed, 0 failed/u)
     const passed = Number(/(\d+) passed/u.exec(output)?.[1] ?? 0)
+    // The suite said 32 when it was written; the floor is what stops a silently truncated run passing.
     expect(passed).toBeGreaterThanOrEqual(30)
   }, 120_000)
 

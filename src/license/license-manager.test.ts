@@ -16,6 +16,7 @@ import type { LicenseClaims, OnsiteActivationInput } from '../shared/license/typ
 import { canonicalLicenseClaims } from './crypto'
 import { generateKeyPairSync, sign } from 'node:crypto'
 import { createMasterPasswordHash } from './vendor-policy'
+import { assertCurrencyChangeAllowed } from '../currency/lock-guard'
 
 const MACHINE_ID = 'a'.repeat(64)
 const INITIAL_NOW = Date.parse('2026-11-17T12:00:00.000Z')
@@ -511,3 +512,114 @@ async function waitUntil(condition: () => boolean, timeoutMs = 2_000): Promise<v
     await new Promise((resolve) => setTimeout(resolve, 5))
   }
 }
+
+describe('a licence sold in the vendor portal, on the real desktop', () => {
+  /**
+   * The whole commercial path, with nothing stubbed: a licence created through the cloud's own portal service,
+   * activated by this repository's real `LicenseManager` against the real cloud HTTP API, then driven through the
+   * vendor's real portal mutations (extend, suspend, unsuspend) and observed through the desktop's own snapshot.
+   *
+   * This is the closest thing to a customer signing up that can run without a Windows PC, a domain and a phone —
+   * the three things `docs/RELEASE-CHECKLIST.md` still asks a human to tick off.
+   */
+  it('activates from a portal-created licence, preselects the currency, and unlocks after a vendor renewal', async () => {
+    const { createTestCloud } = await import('../../cloud/tests/helpers')
+    const cloud = await createTestCloud()
+    let now = Date.parse('2026-03-01T09:00:00.000Z')
+    try {
+      const vendorEmail = 'owner@example.com'
+      const created = cloud.cloud.service.createLicense({
+        customer: { businessName: 'Portal Pharmacy', contactName: 'Ada', phone: '08012345678', email: 'ada@example.com' },
+        edition: 'PHARMACY', startsAt: '2026-03-01', endsAt: '2027-03-01',
+        maxAdminPhones: 2, mobileLan: true, mobileInternet: true,
+        defaultCurrencyCode: 'GHS', lockCurrency: true,
+      }, vendorEmail)
+      expect(created.license.license_key).toMatch(/^[A-Z0-9-]{8,}$/u)
+
+      // The cloud listens on loopback over plain HTTP here — the one case `validateServerUrl` permits, and the same
+      // arrangement the licence-server tests use. Production refuses HTTP for anything but loopback.
+      const address = await cloud.app.listen({ port: 0, host: '127.0.0.1' })
+      // Exactly what the deployment guide tells the vendor to pin, fetched from the cloud's own endpoint.
+      const published = (await cloud.app.inject({ method: 'GET', url: '/api/license/public-key' })).json() as
+        { keyId: string; publicKey: string }
+
+      // ---- the desktop: a real manager, a real shop database, the cloud's real HTTP API.
+      const fixture = createFixture({
+        now: () => now, machineId: MACHINE_ID,
+        serverClient: new HttpLicenseServerClient(), allowLocalMockTrust: true,
+      })
+      await fixture.manager.importVendorPolicyFile(JSON.stringify({
+        format: 'infoflex-vendor-license-policy',
+        version: 1,
+        masterPasswordHash: createMasterPasswordHash(createRandomVendorPassword()),
+        maximumOnsitePeriodYears: null,
+        licenseServerUrl: address,
+        // A fresh install pins the key the vendor publishes; the guide tells the vendor to copy it from
+        // /api/license/public-key, which is what this reads.
+        trustedEd25519Keys: { [published.keyId]: published.publicKey },
+      }))
+
+      // DONE WHEN 1: the licence the vendor sold activates, and setup preselects the currency the vendor locked.
+      const activated = await fixture.manager.activateOnline({ activationKey: created.license.license_key, serverUrl: address })
+      expect(activated.status).toBe('active')
+      expect(activated.edition).toBe('PHARMACY')
+      const setup = new SetupService(fixture.shop, fixture.users, fixture.shop, fixture.manager)
+      const context = await setup.getSetupContext()
+      expect(context.initialCurrency.code).toBe('GHS')
+      expect(context.currencyLocked).toBe(true)
+      expect(context.vendorCurrencyLocked).toBe(true)
+
+
+      // Finish setup on the currency the vendor locked, then confirm the shop cannot move it afterwards. The
+      // guard is the very one the Settings screen calls, and the lock is marked as the vendor's.
+      const completed = await setup.completeFirstRun({
+        admin: { fullName: 'Ada Obi', username: 'shopadmin', password: 'Harbor-Admin-Pass-9', confirmPassword: 'Harbor-Admin-Pass-9' },
+        profile: { name: 'Portal Pharmacy', address: '', phone: '' },
+        currency: getCurrency('GHS')!,
+        display: defaultDisplayOptions(getCurrency('GHS')!),
+        currencyConfirmed: true,
+      })
+      expect(completed.settings.currency.code).toBe('GHS')
+      expect(fixture.shop.isCurrencyLockedByVendor()).toBe(true)
+      // DONE WHEN 2: a locked currency cannot be moved by the shop.
+      expect(() => assertCurrencyChangeAllowed(fixture.shop)).toThrow(/vendor|lock/i)
+
+      // DONE WHEN 4: the vendor extends from their phone; the desktop unlocks on its own next check-in, with no
+      // customer password and no customer action.
+      now = Date.parse('2027-03-02T09:00:00.000Z')
+      expect(fixture.manager.getSnapshot().status).toBe('expired')
+      expect(fixture.manager.getSnapshot().canUse).toBe(false)
+      cloud.cloud.service.renewLicense(created.license.id, { endsAt: '2028-03-01', notifyNow: true }, vendorEmail)
+      await fixture.manager.checkInNow()
+      const renewed = fixture.manager.getSnapshot()
+      expect(renewed.status).toBe('active')
+      expect(renewed.canUse).toBe(true)
+      expect(renewed.endsAt!.startsWith('2028-03-01')).toBe(true)
+
+      // DONE WHEN 5: a suspension from the vendor reaches the shop, and unsuspending restores it.
+      cloud.cloud.service.setStatus(created.license.id, 'suspended', vendorEmail)
+      await fixture.manager.checkInNow()
+      expect(fixture.manager.getSnapshot().status).toBe('suspended')
+      expect(fixture.manager.getSnapshot().canUse).toBe(false)
+      cloud.cloud.service.setStatus(created.license.id, 'active', vendorEmail)
+      await fixture.manager.checkInNow()
+      expect(fixture.manager.getSnapshot().status).toBe('active')
+
+      // DONE WHEN 7: the same key on a second computer is refused until the vendor rebinds from the portal.
+      const other = createFixture({
+        now: () => now, machineId: 'b'.repeat(64),
+        serverClient: new HttpLicenseServerClient(), allowLocalMockTrust: true,
+      })
+      await other.manager.importVendorPolicyFile(JSON.stringify({
+        format: 'infoflex-vendor-license-policy', version: 1,
+        masterPasswordHash: createMasterPasswordHash(createRandomVendorPassword()),
+        maximumOnsitePeriodYears: null, licenseServerUrl: address,
+        trustedEd25519Keys: { [published.keyId]: published.publicKey },
+      }))
+      await expect(other.manager.activateOnline({ activationKey: created.license.license_key, serverUrl: address }))
+        .rejects.toThrow(/not accepted/i)
+    } finally {
+      await cloud.close()
+    }
+  }, 30_000)
+})
