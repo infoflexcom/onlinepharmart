@@ -1,0 +1,43 @@
+# A one-file deployment. `docker compose --env-file cloud/.env up -d` starts the cloud, Caddy obtains and renews
+# the HTTPS certificate for the two domain names, and the database lives in a named volume.
+services:
+  cloud:
+    build:
+      context: ..
+      dockerfile: cloud/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - cloud-data:/data
+      # The signing key is mounted read-only from the host and is never baked into the image.
+      - ${INFOFLEX_KEY_DIR:-./keys}:/keys:ro
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - cloud
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Two names: the licence host and, if used, the relay host with a wildcard certificate.
+      LICENCE_HOST: ${INFOFLEX_PUBLIC_HOST:-licences.example.com}
+      RELAY_HOST: ${INFOFLEX_RELAY_HOST:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  cloud-data:
+  caddy-data:
+  caddy-config:

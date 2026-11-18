@@ -1,0 +1,431 @@
+# Release checklist — hardware gates
+
+These are the checks that **cannot** be performed by the automated suite or on a Linux build machine.
+Everything software-verifiable is already covered by `npm run check:phase8` and summarised in
+[PHASES.md](PHASES.md). Nothing here should be marked done on the basis of automated tests.
+
+Each gate below is tagged **needs manual check on real hardware**. Do the gates in order: gate 1 produces
+the installer that gates 2 and 4 install, gate 3 needs gates 1–2 working, and gate 4 needs gate 1 and a
+USB stick.
+
+Prepare once:
+
+- A Windows 10 or Windows 11 **x64** PC (a clean VM is ideal; use a normal user account, not a terminal-only
+  session). Note whether the account is the same one you will use later.
+- One iPhone (iOS 16 or newer) and one Android phone (Android 10 or newer).
+- A shop-like Wi-Fi router you can administer: set it to a private range such as `192.168.1.0/24`, and confirm
+  the PC and both phones join **the same** SSID/subnet. A second "guest"/mobile-hotspot network is useful for
+  the negative test in gate 3.
+- A test shop database with at least one completed sale and one return, so reports are not empty.
+- Do **not** use real customer data, and do **not** port-forward anything.
+
+---
+
+## Gate 1 — Windows x64: graphical installer and DPAPI `safeStorage`
+
+**Status: needs manual check on real hardware.**
+Why it cannot be automated here: packaging and OS-protected encryption are Windows-only behaviours. The
+build agent has no Windows, no Wine, and no DPAPI.
+
+### 1.1 Build the installer on Windows
+
+1. Install Node.js 22 LTS (x64) and Git on the Windows PC.
+2. In a terminal **on that PC** (maintainer step only — customers never do this):
+   ```powershell
+   git clone <repository> infoflex
+   cd infoflex
+   npm ci
+   npm run check:phase7
+   npm run dist:win
+   ```
+3. Confirm `npm run check:phase7` finishes with all tests passing.
+4. Confirm `npm run dist:win` produces `dist\Infoflex Setup.exe`.
+   - Native modules are prebuilt (N-API), so no Windows compiler or `node-gyp` toolchain is required.
+   - If it fails, record the failing step and the last ~20 log lines; do not hand-edit `dist\`.
+
+### 1.2 Confirm it is a graphical installer
+
+1. Double-click `dist\Infoflex Setup.exe`.
+2. Confirm you see the NSIS wizard with the Infoflex banner/sidebar artwork, an **Installation directory**
+   choice, and desktop + Start Menu shortcut options.
+3. Confirm you are never asked to open a terminal, run a command, or edit a file.
+4. Install to the default location using **your normal user account** without "Run as administrator".
+5. Confirm the desktop shortcut opens Infoflex and the license screen appears before setup or login.
+
+### 1.3 Confirm DPAPI `safeStorage` protects the mobile TLS identity
+
+1. Sign in as an Admin, complete first-run setup if prompted, then open **Mobile Access** and choose
+   **Enable mobile access**.
+2. Confirm the status shows **Running**, a private `https://192.168.x.x:43871/` URL, and a root SHA-256
+   fingerprint.
+3. In File Explorer, open `%APPDATA%\Infoflex\` (the Electron `userData` folder) and locate
+   `mobile-api-identity.json`.
+4. Open it in Notepad and confirm:
+   - `encryptedCaPrivateKey` and `encryptedServerPrivateKey` contain **base64 gibberish**, not
+     `-----BEGIN PRIVATE KEY-----`.
+   - Searching the whole `userData` folder for `PRIVATE KEY` finds **no plaintext key**.
+5. Restart the PC **without** changing the Windows account. Start Infoflex again.
+   - Confirm the listener can be re-enabled and the **fingerprint is unchanged**, i.e. the OS could decrypt
+     the stored keys.
+   - If Windows prompts to sign in as a different user, the keys must fail closed instead: record the error.
+6. Sign out of Windows and sign in as a **different local user**, then start Infoflex from the installed
+   shortcut.
+   - Expected: mobile access refuses to start (or reports an invalid/undecryptable identity) instead of
+     serving HTTPS. Record the exact message.
+7. Confirm `basic_text` fallback never appears in the packaged app; that path is only reachable on
+   unsupported Linux storage backends and is already covered by automated tests.
+
+### Gate 1 record
+
+| Check | Result | Notes / exact message |
+| --- | --- | --- |
+| `check:phase7` green on Windows | ☐ pass ☐ fail | |
+| `dist\Infoflex Setup.exe` produced | ☐ pass ☐ fail | |
+| Wizard is graphical, no terminal needed | ☐ pass ☐ fail | |
+| Installs as standard user, app launches | ☐ pass ☐ fail | |
+| Identity file stores base64, no plaintext key | ☐ pass ☐ fail | |
+| Same-user restart keeps fingerprint | ☐ pass ☐ fail | |
+| Different Windows user fails closed | ☐ pass ☐ fail | |
+
+---
+
+## Gate 2 — Physical iOS and Android: certificate trust and PWA install
+
+**Status: needs manual check on real hardware.**
+Why it cannot be automated here: installing a root CA and adding a home-screen icon are OS/browser UI
+actions on real devices. The build agent has no phones, no Safari, and no Android runtime.
+
+### 2.1 Export and verify the certificate fingerprint
+
+1. On the Windows PC, sign in as Admin and open **Mobile Access** with the listener running.
+2. Write down the **Root SHA-256 fingerprint** shown on screen (32 hex pairs).
+3. Choose **Export trust certificate**. Confirm the browser/Explorer saves
+   `infoflex-mobile-root-ca.crt`.
+4. The `.crt` must contain **only** a public certificate. Right-click → Open → confirm it shows
+   `Infoflex Mobile Access Root` and no private key. Do not proceed if a key is present.
+5. Transfer it to each phone over a trusted channel (USB cable, AirDrop to your own phone, or local
+   share). Do not email it through untrusted relays.
+
+### 2.2 iPhone / iPad
+
+1. Open the `.crt` on the phone and, if prompted, allow the **Profile Downloaded** banner.
+2. Go to **Settings → General → VPN & Device Management → Infoflex Mobile Access Root → Install**, then
+   enter the passcode and confirm **Install**.
+3. Go to **Settings → General → About → Certificate Trust Settings** and enable **full trust** for
+   `Infoflex Mobile Access Root`.
+4. Open Safari and go to `https://<private-host-ip>:43871/`.
+   - Expected: the pairing screen loads **with no certificate warning**, and the address bar shows a lock.
+   - A warning page means the certificate is not trusted; stop and fix trust rather than tapping through.
+5. **Add to Home Screen**: tap Share → **Add to Home Screen** → Add.
+6. Launch the new **Infoflex Admin** icon from the home screen.
+   - Expected: it opens full-screen (no Safari chrome), portrait, with the Infoflex launcher icon and a dark
+     blue status bar — not a screenshot thumbnail and not a browser tab.
+
+### 2.3 Android
+
+1. Open the `.crt` from Files/Downloads and choose **Install certificate → CA certificate → Install anyway**
+   (menu names vary by vendor: *Security → Encryption & credentials → Install a certificate*).
+2. Confirm the certificate appears under **Trusted credentials → User**.
+3. Open Chrome and go to `https://<private-host-ip>:43871/`.
+   - Expected: pairing screen loads with no warning and a padlock.
+4. **Install app**: Chrome menu → **Install app** / **Add to Home screen** → Install.
+5. Launch the installed app from the launcher.
+   - Expected: standalone window, Infoflex icon rendered inside a round/squircle mask without clipping or a
+     white border, correct app name, dark blue theme colour.
+
+### 2.4 Pair and use the phone
+
+1. On the desktop choose **Pair an Admin phone**; a one-time eight-digit code appears with a countdown.
+2. On the phone enter the code and a phone name; confirm pairing succeeds.
+3. Confirm on the desktop that the phone appears in **Paired Admin phones** and the slot count increments.
+4. On the phone, check the period selector: **Daily** and **Monthly** totals, the day-by-day chart,
+   payment/refund method panels, and **Share / download PDF** (share sheet opens, or the PDF downloads).
+5. Open **Return approvals**, then approve or reject a pending return. Confirm the decision appears on the
+   desktop with channel **MOBILE**.
+6. Confirm a Cashier account cannot pair and cannot reach the Admin screens.
+7. In Settings/DevTools or a fresh tab, confirm the service-worker cache contains **only** static assets —
+   no report JSON, no return data, no tokens.
+
+### 2.5 Update after rebuild (cache versioning)
+
+1. On the Windows PC, re-run `npm run build:mobile` (or `npm run build`) after a visible UI change, and
+   restart Infoflex.
+2. On the phone, close and reopen the installed app (pull to refresh, or fully quit and relaunch).
+3. Expected: the **new** build appears. A phone stuck on the old screen means the stamped cache name did not
+   rotate — record it as a failure.
+4. Stop the Infoflex listener on the desktop and relaunch the installed app.
+   - Expected: the app opens to its own screen (not a blank page) and shows that data is unavailable /
+     reconnect to the host. It must **not** display cached financial figures.
+
+### 2.6 Revocation and sign-out
+
+1. On the phone choose **Sign out**; confirm the desktop phone list loses the device and the slot is freed.
+2. Pair again, then on the desktop choose **Revoke** for that phone; confirm the phone can no longer load
+   data (sign-in/pairing screen) on its next request.
+
+### Gate 2 record
+
+| Check | iOS | Android | Notes |
+| --- | --- | --- | --- |
+| Fingerprint on phone matches desktop | ☐ | ☐ | |
+| Root CA installed and trusted | ☐ | ☐ | |
+| PWA loads with no certificate warning | ☐ | ☐ | |
+| Add to Home Screen / Install app works | ☐ | ☐ | |
+| Launches standalone with correct icon | ☐ | ☐ | |
+| Pairing with one-time code | ☐ | ☐ | |
+| Daily and monthly summaries correct | ☐ | ☐ | |
+| PDF share/download | ☐ | ☐ | |
+| Approve/reject returned with `MOBILE` channel | ☐ | ☐ | |
+| Service-worker cache has static assets only | ☐ | ☐ | |
+| New build visible after rebuild | ☐ | ☐ | |
+| Offline launch shows no financial data | ☐ | ☐ | |
+| Sign-out and desktop revoke both work | ☐ | ☐ | |
+
+---
+
+## Gate 3 — Live LAN Wi-Fi, router and firewall behaviour
+
+**Status: needs manual check on real hardware.**
+Why it cannot be automated here: this is real network topology, OS firewall prompting, AP client isolation,
+and router configuration. The build agent only proves the socket-address check in code.
+
+### 3.1 Reachability on the shop LAN
+
+1. Connect the Windows PC by Wi-Fi (or Ethernet) and both phones to the **same** private network.
+2. Confirm the URL shown in Mobile Access uses a private address (`10.x`, `172.16–31.x`, or `192.168.x`).
+3. Confirm both phones load the PWA at that address.
+
+### 3.2 Windows firewall
+
+1. When Windows Defender Firewall first prompts for Infoflex, allow it on the **Private** network profile
+   **only**. Do not tick Public/Domain unless the shop LAN genuinely requires it.
+2. If no prompt appears and phones cannot connect:
+   **Windows Security → Firewall & network protection → Allow an app through firewall** → enable Infoflex
+   for **Private** only → confirm phones can connect.
+3. Confirm the adapter is classified as a **Private** network, not Public. On a Public profile the phone must
+   be unable to connect; record that as expected behaviour.
+
+### 3.3 LAN-only enforcement (negative tests)
+
+1. **Guest network / mobile hotspot:** put one phone on a different network (guest SSID or 4G hotspot) and
+   try the host URL. Expected: no response / timeout. The listener must not be reachable from outside the LAN.
+2. **AP client isolation:** if your router has "client isolation"/"AP isolation" on the main SSID, confirm the
+   effect and then disable it for the shop SSID, since isolated clients cannot reach the host.
+3. **Forwarding:** confirm the router has **no** port-forward / DMZ / UPnP rule pointing at the PC's
+   `43871` port. If any exists, remove it. Do not port-forward the mobile listener under any circumstances,
+   even on a license that includes an Internet feature.
+4. From a machine on another network, attempt to reach `https://<public-ip>:43871/`. Expected: connection
+   refused or timeout, never the pairing screen.
+
+### 3.4 Shutdown and address-change behaviour
+
+1. With the listener running, quit Infoflex. Confirm the phone can no longer load data.
+2. Relaunch: confirm the listener stays **off** until an Admin explicitly enables it again.
+3. While running, move the PC to a different private subnet (e.g. switch SSID to another router) and confirm
+   within ~1 minute that the listener stops and the status shows it is no longer running. Re-enable it and
+   confirm the URL reflects the new private address.
+4. While running, expire or remove the LAN entitlement on the license (use the mock service in a development
+   install: `npm run cloud:mock`). Confirm the listener shuts down and does not restart by itself.
+5. Confirm report/API responses are `no-store` (browser DevTools → Network → check `cache-control`).
+
+### Gate 3 record
+
+| Check | Result | Notes |
+| --- | --- | --- |
+| Same-LAN reachability from both phones | ☐ pass ☐ fail | |
+| Firewall allowed on Private only | ☐ pass ☐ fail | |
+| Public-profile network blocked | ☐ pass ☐ fail | |
+| Phone on foreign network cannot connect | ☐ pass ☐ fail | |
+| No port-forward/DMZ/UPnP rule | ☐ pass ☐ fail | |
+| Public IP cannot reach the listener | ☐ pass ☐ fail | |
+| Quit stops the listener; relaunch stays off | ☐ pass ☐ fail | |
+| Address change stops the listener | ☐ pass ☐ fail | |
+| LAN entitlement loss stops the listener | ☐ pass ☐ fail | |
+| API responses are `no-store` | ☐ pass ☐ fail | |
+
+---
+
+## Gate 4 — Windows x64: backup to a USB stick, wipe, and restore
+
+**Status: needs manual check on real hardware.**
+Why it cannot be automated: it needs real removable media, the Windows file picker, and a full app restart
+against a replaced database file. The automated suite proves the same flow on temporary files, but not with
+your hardware.
+
+### 4.1 Prepare
+
+1. Install the app from gate 1 and sign in as the Admin.
+2. Record three sales and one return so reports are not empty. Note the store name and the currency shown on
+   the receipt.
+3. Plug in a USB stick and note its drive letter (e.g. `E:\`).
+
+### 4.2 Back up to the USB stick
+
+1. Open **Settings** and scroll to **Backup & restore**.
+2. Press **Choose folder…** and pick the USB stick. Confirm the folder path appears in the box.
+3. Press **Back up now**. Confirm the message names a file beginning `infoflex-backup-…`.
+4. In Windows Explorer, open the stick: confirm both `infoflex-backup-….infoflexbackup` and its
+   `.manifest.json` are there, and that the file is not 0 bytes.
+
+### 4.3 Wipe the shop data
+
+1. Quit the app.
+2. In `%APPDATA%`, find the app's user-data folder and rename `infoflex.sqlite` to `infoflex.sqlite.old`
+   (keep it — this is your manual safety copy). Remove `infoflex.sqlite-wal` and `infoflex.sqlite-shm` if present.
+3. Start the app. Confirm it shows first-run setup (no users, no sales).
+
+### 4.4 Restore
+
+1. Complete first-run setup far enough to sign in as an Admin again (a temporary Admin, different password).
+2. Open **Settings → Backup & restore**, press **Choose folder…**, pick the USB stick, then
+   **Find backups in this folder**.
+3. Press **Restore this** on your backup and accept the confirmation.
+4. The app restarts on its own. Sign in.
+
+### 4.5 Verify
+
+| Check | Expected | Result |
+| --- | --- | --- |
+| Sales and return from 2.2 are back | Same receipts, same amounts | ☐ pass ☐ fail |
+| Store name and currency | Same as recorded before the wipe | ☐ pass ☐ fail |
+| Licence panel | Same edition, period and days remaining as before the wipe; the app was never unlicensed | ☐ pass ☐ fail |
+| Paired phones | Same device list in **Mobile Access** as before the wipe | ☐ pass ☐ fail |
+| Currency change | Blocked, with "The currency is locked because transactions already exist." | ☐ pass ☐ fail |
+| Safety copy | A `…-before-restore…` file exists in the app-data `backups` folder | ☐ pass ☐ fail |
+| Recent activity list | Shows the restore, newest first, with your Admin username | ☐ pass ☐ fail |
+| Second restore of a foreign-currency backup | Refused with the mixed-currency message; data unchanged | ☐ pass ☐ fail |
+
+### 4.6 Negative checks
+
+1. Switch off **Bank transfer** in Settings → receipt settings; try a transfer tender at the till: refused.
+2. Set the discount limit to 5%; try a 10% manual discount as an Admin: refused.
+3. Rename the manifest on one backup file and try to restore it: refused, nothing changes.
+
+---
+
+## Sign-off
+
+Phases 7 and 8 are closed on software scope (see [PHASES.md](PHASES.md)). A customer release requires all
+four gates above to be ticked on real hardware:
+
+- [ ] Gate 1 — Windows x64 installer + DPAPI `safeStorage` — needs manual check on real hardware
+- [ ] Gate 2 — iOS/Android certificate, trust, PWA install, update — needs manual check on real hardware
+- [ ] Gate 3 — live LAN/router/firewall, LAN-only, no port forwarding — needs manual check on real hardware
+- [ ] Gate 4 — Windows backup to USB, wipe, restore, licence/devices intact — needs manual check on real hardware
+
+Remaining known software limitations (not gates): jurisdiction-specific tax rules and tax-authority filing
+formats are not implemented (a single configurable VAT rate is); store-credit redemption against a later sale
+is not implemented; there is no production license cloud or
+Internet mobile hosting; the machine binding is OS-install-ID based, not hardware-backed.
+
+## Phase 9 — real-phone and clean-Windows gates
+
+These cannot be proven by the automated suite (it uses loopback HTTPS with generated certificates, injected
+firewall/power/login-item fakes, and a fake OS key store). Each must be done by hand on real hardware.
+
+**Admin phone, on the shop Wi-Fi**
+- [ ] Save the certificate from Mobile Access and install it on a real Android phone (Settings → Security → Encryption & credentials → Install a certificate → CA certificate).
+- [ ] Install the same certificate on a real iPhone and switch on full trust (Settings → General → About → Certificate Trust Settings).
+- [ ] Open the address shown on the desktop in the phone browser with **no** certificate warning, and compare the shown fingerprint with the desktop.
+- [ ] Point the phone's normal camera app (not a special scanner app) at the QR code on the pairing card: it must offer to open exactly the address shown underneath.
+- [ ] Then enter the pairing code by hand — the QR deliberately does not contain it — and confirm the desktop pop-up names the right phone, type, code and address.
+- [ ] Approve on the PC, then sign in on the phone with the Admin username and password; confirm the phone shows data and the desktop shows "1 phone connected right now".
+- [ ] Turn on the authenticator: scan the set-up QR code with a real authenticator app (and check the typeable key also works), confirm a code, then sign in over the Internet with a code (and confirm a replayed code is refused).
+- [ ] Leave the phone idle for 30 minutes and confirm it asks for the password again instead of silently continuing.
+- [ ] Enter a wrong password five times on the phone and confirm it is locked out; confirm the desktop audit log records each attempt with device name and IP.
+- [ ] Revoke the phone and confirm the next API call fails immediately; "Revoke all" and "Turn off all mobile access" behave the same.
+- [ ] Add to Home Screen and confirm the installed web app still reaches the host after a rebuild (service-worker update).
+
+**Cashier and Supervisor**
+- [ ] On a real phone, try to sign in with a Cashier account and then a Supervisor account: the message must be identical to a wrong password, with no hint of the role, and each attempt must appear in the audit log.
+
+**Tray and power, on a clean Windows 10/11 x64 machine**
+- [ ] Close the main window with mobile access on: Infoflex stays in the tray and the phone keeps working; "Quit Infoflex" from the tray really exits.
+- [ ] Enable "Start Infoflex when Windows starts", restart Windows, and confirm the app starts hidden with mobile access available.
+- [ ] With "Stop the computer sleeping" on, confirm the PC does not sleep while a phone is connected and does sleep again after the phone disconnects.
+- [ ] Confirm DPAPI-backed `safeStorage` works in the packaged build (authenticator secret survives a restart, and a copied database cannot be decrypted on another PC).
+
+**Windows Firewall**
+- [ ] On a fresh install with the rule absent, confirm Mobile Access reports the port as blocked with plain-language text.
+- [ ] Press "Repair firewall rule", approve the Windows prompt, and confirm the phone can connect, and that the new rule is **Private profile only**.
+
+**Licence**
+- [ ] With an expired/suspended licence, confirm the phone shows the licence message and no data, and that every other mobile route is refused.
+
+**Bluetooth**
+- [ ] Confirm a Bluetooth receipt printer and a Bluetooth barcode scanner on the PC still work while mobile access is on (mobile access never uses Bluetooth).
+
+## Phase 10 — Admin phone app on real phones
+
+None of the following could be run in this environment (no Android or iPhone, and no browser could be installed
+here), so each item is a manual check before release.
+
+### Install and shell
+- [ ] On Android Chrome, open the address from the desktop and use ⋮ → "Add to Home screen" / "Install app". The desktop browser must say the host is trusted, and the installed app must open standalone (no address bar).
+- [ ] On iPhone (Safari only — Edge/Chrome on iOS cannot install), use Share → "Add to Home Screen". Confirm iOS 16.4 or later, and that the installed app opens with the navy splash and the shop's name in the header.
+- [ ] Confirm the icon on the home screen is the Infoflex mark at a sensible size, and the status bar uses the navy theme.
+- [ ] Put the phone in flight mode, reopen the installed app, and confirm the shell paints with the "Offline" banner and the last screen's data is **not** served from cache as if it were current.
+- [ ] While offline, press Save on a stock adjustment and a price change: the phone must refuse immediately with "Nothing was saved" and must never queue the write.
+
+### Admin-only
+- [ ] Sign in with a Cashier account, then a Supervisor account: the message must be identical to a wrong password and each attempt must appear in the desktop audit log with the device name and IP.
+- [ ] With the phone signed in, demote that Admin on the desktop: the phone's next action must be refused, not wait for a token to expire.
+- [ ] Confirm there is no cashier mode, no selling screen and no "new sale" control anywhere in the installed app.
+
+### Scanning, stock and money
+- [ ] Scan a real barcode with the phone camera; confirm it opens the matching product, and that the torch toggle works (or says the phone offers no torch).
+- [ ] Cover the camera and type the barcode instead: manual entry must always work.
+- [ ] Scan a barcode that is not on file, add the product, then receive its first stock with a batch and expiry date.
+- [ ] Edit the retail and wholesale prices, confirming the Admin password is asked for again and a wrong password saves nothing.
+- [ ] Adjust stock with each reason in the list and with "Other"; confirm the reason appears in the stock history with the Admin's name.
+- [ ] In the **NGN** shop, confirm amounts read exactly as on the desktop (e.g. ₦1,234.56) and that a price typed with a comma thousands separator is accepted.
+- [ ] In a **0-decimal** currency shop (e.g. UGX), confirm reports show `USh 255,000` with no decimals, and that typing `2500.50` into a price box is refused with "This currency allows at most 0 decimal places".
+- [ ] Widen/reduce the phone's text size (Accessibility settings) and confirm no control is clipped and the tab bar stays usable.
+
+### Reports, sales and approvals
+- [ ] Open Reports for today and for this month, then share the PDF: the share sheet must receive a real PDF named after the shop, and opening it must show the same figures in the shop's currency.
+- [ ] Browse Sales, open a retail receipt and a wholesale invoice, share each as a PDF and as an image, and print at the counter. Confirm the sale is described as view-only and cannot be edited.
+- [ ] Raise a discount request at the desktop, then approve it from the phone and confirm the till accepts the discount; try to approve the same request again from a stale screen and confirm "already decided".
+- [ ] Switch a cashier's "can make wholesale sales" on and off from the phone, with the Admin password, and confirm the till honours it immediately and no other permission changed.
+- [ ] Open More → Manage connected phones: the list must show this phone as signed in, and revoking another paired phone must make that phone's next action fail at once.
+- [ ] Press the approvals tab with a pending request: the in-app badge must show the count. (Web Push is not shipped in this phase — there is no push notification to test; see docs/DECISIONS.md.)
+
+## Phase 11 — Vendor Cloud and the internet relay (needs manual check on real hardware / a real host)
+
+The cloud's own suites run here (`npm run check:phase11`), but four things cannot be proved in a build container:
+a real domain with a real certificate, a real phone on mobile data, a real MySQL host, and a real Ed25519 signer.
+Each item below is written so somebody with the deployed system can tick it.
+
+### The licence server, on the real domain
+- [ ] Deploy the cloud build by following `cloud/docs/DEPLOYMENT.md` from Part 1 to Part 5 on the real host. Every step must be possible in the hosting panel; if any step needs a terminal that the guide does not already name, fix the guide.
+- [ ] Open `https://<your-domain>/health` and confirm `{"status":"ok","version":1}` with a valid padlock and no certificate warning.
+- [ ] Confirm the browser shows HSTS on the second visit, and that `curl -sI https://<your-domain>/portal/login` (or the browser's network panel) shows `x-frame-options: DENY`, `content-security-policy` with `script-src 'none'`, and `x-content-type-options: nosniff`.
+- [ ] Sign in to the portal with the Owner account and the authenticator app: the six-digit code must be required, and a code reused twice must be refused.
+- [ ] Stop and restart the container; confirm the portal still knows the Owner account and every licence (the database volume and key volume are mounted correctly).
+- [ ] Let one daily backup run, then list `INFOFLEX_CLOUD_BACKUP_DIR`: `infoflex-cloud-YYYYMMDDTHHMMSSZ.sqlite` must exist and be a plausible size. Restore it into a scratch copy and confirm the portal opens with the same licences.
+- [ ] If SMTP is configured, confirm one expiry reminder arrives at the vendor inbox and that the dashboard marks the stage as sent.
+
+### A real shop PC against the real cloud
+- [ ] On a Windows shop PC, import the vendor policy that pins the cloud's public key, then activate online with a key created in the portal. Confirm the Licence screen shows the end date and the edition.
+- [ ] Confirm setup preselects the portal's default currency, and that a licence with **Lock currency** ticked cannot be changed in Settings (the lock explanation must say the vendor set it).
+- [ ] From the portal on a phone, extend the licence by a year and press **Notify now**; within the polling interval the till's Licence screen must show the new end date with no password typed.
+- [ ] From the portal, suspend the licence: the till must refuse a new sale within the polling interval and must not lose data. Unsuspend and confirm the till recovers.
+- [ ] In the portal, press **Reset machine binding** for that licence, activate the same key on a second PC, and confirm the first PC reports a machine mismatch rather than silently continuing.
+- [ ] Download the offline `.lic` file for that licence, try to import it on a different machine, and confirm it is refused.
+
+### The internet relay, on a real phone and real mobile data
+- [ ] In the portal, create a test licence with **Mobile over the internet** ticked, activate it, then on the PC switch on local mobile access and press **Allow over the internet**. The badge must reach **Live** and show an `https://<shop>.<relay-domain>` address with a real padlock on the phone.
+- [ ] Scan the link with an Admin phone **on mobile data** (not the shop Wi-Fi). Sign in with the Admin username, password and authenticator code; confirm device approval is requested on the PC and that a Cashier account is refused with the same sentence as a wrong password.
+- [ ] Open a report and a pending return approval over the relay; confirm the numbers match the desktop and that an approval decided on the phone appears on the PC.
+- [ ] Suspend the licence in the portal while the phone is connected: the phone must fail at once, and the PC's Mobile Access screen must show **Refused** rather than a dead tunnel.
+- [ ] Switch **Allow over the internet** off on the PC: the phone must lose access while the same phone keeps working on the shop Wi-Fi.
+- [ ] Disconnect the PC from the internet: the phone must show the relay's "shop's computer is offline" page, not a hang.
+- [ ] Read `cloud/docs/RELAY-LIMITS.md` and confirm the sentence about the relay being able to read traffic still matches what the software does. If the sign-off on that trade-off is not acceptable to the vendor, leave internet access off — the LAN path is unaffected.
+
+### The PHP build, on the real shared host
+- [ ] Follow `cloud/docs/DEPLOYMENT.md` Part 8 on the real host: create the database, upload `public/` and `lib/`, put `config.php` above the web root, set PHP 8.1+, enable AutoSSL and force HTTPS.
+- [ ] Ask the host's support to generate the Ed25519 key (the exact command is in the guide) and confirm the portal's `/api.php?action=config` returns a `publicKey`.
+- [ ] Upload `tests/run.php`, open it in a browser, confirm `32 passed, 0 failed`, then **delete the tests folder**.
+- [ ] Create a licence in the PHP portal, activate a real shop PC against it, and confirm the offline `.lic` download and a renewal check-in both work.
+- [ ] Confirm the PHP build has no relay page and that the desktop reports "this licence server does not offer internet access".
+

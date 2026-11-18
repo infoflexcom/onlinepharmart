@@ -1,0 +1,17 @@
+{
+  "id": "/",
+  "name": "Infoflex Admin Mobile",
+  "short_name": "Infoflex Admin",
+  "description": "The Admin’s own phone app for an Infoflex shop: stock, sales, reports and approvals.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#17345f",
+  "theme_color": "#17345f",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

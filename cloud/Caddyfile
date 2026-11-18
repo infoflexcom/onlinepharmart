@@ -1,0 +1,27 @@
+# Caddy terminates HTTPS and forwards to the cloud. `{$LICENCE_HOST}` is filled from the compose environment.
+#
+# The relay needs a wildcard certificate because every shop gets its own subdomain; set RELAY_HOST to the relay
+# domain (e.g. relay.example.com) and let Caddy hold `*.relay.example.com` via a DNS challenge — the deploy guide
+# says which DNS provider plugins that needs and repeats plainly that this part needs a developer.
+
+{$LICENCE_HOST} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	# The host PC's outbound WebSocket rides the same name.
+	reverse_proxy cloud:8080 {
+		header_up X-Forwarded-For {remote_host}
+	}
+}
+
+{$RELAY_HOST} {
+	encode zstd gzip
+	header -Server
+	reverse_proxy cloud:8080 {
+		header_up X-Forwarded-For {remote_host}
+	}
+}
