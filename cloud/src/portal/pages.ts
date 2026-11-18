@@ -314,7 +314,7 @@ function relayCard(relay: { status: string; last_seen_at: string | null; connect
   return `<section class="card"><h2>Internet relay</h2>
     <p>${relay.status === 'online' ? '<span class="pill pill-online">connected</span>' : '<span class="pill pill-offline">offline</span>'}
     ${relay.last_seen_at ? `<span class="muted small">last seen ${e(relay.last_seen_at.slice(0, 19).replace('T', ' '))}</span>` : ''}</p>
-    <p class="muted small">The relay forwards encrypted frames only. It cannot read the shop's traffic and stores no business data.</p>
+    <p class="muted small">The relay forwards this shop's requests over TLS on both hops and stores none of them. Like any secure web server it can read them in transit; the shop's own Admin login, device approval and authenticator code are still required. See <span class="mono">RELAY-LIMITS.md</span>.</p>
   </section>`
 }
 
@@ -491,11 +491,12 @@ ${input.relayConfigured
   <div class="card"><div class="label">Shops connected</div><div class="big">${input.connections.filter((row) => row.status === 'online').length}</div></div>
   <div class="card"><div class="label">Known shops</div><div class="big">${input.connections.length}</div></div>
   <div class="card"><div class="label">Frame cap per link</div><div class="big">${Math.round(input.linkSizeLimit / 1024)} KB</div><small>largest frame forwarded</small></div>
-  <div class="card"><div class="label">Content visible</div><div class="big">None</div><small>end-to-end encrypted</small></div>
+  <div class="card"><div class="label">Read in transit</div><div class="big">Yes</div><small>documented, see below</small></div>
 </div>
 <section class="card">
   <h2>Connections</h2>
-  <p class="muted">Status and byte counts only. The relay cannot read the frames it forwards: the phone and the shop PC agree a key during QR pairing and encrypt every message end to end.</p>
+  <p class="muted">Status and byte counts only, and no request or response body is ever written to this database or to a log.</p>
+  <div class="notice"><strong>The relay can read what it forwards.</strong> It terminates TLS on both hops, so it is a trusted pass-through rather than a sealed channel between the phone and the shop PC: there is no Noise or libsodium layer in this build. What protects the shop instead is that the relay copies bytes into the shop's own API, where the Admin-only rule, the approved-device check and the authenticator code still run: the relay cannot approve a device, mint a session or skip two-factor authentication. The full statement, with the caps and the numbers, is in <span class="mono">cloud/docs/RELAY-LIMITS.md</span>, and the same paragraph appears in the privacy notice and on the screen where a shop enables internet access.</div>
   ${input.connections.length === 0 ? '<div class="empty">No shop has connected to the relay yet.</div>' : `
     <div class="table-wrap"><table class="responsive">
       <thead><tr><th>Shop</th><th>Status</th><th>Connected</th><th>Last seen</th><th>Frames</th><th>Bytes in / out</th><th>Peer</th></tr></thead>

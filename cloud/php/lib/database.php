@@ -8,7 +8,7 @@
  * a fragment.
  *
  * The tables hold licence and contact data only. There is no column anywhere for a sale, a price, a stock
- * level or an amount, which `cloud/php/tests/schema.test.php` asserts column by column.
+ * level or an amount, which `cloud/php/tests/run.php` asserts column by column.
  */
 
 declare(strict_types=1);

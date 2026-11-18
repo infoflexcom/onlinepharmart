@@ -177,7 +177,7 @@ their customers the same licensing behaviour.
 | Terminal-free deployment, costs, and an honest list of what needs a developer | `cloud/docs/DEPLOYMENT.md` is click-by-click for both builds; `cloud/docs/COSTS.md` gives monthly figures for each; Part 10 names the two steps that genuinely need a command line | `cloud/docs/DEPLOYMENT.md` |
 | Desktop half of the relay | `src/main/relay-client.ts` dials out, answers with the shop's own listener, and mints the phone's link from a per-shop key; the Admin's switch lives on the Mobile Access screen and is off by default | `src/main/relay-client.test.ts` (real relay, real client, real listener) |
 
-Verification for this phase: `npm run check:phase11` — 56 test files, 509 tests, all passing, plus typecheck, the web/PWA builds and the Electron bundle.
+Verification for this phase: `npm run check:phase11` — 56 test files, 510 tests, all passing, plus typecheck, the web/PWA builds and the Electron bundle.
 
 ### The DONE WHEN list, as proved by the suite
 
@@ -191,7 +191,7 @@ Verification for this phase: `npm run check:phase11` — 56 test files, 509 test
 | 6. A licence file for another machine is rejected | `license-flow.test.ts` "refuses a licence file issued for a different machine" |
 | 7. Rebind only from the portal | `license-flow.test.ts` "rejects a second machine until the vendor rebinds", and the real desktop's second machine is refused in `license-manager.test.ts`; the desktop has no rebind command |
 | 8. Admin phone on mobile data reaches the PC; cashier refused | `src/main/relay-client.test.ts` (real cloud relay + real client + real listener: Admin 200, no credential 401, cashier 403) |
-| 9. The relay cannot read traffic, or the limitation is documented | **Documented** — `cloud/docs/RELAY-LIMITS.md`, repeated in the portal and on the screen |
+| 9. The relay cannot read traffic, or the limitation is documented | **Documented** — `cloud/docs/RELAY-LIMITS.md`, repeated in the portal and on the screen where the Admin enables it. `cloud/tests/portal.test.ts` fails the build if any portal page drifts back to claiming end-to-end encryption or an unreadable relay: an earlier draft of that page did exactly that, said in good faith, and was wrong |
 | 10. No private key or master password in plain text | `cloud/tests/secrets.test.ts` walks the repository, the example environment file and the installers' inputs |
 
 **Not tested here, and honestly marked untestable in this environment:** there is no browser and no phone, so the

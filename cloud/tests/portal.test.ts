@@ -415,6 +415,40 @@ describe('portal audit and relay pages', () => {
     }
   })
 
+  /**
+   * The single most important honesty claim in the product. An earlier draft of this page said the relay
+   * "cannot read the frames it forwards" and was "end-to-end encrypted", which would have been false: it
+   * terminates TLS. This test fails the build if any page drifts back to that claim.
+   */
+  it('never claims the relay is end-to-end encrypted, and states the real limit', async () => {
+    const env = await createTestCloud({ relayDomain: 'relay.test' })
+    try {
+      const session = await signInOwner(env.cloud)
+      const { license } = env.cloud.service.createLicense({
+        customer: { businessName: 'Honest Relay Ltd' }, edition: 'PHARMACY', startsAt: '2026-01-01', endsAt: '2027-01-01',
+        maxAdminPhones: 1, mobileLan: true, mobileInternet: true, defaultCurrencyCode: null, lockCurrency: false,
+      }, 'owner@example.com')
+      // A row in relay_connections so the relay page renders the "a shop has connected" variant too.
+      env.cloud.database.prepare(`
+        INSERT INTO relay_connections (shop_id, license_id, status, connected_at, last_seen_at)
+        VALUES ('abc123def456', ?, 'online', '2026-11-17T10:00:00.000Z', '2026-11-17T10:05:00.000Z')
+      `).run(license.id)
+      for (const url of ['/portal/relay', `/portal/licences/${license.id}`, '/portal', '/portal/privacy']) {
+        const page = await portal(env, url, session.cookie)
+        if (page.statusCode === 404) continue
+        // The wrong claim, in either of the two shapes it took, must never come back.
+        expect(page.body).not.toMatch(/end-to-end/iu)
+        expect(page.body).not.toMatch(/cannot read the (?:frames|traffic)/iu)
+        expect(page.body).not.toMatch(/>None<\/div><small>encrypted/iu)
+      }
+      const relayPage = await portal(env, '/portal/relay', session.cookie)
+      expect(relayPage.body).toContain('can read what it forwards')
+      expect(relayPage.body).toContain('RELAY-LIMITS.md')
+    } finally {
+      await env.close()
+    }
+  })
+
   it('serves the stylesheet and the brand image', async () => {
     const env = await createTestCloud()
     try {
