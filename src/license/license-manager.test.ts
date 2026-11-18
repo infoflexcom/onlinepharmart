@@ -569,7 +569,6 @@ describe('a licence sold in the vendor portal, on the real desktop', () => {
       expect(context.currencyLocked).toBe(true)
       expect(context.vendorCurrencyLocked).toBe(true)
 
-
       // Finish setup on the currency the vendor locked, then confirm the shop cannot move it afterwards. The
       // guard is the very one the Settings screen calls, and the lock is marked as the vendor's.
       const completed = await setup.completeFirstRun({
