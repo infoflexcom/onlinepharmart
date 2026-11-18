@@ -219,6 +219,6 @@ choice, not a gap papered over: nobody reading it is told the traffic is end-to-
 | `npm run check:phase10` | All of the above in sequence. |
 | `npm run check:phase11` | All of the above in sequence, including the cloud and PHP suites (current phase bundle). |
 | `npm run cloud:test` | The cloud suites only (8 files: schema, auth, licence flow, portal, relay, maintenance, secrets, PHP build). |
-| `npm run php:test` | The PHP build's own 32-check suite, with a local PHP 8 binary. |
+| `npm run php:test` | The PHP build's own 32-check suite, needs a local PHP 8 binary (none exists in the environment this phase was built in, so here the identical suite runs inside `php-wasm` as part of `cloud:test` and reports `32 passed, 0 failed`). |
 | `npx tsx scripts/verify-qr-code.ts` | The QR images decode with an independent decoder (needs `npm install --no-save jsqr`; not part of `npm test`). |
 | `npm run dist:win` | Windows NSIS packaging entry point; run on Windows and complete the release checklist. |
