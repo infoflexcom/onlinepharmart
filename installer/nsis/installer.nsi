@@ -112,6 +112,10 @@ Var DownloadProgress
 Var DownloadStatus
 Var DownloadAttempts
 Var DownloadFailed
+Var DownloadRetryBtn
+Var DownloadBrowseBtn
+Var DownloadOfflineBtn
+Var DownloadPanel
 
 Var WasInstalled
 Var PrereqExitCode
@@ -543,10 +547,96 @@ Function DownloadPageCreate
   Pop $0
   ${NSD_CreateProgressBar} 0 28u 100% 10u
   Pop $DownloadProgress
-  ${NSD_CreateLabel} 0 44u 100% 60u ""
+  ${NSD_CreateLabel} 0 44u 100% 30u ""
   Pop $DownloadStatus
 
+  ; ---- the fallback panel. Hidden until a download actually fails, because three buttons offering to rescue you
+  ; from a problem that has not happened yet is just noise on a page that normally needs no input at all.
+  ${NSD_CreateLabel} 0 78u 100% 20u "The download did not finish. Choose what to do next:"
+  Pop $DownloadPanel
+  ${NSD_CreateButton} 0 100u 30% 14u "Try the download again"
+  Pop $DownloadRetryBtn
+  ${NSD_OnClick} $DownloadRetryBtn DownloadRetryClicked
+  ${NSD_CreateButton} 31% 100u 33% 14u "Browse for the file myself"
+  Pop $DownloadBrowseBtn
+  ${NSD_OnClick} $DownloadBrowseBtn DownloadBrowseClicked
+  !if ${INFOPLEX_OFFLINE} == 0
+    ${NSD_CreateButton} 65% 100u 35% 14u "Use the Offline installer instead"
+    Pop $DownloadOfflineBtn
+    ${NSD_OnClick} $DownloadOfflineBtn DownloadOfflineClicked
+  !endif
+  Call ShowDownloadFallback
+
   nsDialogs::Show
+FunctionEnd
+
+; Hides or shows the fallback buttons and explains the state in one line. Called on entry to the page, so the
+; page always opens in the state the previous attempt left behind.
+Function ShowDownloadFallback
+  ${If} $DownloadFailed == "1"
+    ShowWindow $DownloadPanel ${SW_SHOW}
+    ${If} $DownloadAttempts >= 3
+      ${NSD_SetText} $DownloadPanel "The download has failed three times. You can choose the file yourself if you already have it, or use the Offline installer, which needs no internet."
+      EnableWindow $DownloadRetryBtn 0
+      ${NSD_SetText} $DownloadStatus "Nothing was installed. Nothing on this computer was changed."
+    ${Else}
+      ${NSD_SetText} $DownloadPanel "The download did not finish. You can try again, or choose the file yourself."
+      EnableWindow $DownloadRetryBtn 1
+    ${EndIf}
+    !if ${INFOPLEX_OFFLINE} == 0
+      ShowWindow $DownloadOfflineBtn ${SW_SHOW}
+    !endif
+    ShowWindow $DownloadRetryBtn ${SW_SHOW}
+    ShowWindow $DownloadBrowseBtn ${SW_SHOW}
+  ${Else}
+    ShowWindow $DownloadPanel ${SW_HIDE}
+    ShowWindow $DownloadRetryBtn ${SW_HIDE}
+    ShowWindow $DownloadBrowseBtn ${SW_HIDE}
+    !if ${INFOPLEX_OFFLINE} == 0
+      ShowWindow $DownloadOfflineBtn ${SW_HIDE}
+    !endif
+  ${EndIf}
+FunctionEnd
+
+; "Try again": clear the failure so the next attempt runs, then re-run this page's leave handler in place.
+Function DownloadRetryClicked
+  ${If} $DownloadAttempts >= 3
+    ; Should be unreachable — the button is disabled — but a disabled flag is not a rule, so refuse anyway.
+    Return
+  ${EndIf}
+  StrCpy $DownloadFailed "0"
+  ${NSD_SetText} $DownloadStatus "Trying again…"
+  Call ShowDownloadFallback
+  SendMessage $HWNDPARENT ${WM_COMMAND} 1 0
+FunctionEnd
+
+; "Browse for the file myself": the customer points at a file they already have. It is held to the same
+; checksum and publisher check as a download, so choosing a file cannot be used to sneak in anything else.
+Function DownloadBrowseClicked
+  nsDialogs::SelectFileDialog open "" "Microsoft Visual C++ Redistributable (*.exe)|*.exe"
+  Pop $0
+  ${If} $0 == ""
+    Return
+  ${EndIf}
+  ${NSD_SetText} $DownloadStatus "Checking the file you chose…"
+  nsExec::ExecToStack '"$PLUGINSDIR\password-check.exe" --sha256 "${VCREDIST_SHA256}" "$0"'
+  Pop $1
+  Pop $2
+  ${If} $1 != "0"
+    MessageBox MB_ICONSTOP|MB_OK "The file you chose is not the one ${PRODUCT_NAME} expects, so it was not used. Nothing was changed."
+    Return
+  ${EndIf}
+  CopyFiles /SILENT "$0" "$PLUGINSDIR\vc_redist.x64.exe"
+  StrCpy $DownloadFailed "0"
+  Call ShowDownloadFallback
+  SendMessage $HWNDPARENT ${WM_COMMAND} 1 0
+FunctionEnd
+
+; "Use the Offline installer instead": we cannot download a 400 MB installer from inside a failing online
+; install, so the honest answer is to say where it comes from and leave this computer untouched.
+Function DownloadOfflineClicked
+  MessageBox MB_ICONINFORMATION|MB_OK "The Offline installer contains everything and needs no internet. Ask support for it, or download it on another computer and copy it across. This installer has not changed anything on this computer."
+  Quit
 FunctionEnd
 
 Function DownloadPageLeave
@@ -567,16 +657,14 @@ Function DownloadPageLeave
 
   ${If} $0 != "success"
     IntOp $DownloadAttempts $DownloadAttempts + 1
+    StrCpy $DownloadFailed "1"
     ${If} $DownloadAttempts >= 3
-      StrCpy $DownloadFailed "1"
-      ${If} ${INFOPLEX_OFFLINE} == 1
-        MessageBox MB_ICONSTOP|MB_OK "The download failed and this installer carries its prerequisites locally, so this should not happen. Contact support; nothing was changed."
-      ${Else}
-        MessageBox MB_ICONSTOP|MB_OK "The download failed. You can browse for the file yourself with the Offline installer, or try again later. Nothing was changed."
-      ${EndIf}
-      Abort
+      ${NSD_SetText} $DownloadStatus "Nothing was installed. Nothing on this computer was changed."
+    ${Else}
+      ${NSD_SetText} $DownloadStatus "The download did not finish. Attempt $DownloadAttempts of 3."
     ${EndIf}
-    ${NSD_SetText} $DownloadStatus "The download did not finish. Attempt $DownloadAttempts of 3."
+    Call ShowDownloadFallback
+    ; Stay on the page: the three buttons are the answer, not a message box the customer has to dismiss.
     Abort
   ${EndIf}
 
@@ -585,7 +673,9 @@ Function DownloadPageLeave
   ${If} $1 == ""
     Delete "$PLUGINSDIR\vc_redist.x64.exe"
     StrCpy $DownloadFailed "1"
-    MessageBox MB_ICONSTOP|MB_OK "The downloaded file is empty, so it was deleted. Nothing was changed."
+    StrCpy $DownloadAttempts 3
+    ${NSD_SetText} $DownloadStatus "The downloaded file was empty, so it was deleted. Nothing was changed."
+    Call ShowDownloadFallback
     Abort
   ${EndIf}
   ${NSD_SetText} $DownloadStatus "Checking the file…"
@@ -596,7 +686,11 @@ Function DownloadPageLeave
   ${If} $0 != "0"
     Delete "$PLUGINSDIR\vc_redist.x64.exe"
     StrCpy $DownloadFailed "1"
-    MessageBox MB_ICONSTOP|MB_OK "The downloaded file is not the one ${PRODUCT_NAME} expects, so it was deleted. Check your internet connection and try again, or ask support for the Offline installer."
+    ; A checksum mismatch is not a flaky line — the file that arrived is wrong. Stop offering Retry so the same
+    ; wrong file is not fetched a fourth time, and say plainly that nothing was run.
+    StrCpy $DownloadAttempts 3
+    ${NSD_SetText} $DownloadStatus "The downloaded file was not the one ${PRODUCT_NAME} expects, so it was deleted and not run. Nothing was changed."
+    Call ShowDownloadFallback
     Abort
   ${EndIf}
   ${NSD_SetText} $DownloadStatus "The file is verified."

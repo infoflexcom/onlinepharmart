@@ -49,10 +49,19 @@ for (const file of includeFiles) {
 
 // ---- 2. the NSIS script passes the static checker
 const scriptFiles = ['installer/nsis/installer.nsi', ...includeFiles]
+// The checker reads the companion includes, so an unknown macro is caught even in a file full of includes.
+const companionScripts: Record<string, string> = {}
+for (const file of includeFiles) {
+  try {
+    companionScripts[file.replace('installer/nsis/', '')] = readFileSync(file, 'utf8')
+  } catch {
+    // Reported by the presence check above.
+  }
+}
 for (const file of scriptFiles) {
   let problems: ScriptProblem[]
   try {
-    problems = checkNsisScript(readFileSync(file, 'utf8'))
+    problems = checkNsisScript(readFileSync(file, 'utf8'), { companionScripts })
   } catch {
     fail(`${file} could not be read.`)
     continue

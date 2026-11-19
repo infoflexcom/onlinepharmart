@@ -142,16 +142,39 @@ export function summarizeSystemCheck(results: CheckResult[]): SystemCheckSummary
  * "No internet" is not a dead end: the customer gets three buttons from the brief.
  * This decides which of them can actually work, so a button is never offered when it cannot succeed.
  */
-export function downloadFailureOptions(input: { offlineInstallerAvailable: boolean }): {
+export interface DownloadFailureOptions {
+  /** Retry is offered while attempts remain; the fourth is not. */
   retry: boolean
+  /** Browsing for a file the customer already has is always offered. */
   browse: boolean
+  /** Only when an offline build exists to point at. */
   useOfflineInstaller: boolean
-} {
+  /** Plain words for the panel; never an error code. */
+  message: string
+}
+
+/**
+ * The fallback shown when a download fails.
+ *
+ * DONE WHEN item 7 asks for three buttons when the online installer cannot download its prerequisite. The rule
+ * that matters is not that the buttons exist but *when* each is honest: offering Retry after the third failed
+ * attempt wastes a shopkeeper's afternoon on a connection that is clearly not working, and offering a 400 MB
+ * offline download to somebody on a working connection is just as unhelpful. So retry is tied to attempts left,
+ * browsing is always safe (the file is verified either way), and the offline pointer only appears when there is
+ * an offline build to point at.
+ */
+export function downloadFailureOptions(input: {
+  attemptsUsed: number
+  offlineInstallerAvailable: boolean
+}): DownloadFailureOptions {
+  const retry = retryAllowed(input.attemptsUsed)
   return {
-    // Retrying is always allowed: a flaky connection often recovers, and after three failures the UI stops offering it.
-    retry: true,
+    retry,
     browse: true,
     useOfflineInstaller: input.offlineInstallerAvailable,
+    message: retry
+      ? 'The download did not finish. You can try again, choose the file yourself if you already have it, or ask for the Offline installer.'
+      : 'The download has failed three times, so trying again is unlikely to help. You can choose the file yourself if you already have it, or ask support for the Offline installer, which needs no internet.',
   }
 }
 

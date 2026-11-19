@@ -83,3 +83,73 @@ describe('the shipped installer script', () => {
     expect(text).not.toMatch(/^!define\s+MUI_PAGE_WELCOME/u)
   })
 })
+
+describe('macros invoked in \${...} form', () => {
+  const script = (body: string): string => `
+!include "LogicLib.nsh"
+!include "nsDialogs.nsh"
+!include "FileFunc.nsh"
+Name "test"
+OutFile "test.exe"
+${body}
+Section "Main"
+SectionEnd
+`
+
+  it('accepts a known nsDialogs control and operation', () => {
+    const problems = checkNsisScript(script('Section\n\${NSD_CreateButton} 0 0 50% 14u "Go"\nPop $0\n\${NSD_SetText} $0 "Go"\n\${NSD_OnClick} $0 Somewhere\nSectionEnd'))
+    expect(problems.filter((p) => /NSD_/u.test(p.message))).toEqual([])
+  })
+
+  it('rejects a misspelt nsDialogs control — the mistake this check exists for', () => {
+    // A name-prefix rule would wave this through; only a vocabulary catches it.
+    const problems = checkNsisScript(script('Section\n\${NSD_CreateButon} 0 0 50% 14u "Go"\nPop $0\nSectionEnd'))
+    expect(problems.map((p) => p.message).join(' ')).toMatch(/NSD_CreateButon/u)
+  })
+
+  it('rejects a misspelt nsDialogs operation', () => {
+    const problems = checkNsisScript(script('Section\n\${NSD_SetTxt} $0 "Go"\nSectionEnd'))
+    expect(problems.map((p) => p.message).join(' ')).toMatch(/NSD_SetTxt/u)
+  })
+
+  it('accepts the LogicLib control macros', () => {
+    const problems = checkNsisScript(script('Function f\n  \${If} $0 == "1"\n  \${ElseIf} $0 == "2"\n  \${Else}\n  \${EndIf}\nFunctionEnd\nSection\nSectionEnd'))
+    expect(problems.filter((p) => /LogicLib/u.test(p.message))).toEqual([])
+  })
+
+  it('accepts a standard-header macro only while its header is included', () => {
+    const withHeader = checkNsisScript(script('Section\n\${GetRoot} "C:\\a\\b" $0\nSectionEnd'))
+    expect(withHeader.filter((p) => /GetRoot/u.test(p.message))).toEqual([])
+
+    const withoutHeader = checkNsisScript(`
+!include "LogicLib.nsh"
+Name "test"
+OutFile "test.exe"
+Section
+\${GetRoot} "C:\\a\\b" $0
+SectionEnd
+`)
+    // Removing the include really would stop this compiling, so the checker must say so.
+    expect(withoutHeader.map((p) => p.message).join(' ')).toMatch(/GetRoot/u)
+  })
+
+  it('does not mistake a !define used as \${NAME} for a missing macro', () => {
+    const problems = checkNsisScript(script('!define Readme "readme.txt"\nSection\nFileOpen $0 "\${Readme}" w\nSectionEnd'))
+    expect(problems.filter((p) => /Readme/u.test(p.message))).toEqual([])
+  })
+
+  it('accepts macros supplied by a companion include that was read', () => {
+    const host = `
+!include "generated.nsh"
+Name "test"
+OutFile "test.exe"
+Section
+\${CurrencyRow} $0
+SectionEnd
+`
+    expect(checkNsisScript(host, { companionScripts: { 'generated.nsh': '!macro CurrencyRow\n!macroend\n' } })).toEqual([])
+    // And still reports it when the companion does not define it.
+    const missing = checkNsisScript(host, { companionScripts: { 'generated.nsh': '!macro SomethingElse\n!macroend\n' } })
+    expect(missing.map((p) => p.message).join(' ')).toMatch(/CurrencyRow/u)
+  })
+})

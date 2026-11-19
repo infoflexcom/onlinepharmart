@@ -398,7 +398,7 @@ machine; the manual step is in `docs/RELEASE-CHECKLIST.md` Gate 5. Nothing here 
 | 4 | The chosen currency is preselected on first-run setup | **Pass** | `install-config-reader.test.ts` (file → reader, corrupt file, override) and `installer-to-setup.test.ts` (file → reader → repository → `SetupService` context, for GHS/KWD/JPY/EUR and a **custom** currency, with the vendor policy correctly outranking it) |
 | 5 | System Check is accurate | **Pass (rules) / could not test (real machine)** | `installer.test.ts` covers Windows 10/11/too-old/32-bit/unknown, the 1 GB floor, the VC++ runtime found/missing/unprobeable, and that firewall and printer are informational only. The registry probes themselves need Windows. |
 | 6 | A missing prerequisite is downloaded from the official URL, verified and installed | **Pass (rules) / could not test (live download)** | `installer.test.ts`: only allowlisted ids resolve, HTTPS + allowlisted host, a mismatched checksum deletes the file, an unsigned or wrongly-signed file is refused, a "browse" pick is held to the same checksum. The actual download needs a network and Windows. |
-| 7 | Offline shows the three-button fallback | **Partial — see the gap below** | `system-check.ts` models retry/browse/use-offline and the three-attempt limit, tested. The page currently refuses with a message after three attempts rather than drawing the three buttons. |
+| 7 | Failed download shows Retry / Browse / Use the Offline installer | **Pass (rules and controls) / could not test (UI)** | `installer.test.ts`: retry offered while attempts remain and withdrawn after the third, browse always offered, offline pointer only when an offline build exists, and a message that stops suggesting retry when retry would be dishonest. The download page draws the three buttons, hides them until a failure, disables Retry at three, and verifies a browsed file with the same checksum as a download. |
 | 8 | Offline installer completes with no internet, then activates on-site | **Partial** | The offline build compiles out the download page entirely (`!if INFOPLEX_OFFLINE == 0`), and on-site activation with the master password is proved in `license-manager.test.ts`. Running the offline installer needs Windows. |
 | 9 | The app launches and shows Activation | **Pass (app) / could not test (after install)** | `App.tsx` renders `LicenseScreen` whenever `bootstrap.license.canUse` is false, before setup or login; previously covered in the first-run suite |
 | 10 | Firewall rule for private networks only; the Admin phone connects after pairing | **Pass (rule text) / could not test (behaviour)** | The `.nsi` adds exactly one rule with `profile=private`; the app's own repair path is covered in `mobile-firewall` tests and `mobile-access-integration.test.ts`. That Windows applies it needs a real machine. |
@@ -419,14 +419,24 @@ machine; the manual step is in `docs/RELEASE-CHECKLIST.md` Gate 5. Nothing here 
 - **The live prerequisite download was not performed.** Its allowlist, checksum and signature rules are tested;
   the network fetch is not.
 
-### One deliberate gap carried forward
+### Two holes in the checker itself, found while closing item 7
 
-**DONE WHEN item 7** asks for three buttons (Retry / Browse for the file / Use the Offline installer) when a
-download fails. The rules for all three exist and are tested, but the download page in the `.nsi` currently
-reports the failure in a message box after three attempts instead of drawing the three buttons. Since no page in
-this installer has been executed in this environment, the page-level work — including these three buttons and
-their progress bar, speed and time-remaining display — is deferred to the same Windows pass that must draw and
-click every other page, rather than written blind and declared finished.
+The static checker matters more here than a linter normally would, because the script it checks can never be
+compiled in this environment — whatever it misses ships unexamined. Writing the three-button page exposed two
+things it had been missing:
+
+1. **It stopped checking macros as soon as the script had an include.** The rule was "if a companion include is
+   present, an unknown macro may come from it" — which is true, and also switched the check off for the most
+   macro-dense file in the project. The checker now reads the companion files and accepts a name only if it is
+   really defined there.
+2. **It never validated `${Macro}` invocations at all** — only `!insertmacro`. That is how nearly every macro is
+   actually used, so `${NSD_CreateButon}` would have reached the Windows build machine and failed there. It now
+   checks them against the LogicLib set, the nsDialogs control and operation vocabulary, the standard-header
+   macros *together with the header each needs*, the script's own `!define`s and its companions. A first attempt
+   accepted any name starting `NSD_`, which would have waved the typo straight through — a test now pins the
+   misspelling so it cannot come back.
+3. A smaller one: a bare `Section` with no name was not recognised as a block opener, so its `SectionEnd` was
+   reported as unmatched. The real script uses named sections, which is why it never showed.
 
 ## Verification commands
 

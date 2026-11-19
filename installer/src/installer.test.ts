@@ -13,7 +13,7 @@ import {
 } from './install-config'
 import {
   MAX_DOWNLOAD_ATTEMPTS, evaluateDisk, evaluateFirewall, evaluatePrinter, evaluateVcRuntime,
-  evaluateWindows, retryAllowed, summarizeSystemCheck,
+  downloadFailureOptions, evaluateWindows, retryAllowed, summarizeSystemCheck,
 } from './system-check'
 import {
   ALLOWED_DOWNLOAD_HOSTS, hostOf, resolveDownload, verifyBrowsedFile, verifyChecksum, verifySignature,
@@ -319,6 +319,27 @@ describe('the system check', () => {
     expect(retryAllowed(0)).toBe(true)
     expect(retryAllowed(MAX_DOWNLOAD_ATTEMPTS - 1)).toBe(true)
     expect(retryAllowed(MAX_DOWNLOAD_ATTEMPTS)).toBe(false)
+  })
+
+  it('offers the right fallback buttons as attempts run out', () => {
+    // First failure: all three are honest, because a flaky line often recovers.
+    const first = downloadFailureOptions({ attemptsUsed: 1, offlineInstallerAvailable: true })
+    expect(first).toMatchObject({ retry: true, browse: true, useOfflineInstaller: true })
+    expect(first.message).toMatch(/try again/i)
+
+    // Last allowed attempt still offers Retry.
+    expect(downloadFailureOptions({ attemptsUsed: MAX_DOWNLOAD_ATTEMPTS - 1, offlineInstallerAvailable: true }).retry).toBe(true)
+
+    // After the third failure Retry disappears and the message stops suggesting it.
+    const exhausted = downloadFailureOptions({ attemptsUsed: MAX_DOWNLOAD_ATTEMPTS, offlineInstallerAvailable: true })
+    expect(exhausted).toMatchObject({ retry: false, browse: true, useOfflineInstaller: true })
+    expect(exhausted.message).not.toMatch(/try again/i)
+    expect(exhausted.message).toMatch(/offline installer/i)
+
+    // Browsing is always allowed: a file the customer already has is still verified before it runs.
+    expect(downloadFailureOptions({ attemptsUsed: 0, offlineInstallerAvailable: false }).browse).toBe(true)
+    // Without an offline build there is nothing to point at.
+    expect(downloadFailureOptions({ attemptsUsed: 3, offlineInstallerAvailable: false }).useOfflineInstaller).toBe(false)
   })
 })
 

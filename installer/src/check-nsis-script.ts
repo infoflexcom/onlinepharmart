@@ -33,7 +33,56 @@ const EXTERNAL_LIBRARY_MACROS = new Set([
   'NSD_CreateLabel', 'NSD_CreateText', 'NSD_CreatePassword', 'NSD_CreateCheckbox', 'NSD_CreateListBox',
   'NSD_CreateProgressBar', 'NSD_CreateDirRequest', 'NSD_CreateLink', 'NSD_LB_AddString', 'NSD_LB_SetCurSel',
   'NSD_LB_GetCurSel', 'NSD_GetText', 'NSD_SetText', 'NSD_GetState', 'NSD_Check', 'NSD_DisableWindow', 'NSD_OnClick',
+  'NSD_CreateButton', 'NSD_EnableWindow', 'GetFileSize', 'NSD_ShowWindow',
 ])
+
+/**
+ * The nsDialogs macros that exist, split into what a control is called and what can be done to it.
+ *
+ * An earlier version accepted any name starting with `NSD_`, which meant a typo such as `${NSD_CreateButon}` —
+ * exactly the mistake this checker exists for — passed silently and would only fail on a Windows build machine.
+ * Listing the vocabulary catches the typo; the lists are from nsDialogs' own documentation, not from this script.
+ */
+const NSD_CONTROLS = new Set([
+  'Label', 'Icon', 'Bitmap', 'Link', 'Button', 'GroupBox', 'Checkbox', 'RadioButton', 'Text', 'Password',
+  'Number', 'FileRequest', 'DirRequest', 'ComboBox', 'DropList', 'ListBox', 'ListBoxEx', 'ProgressBar', 'HLine', 'VLine',
+])
+const NSD_OPERATIONS = new Set([
+  'CreateButton', 'CreateLabel', 'CreateIcon', 'CreateBitmap', 'CreateLink', 'CreateGroupBox', 'CreateCheckbox',
+  'CreateRadioButton', 'CreateText', 'CreatePassword', 'CreateNumber', 'CreateFileRequest', 'CreateDirRequest',
+  'CreateComboBox', 'CreateDropList', 'CreateListBox', 'CreateListBoxEx', 'CreateProgressBar', 'CreateHLine',
+  'CreateVLine', 'CreateLine', 'AddString', 'InsertString', 'DeleteString', 'FindString', 'ResetContent',
+  'GetCurSel', 'SetCurSel', 'GetText', 'SetText', 'GetState', 'SetState', 'Check', 'OnClick', 'OnChange',
+  'OnSelChange', 'DisableWindow', 'EnableWindow', 'ShowWindow', 'SetFocus', 'GetTextLength', 'SetLimitText',
+  'AddStyle', 'SelectFileDialog', 'SelectFolderDialog',
+])
+/**
+ * Macros from the NSIS standard headers, and the header each one lives in.
+ *
+ * A `${GetRoot}` is only valid because `FileFunc.nsh` is included; if somebody removes that include the script
+ * stops compiling, and the checker should notice that rather than accept the macro from a list on faith.
+ */
+const NSIS_STDLIB_MACROS: Record<string, string> = {
+  GetParameters: 'FileFunc.nsh', GetOptions: 'FileFunc.nsh', GetRoot: 'FileFunc.nsh', DriveSpace: 'FileFunc.nsh',
+  GetSize: 'FileFunc.nsh', GetTime: 'FileFunc.nsh', GetFileVersion: 'FileFunc.nsh', GetFileAttributes: 'FileFunc.nsh',
+  GetExeName: 'FileFunc.nsh', GetExePath: 'FileFunc.nsh', GetParent: 'FileFunc.nsh', GetBaseName: 'FileFunc.nsh',
+  GetDrives: 'FileFunc.nsh', GetFileTime: 'FileFunc.nsh', GetFileTimeL: 'FileFunc.nsh', BannerTrimPath: 'FileFunc.nsh',
+  Locate: 'FileFunc.nsh', GetWinVer: 'WinVer.nsh', AtLeastWin10: 'WinVer.nsh', AtMostWin10: 'WinVer.nsh',
+  AtLeastWin11: 'WinVer.nsh', AtLeastWin8: 'WinVer.nsh', AtLeastWin7: 'WinVer.nsh', AtMostWin7: 'WinVer.nsh',
+  AtLeastWinVista: 'WinVer.nsh', AtMostWinVista: 'WinVer.nsh', AtLeastWinXP: 'WinVer.nsh', AtMostWinXP: 'WinVer.nsh',
+}
+
+function isStdlibMacro(name: string, includesHeader: (header: string) => boolean): boolean {
+  const header = NSIS_STDLIB_MACROS[name]
+  return header !== undefined && includesHeader(header)
+}
+
+function isNsDialogsMacro(name: string): boolean {
+  const match = /^NSD_(?:LB_|CB_|G_)?(\w+)$/u.exec(name)
+  if (!match) return false
+  const operation = match[1]!
+  return NSD_OPERATIONS.has(operation) || NSD_CONTROLS.has(operation)
+}
 
 /** Macros that is allowed to be inserted from a *companion generated include rather than from this file. */
 const COMPANION_INCLUDES = ['generated.nsh', 'currency-ui.nsh']
@@ -52,7 +101,7 @@ const BLOCK_OPENERS: Array<[RegExp, string]> = [
   [/^\s*\$\{If(Not)?\b/u, 'If'],
   [/^\s*\$\{Do(While)?\b/u, 'Do'],
   [/^\s*Function\s+\S+/u, 'Function'],
-  [/^\s*Section\s/u, 'Section'],
+  [/^\s*Section\b/u, 'Section'],
   [/^\s*SectionEnd\b/u, 'SectionEnd'],
 ]
 const BLOCK_CLOSERS: Array<[RegExp, string]> = [
@@ -66,10 +115,31 @@ function stripComments(line: string): string {
   return index >= 0 ? line.slice(0, index) : line
 }
 
-export function checkNsisScript(text: string): ScriptProblem[] {
+export interface CheckOptions {
+  /**
+   * The text of companion files this script `!include`s, keyed by their `!include` name.
+   *
+   * Without these the checker could not tell an unknown macro from one a generated include supplies, and the
+   * cheap way out is to skip the check whenever an include exists — which silently stops catching typos in the
+   * most macro-heavy file in the project. Reading them means a name is accepted only if it is genuinely there.
+   */
+  companionScripts?: Record<string, string>
+}
+
+export function checkNsisScript(text: string, options: CheckOptions = {}): ScriptProblem[] {
   const problems: ScriptProblem[] = []
   const lines = text.split('\n')
   const strip = lines.map(stripComments)
+
+  // Every !define name, so a `!define Readme` used as `${Readme}` is not mistaken for a missing macro.
+  const defineNames = new Set<string>()
+  for (const raw of strip) {
+    const definition = /^!define\s+(\S+)/u.exec(raw.trim())
+    if (definition) defineNames.add(definition[1]!)
+  }
+  const isPlainDefine = (name: string): boolean => defineNames.has(name)
+  const includesHeader = (header: string): boolean =>
+    new RegExp(`^!include\\s+"?${header.replace('.', '\\.')}"?\\s*$`, 'mu').test(text)
 
   // ---- declared functions
   const declared = new Set<string>()
@@ -158,12 +228,54 @@ export function checkNsisScript(text: string): ScriptProblem[] {
     if (isIncludeFile) continue
     problems.push({ line, message: `!macro ${name} is defined but never inserted, so that page never appears.` })
   }
-  const hasCompanionInclude = COMPANION_INCLUDES.some((name) => new RegExp(`^!include\\s+"?${name.replace('.', '\\.')}"?$`, 'mu').test(text))
+  // Macros supplied by the companion files this script actually includes — read for real when the caller passes
+  // them, so an unknown name still fails even though includes are present.
+  const includedNames = COMPANION_INCLUDES.filter((name) =>
+    new RegExp(`^!include\\s+"?${name.replace('.', '\\.')}"?$`, 'mu').test(text))
+  const companionMacros = new Set<string>()
+  for (const name of includedNames) {
+    const companionText = options.companionScripts?.[name]
+    if (companionText === undefined) continue
+    for (const raw of companionText.split('\n')) {
+      const definition = /^!macro\s+(\S+)/u.exec(raw.trim())
+      if (definition) companionMacros.add(definition[1]!)
+    }
+  }
+  // If a companion is included but not supplied, we cannot know what it defines; skipping is honest, but it must
+  // be visible, so the caller is told to pass it.
+  const unreadableCompanion = includedNames.some((name) => options.companionScripts?.[name] === undefined)
   for (const [name, line] of inserted) {
-    if (defined.has(name) || EXTERNAL_LIBRARY_MACROS.has(name)) continue
-    // A generated companion include legitimately supplies macros this file inserts.
-    if (hasCompanionInclude) continue
+    if (defined.has(name) || EXTERNAL_LIBRARY_MACROS.has(name) || isNsDialogsMacro(name)) continue
+    if (companionMacros.has(name)) continue
+    if (unreadableCompanion) continue
     problems.push({ line, message: `!insertmacro ${name} is used but never defined, which fails at compile time.` })
+  }
+
+  // ---- macros invoked in ${...} form
+  //
+  // This is how almost every macro is actually used (${NSD_CreateButton}, ${GetFileSize}, ${If}...), and it went
+  // unchecked for a while, so a misspelt control name would have reached the Windows build machine and failed
+  // there instead of here. Only invocations at the start of a statement are examined: a `${VAR}` in the middle of
+  // a string is a define reference, not a macro call, and flagging those would produce noise rather than findings.
+  const LOGIC_MACROS = new Set([
+    'If', 'IfNot', 'Else', 'ElseIf', 'ElseIfNot', 'EndIf', 'Do', 'DoWhile', 'Loop', 'While', 'Switch', 'Case',
+    'Default', 'EndSwitch', 'Select', 'EndSelect', 'Break', 'Continue', 'ExitDo', 'AndIf', 'OrIf', 'EndWhile',
+  ])
+  for (const [index, raw] of strip.entries()) {
+    const line = raw.trim()
+    const invocation = /^\$\{(\w+)(?:\s|\}|$)/u.exec(line)
+    if (!invocation) continue
+    const name = invocation[1]!
+    if (LOGIC_MACROS.has(name) || defined.has(name) || EXTERNAL_LIBRARY_MACROS.has(name)) continue
+    if (isNsDialogsMacro(name) || companionMacros.has(name)) continue
+    if (isStdlibMacro(name, includesHeader)) continue
+    // A define used as ${NAME} at the start of a line is a constant reference, not a macro call.
+    if (isPlainDefine(name)) continue
+    if (unreadableCompanion) continue
+    problems.push({
+      line: index + 1,
+      message: `\${${name}} is used but is not a macro defined in this script, a known LogicLib/nsDialogs/macros macro, or a !define.`,
+    })
   }
 
   // ---- defines that are redefined with a different value
