@@ -395,7 +395,7 @@ machine; the manual step is in `docs/RELEASE-CHECKLIST.md` Gate 5. Nothing here 
 | 1 | Opens by double-click with no terminal | **Could not test** | The `.nsi` sets `RequestExecutionLevel admin`, defines no console and builds a MUI wizard; `check-nsis-script.test.ts` asserts there is no console. Launching it needs Windows. |
 | 2 | Blocks without the password | **Pass (logic) / could not test (UI)** | `installer.test.ts`: wrong password counted, five attempts lock and stay locked even if the sixth is right, `password-check.test.ts` proves exit 0 only on a match. The page wiring is not clicked here. |
 | 3 | Currency page lists the currencies, correct live example for 2-, 0- and 3-decimal, custom currency works | **Pass, per currency** | `installer.test.ts`: all 54 labelled `CODE - Name (symbol)`, searchable by code/name/symbol, custom currency at 0–4 decimals, bad fields refused in plain words. `currency-example-table.test.ts`: **all 54 live examples** transcribed by hand *and* re-derived by a second, independent renderer — the brief judged currency correctness per currency, so three representative examples and a non-empty check was not enough. Verified to fail when one currency's decimals are changed |
-| 4 | The chosen currency is preselected on first-run setup | **Pass** | `install-config-reader.test.ts` (file → reader, corrupt file, override) and `installer-to-setup.test.ts` (file → reader → repository → `SetupService` context, for GHS/KWD/JPY/EUR and a **custom** currency, with the vendor policy correctly outranking it) |
+| 4 | The chosen currency is preselected on first-run setup | **Pass** | `install-config-reader.test.ts` (file → reader, corrupt file, override), `installer-to-setup.test.ts` (file → reader → repository → `SetupService` context, for GHS/KWD/JPY/EUR and a **custom** currency, policy correctly outranking) and **`install-config-writer.test.ts`**, which reconstructs the file from the installer's own `FileWrite` lines and parses it — the file NSIS emits had never been read by anything, and two escaping defects were hiding there |
 | 5 | System Check is accurate | **Pass (rules) / could not test (real machine)** | `installer.test.ts` covers Windows 10/11/too-old/32-bit/unknown, the 1 GB floor, the VC++ runtime found/missing/unprobeable, and that firewall and printer are informational only. The registry probes themselves need Windows. |
 | 6 | A missing prerequisite is downloaded from the official URL, verified and installed | **Pass (rules) / could not test (live download)** | `installer.test.ts`: only allowlisted ids resolve, HTTPS + allowlisted host, a mismatched checksum deletes the file, an unsigned or wrongly-signed file is refused, a "browse" pick is held to the same checksum. The actual download needs a network and Windows. |
 | 7 | Failed download shows Retry / Browse / Use the Offline installer | **Pass (rules and controls) / could not test (UI)** | `installer.test.ts`: retry offered while attempts remain and withdrawn after the third, browse always offered, offline pointer only when an offline build exists, and a message that stops suggesting retry when retry would be dishonest. The download page draws the three buttons, hides them until a failure, disables Retry at three, and verifies a browsed file with the same checksum as a download. |
@@ -405,6 +405,32 @@ machine; the manual step is in `docs/RELEASE-CHECKLIST.md` Gate 5. Nothing here 
 | 11 | Repair/Update/Uninstall behave, keep data, never change the currency | **Pass (logic) / could not test (UI)** | `installer.test.ts`: only a fresh install may write the currency file, updates and repairs must not, the currency page is hidden for both. The `.nsi` reads `InstallDir` to detect an existing install and skips the write. |
 | 12 | Silent install with a valid and an invalid currency behaves correctly | **Pass (logic) / could not test (UI)** | `installer.test.ts`: `/CURRENCY=GHS` accepted with or without quotes and case-insensitively, `/CURRENCY=` empty and `/CURRENCY=NOTACODE` refused with a message naming the switch. **`/CURRENCY=` with an empty value was a bug found while writing this — it used to fall through to the default silently.** |
 | 13 | The master password is nowhere in plain text | **Pass** | `installer.test.ts` (the shipped hash and salt are not the password), `check-nsis-script.test.ts` (the script contains no `Handywife`), and `npm run installer:check`, which scans every shipped installer file — verified by deliberately leaking the password into a generated file and watching the check fail |
+
+### The install-config.json that NSIS hand-writes was invalid
+
+The most consequential defect of this phase, because it would have silently discarded every shop's currency
+choice on a real machine.
+
+Nothing had ever parsed the file the installer emits. The reader had tests, the TypeScript writer had tests, and
+the two were assumed to agree — but NSIS writes the file by hand, and hand-written JSON had two faults:
+
+1. **Values were not escaped.** `"thousandsSeparator": ","` wrote a bare comma inside a string, which is not
+   JSON. Every currency would have hit this, so the app would have read no file at all, fallen back to Naira, and
+   shown no error anywhere.
+2. **`"isCustom"` had no trailing comma** in some paths, and the block wrote `installerKind` twice — once from each
+   branch of the `${If}`, because the conditional was malformed.
+
+The fix is `installer/nsis/json-escaping.nsh` (`EscapeJson`, NSIS's JSON escaping by hand) plus a corrected
+`FileWrite` block. It is proved by `install-config-writer.test.ts`, which reads the `.nsi`, evaluates its own
+`FileWrite` statements and `${If}` branches, applies the companion `EscapeJson`, and hands the result to the real
+`parseInstallConfig` — for **all 54 currencies**, both installers, and a custom currency containing a quote and a
+backslash. Reverting either defect makes 57 of its 60 assertions fail.
+
+**What could not be made safe, and is refused instead.** A custom currency containing a letter outside ASCII
+(`৳`, `د.ك`) cannot be written safely: `\uXXXX` needs a code point, which NSIS cannot produce without a plugin,
+and passing the raw characters through depends on the encoding a Unicode NSIS build saves — a guess that cannot be
+tested here. `customCurrencyRecordingProblem` therefore refuses such a value *at the moment the customer types it*,
+in words that say what to do. Built-in currencies are unaffected: the generator enforces that its table is ASCII.
 
 ### What this environment could not do, and what is owed
 

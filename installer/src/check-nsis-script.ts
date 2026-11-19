@@ -85,7 +85,7 @@ function isNsDialogsMacro(name: string): boolean {
 }
 
 /** Macros that is allowed to be inserted from a *companion generated include rather than from this file. */
-const COMPANION_INCLUDES = ['generated.nsh', 'currency-ui.nsh']
+const COMPANION_INCLUDES = ['generated.nsh', 'currency-ui.nsh', 'json-escaping.nsh']
 
 const EXTERNALLY_INSERTED_MACROS = new Set([
   'customWelcomePage', 'customFinishPage', 'customPageAfterChangeDir', 'customHeader', 'customInit',
@@ -138,6 +138,23 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
     if (definition) defineNames.add(definition[1]!)
   }
   const isPlainDefine = (name: string): boolean => defineNames.has(name)
+  // Everything the script includes and the caller supplied: macros AND functions. A companion include may define
+  // `EscapeJson`, and a `Call EscapeJson` is correct if so — but only then, which is why the files are read rather
+  // than assumed.
+  const includedNames = COMPANION_INCLUDES.filter((name) =>
+    new RegExp(`^!include\\s+"?${name.replace('.', '\\.')}"?$`, 'mu').test(text))
+  const companionMacros = new Set<string>()
+  const companionFunctions = new Set<string>()
+  for (const [name, companionText] of Object.entries(options.companionScripts ?? {})) {
+    if (!includedNames.includes(name)) continue
+    for (const raw of companionText.split('\n')) {
+      const macro = /^!macro\s+(\S+)/u.exec(raw.trim())
+      if (macro) companionMacros.add(macro[1]!)
+      const fn = /^Function\s+(?:un\.)?(\S+)/u.exec(raw.trim())
+      if (fn) companionFunctions.add(fn[1]!)
+    }
+  }
+  const unreadableCompanion = includedNames.some((name) => options.companionScripts?.[name] === undefined)
   const includesHeader = (header: string): boolean =>
     new RegExp(`^!include\\s+"?${header.replace('.', '\\.')}"?\\s*$`, 'mu').test(text)
 
@@ -152,7 +169,9 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
     if (call) called.set(call[1]!, index + 1)
   }
   for (const [name, line] of called) {
-    if (!declared.has(name)) problems.push({ line, message: `Call to "${name}", which is never declared with Function.` })
+    if (!declared.has(name) && !companionFunctions.has(name) && !unreadableCompanion) {
+      problems.push({ line, message: `Call to "${name}", which is never declared with Function.` })
+    }
   }
 
   // ---- block balance
@@ -228,22 +247,7 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
     if (isIncludeFile) continue
     problems.push({ line, message: `!macro ${name} is defined but never inserted, so that page never appears.` })
   }
-  // Macros supplied by the companion files this script actually includes — read for real when the caller passes
-  // them, so an unknown name still fails even though includes are present.
-  const includedNames = COMPANION_INCLUDES.filter((name) =>
-    new RegExp(`^!include\\s+"?${name.replace('.', '\\.')}"?$`, 'mu').test(text))
-  const companionMacros = new Set<string>()
-  for (const name of includedNames) {
-    const companionText = options.companionScripts?.[name]
-    if (companionText === undefined) continue
-    for (const raw of companionText.split('\n')) {
-      const definition = /^!macro\s+(\S+)/u.exec(raw.trim())
-      if (definition) companionMacros.add(definition[1]!)
-    }
-  }
-  // If a companion is included but not supplied, we cannot know what it defines; skipping is honest, but it must
-  // be visible, so the caller is told to pass it.
-  const unreadableCompanion = includedNames.some((name) => options.companionScripts?.[name] === undefined)
+
   for (const [name, line] of inserted) {
     if (defined.has(name) || EXTERNAL_LIBRARY_MACROS.has(name) || isNsDialogsMacro(name)) continue
     if (companionMacros.has(name)) continue

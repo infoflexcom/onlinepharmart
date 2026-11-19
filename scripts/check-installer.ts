@@ -35,10 +35,11 @@ function walk(directory: string): string[] {
 }
 
 // ---- 1. generated includes exist
-const includeFiles = ['installer/nsis/generated.nsh', 'installer/nsis/currency-ui.nsh']
+const includeFiles = ['installer/nsis/generated.nsh', 'installer/nsis/currency-ui.nsh', 'installer/nsis/json-escaping.nsh']
 for (const file of includeFiles) {
   try {
     const text = readFileSync(file, 'utf8')
+    if (file.includes('json-escaping')) continue
     if (!text.includes('GENERATED')) fail(`${file} does not look generated; run npm run installer:script.`)
     if (text.length < 1000) fail(`${file} is suspiciously small.`)
     notes.push(`${file}: ${text.split('\n').length} lines`)

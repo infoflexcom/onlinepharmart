@@ -20,6 +20,7 @@ Unicode true
 !include "WinVer.nsh"
 !include "FileFunc.nsh"
 
+!include "json-escaping.nsh"
 !include "generated.nsh"
 !include "currency-ui.nsh"
 
@@ -86,6 +87,12 @@ Var CurrencyNameOut
 Var CurrencySymbolOut
 Var CurrencyDecimalsOut
 Var CurrencyPositionOut
+Var CurrencyCodeJson
+Var CurrencyNameJson
+Var CurrencySymbolJson
+Var CurrencyThousandsJson
+Var CurrencyDecimalJson
+
 Var CurrencyThousandsOut
 Var CurrencyDecimalOut
 Var CurrencyIsCustom
@@ -745,6 +752,24 @@ Function InstallApplication
       FileWrite $1 "{$\r$\n"
       FileWrite $1 "  $\"format$\": $\"infoflex-install-config$\",$\r$\n"
       FileWrite $1 "  $\"version$\": 1,$\r$\n"
+      ; Escape every value first. A custom currency may contain a quote or a backslash, and unescaped either one
+      ; would produce a file the app refuses to read — losing the shop's choice with no error anywhere.
+      StrCpy $3 $CurrencyCodeOut
+      Call EscapeJson
+      StrCpy $CurrencyCodeJson $3
+      StrCpy $3 $CurrencyNameOut
+      Call EscapeJson
+      StrCpy $CurrencyNameJson $3
+      StrCpy $3 $CurrencySymbolOut
+      Call EscapeJson
+      StrCpy $CurrencySymbolJson $3
+      StrCpy $3 $CurrencyThousandsOut
+      Call EscapeJson
+      StrCpy $CurrencyThousandsJson $3
+      StrCpy $3 $CurrencyDecimalOut
+      Call EscapeJson
+      StrCpy $CurrencyDecimalJson $3
+
       FileWrite $1 "  $\"writtenAt$\": $\"$\",$\r$\n"
       ${If} ${INFOPLEX_OFFLINE} == 1
         FileWrite $1 "  $\"installerKind$\": $\"offline$\",$\r$\n"
@@ -753,13 +778,13 @@ Function InstallApplication
       ${EndIf}
       FileWrite $1 "  $\"appVersion$\": $\"${APP_VERSION}$\",$\r$\n"
       FileWrite $1 "  $\"currency$\": {$\r$\n"
-      FileWrite $1 "    $\"code$\": $\"$CurrencyCodeOut$\",$\r$\n"
-      FileWrite $1 "    $\"name$\": $\"$CurrencyNameOut$\",$\r$\n"
-      FileWrite $1 "    $\"symbol$\": $\"$CurrencySymbolOut$\",$\r$\n"
+      FileWrite $1 "    $\"code$\": $\"$CurrencyCodeJson$\",$\r$\n"
+      FileWrite $1 "    $\"name$\": $\"$CurrencyNameJson$\",$\r$\n"
+      FileWrite $1 "    $\"symbol$\": $\"$CurrencySymbolJson$\",$\r$\n"
       FileWrite $1 "    $\"decimalPlaces$\": $CurrencyDecimalsOut,$\r$\n"
       FileWrite $1 "    $\"symbolPosition$\": $\"$CurrencyPositionOut$\",$\r$\n"
-      FileWrite $1 "    $\"thousandsSeparator$\": $\"$CurrencyThousandsOut$\",$\r$\n"
-      FileWrite $1 "    $\"decimalSeparator$\": $\"$CurrencyDecimalOut$\",$\r$\n"
+      FileWrite $1 "    $\"thousandsSeparator$\": $\"$CurrencyThousandsJson$\",$\r$\n"
+      FileWrite $1 "    $\"decimalSeparator$\": $\"$CurrencyDecimalJson$\",$\r$\n"
       ${If} $CurrencyIsCustom == "1"
         FileWrite $1 "    $\"isCustom$\": true$\r$\n"
       ${Else}

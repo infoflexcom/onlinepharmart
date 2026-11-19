@@ -103,6 +103,34 @@ export const INSTALLER_DEFAULT_CURRENCY_CODE = 'NGN'
  * against "¥1,234,568" against "KD 1,234.568" can see at a glance that the app will print money the way their
  * country does. It uses the real formatter, so the example cannot drift from the app's rendering.
  */
+/**
+ * Why a custom currency cannot always be recorded for the app, or null if it can.
+ *
+ * The installer writes `install-config.json` by hand in NSIS, which has no JSON writer and no way to get a
+ * character's code point. A value containing a quote or a backslash can be escaped safely, and `EscapeJson` does
+ * that. A value containing a letter outside ASCII cannot: writing it as `\uXXXX` needs the code point, and passing
+ * the raw bytes through depends on the encoding a Unicode NSIS build happens to save — a guess this project cannot
+ * test, because the installer cannot be compiled in its build environment.
+ *
+ * Rather than ship a guess, such a custom currency is refused at the moment the customer types it, with a sentence
+ * that says what to do. Built-in currencies are unaffected: the generator enforces that the table is ASCII, so
+ * they can always be recorded.
+ */
+export function customCurrencyRecordingProblem(currency: CurrencyDefinition): string | null {
+  if (currency.kind !== 'custom') return null
+  const fields: Array<[string, string]> = [
+    ['name', currency.name], ['symbol', currency.symbol], ['code', currency.code],
+    ['thousands separator', currency.thousandsSeparator], ['decimal separator', currency.decimalSeparator],
+  ]
+  for (const [label, value] of fields) {
+    // eslint-disable-next-line no-control-regex
+    if (/[^\x20-\x7e]/u.test(value)) {
+      return `The ${label} must use ordinary letters, numbers and punctuation. Please re-enter it without accented or non-English characters.`
+    }
+  }
+  return null
+}
+
 export function currencyExample(currency: CurrencyDefinition): string {
   const display = defaultDisplayOptions(currency)
   // One and a quarter million plus a half, in this currency's minor units, with no floating point anywhere.
