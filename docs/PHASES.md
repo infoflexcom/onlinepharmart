@@ -432,6 +432,24 @@ and passing the raw characters through depends on the encoding a Unicode NSIS bu
 tested here. `customCurrencyRecordingProblem` therefore refuses such a value *at the moment the customer types it*,
 in words that say what to do. Built-in currencies are unaffected: the generator enforces that its table is ASCII.
 
+### The generated installers' own data, tested as text
+
+After the install-config defect the same question was asked of the other two generated files — what would `makensis`
+actually read, and has anything ever checked it? Nothing had:
+
+- **`currency-ui.nsh`** — 59 tests. The dropdown's 54 labels and the 54 index-to-fields arms are read out of the
+  file and compared, row by row, with the catalogue: same order, same numbering, same seven values. This is the
+  quiet failure the phase is most exposed to — row 7 listing Ugandan shillings while selecting it sets Kenyan ones
+  would install a shop with the wrong money while every other test in the repository passed.
+- **`generated.nsh`** — 62 tests. Every `CUR_n_*` define compared with the catalogue, the password define proven to
+  be the hash and not a password (and the file proven to contain *only* the salt, hash and iteration defines), the
+  download URL proven to come from the allowlist resolver rather than a typed string, and the unpinned checksum
+  pinned as a deliberate fails-closed state.
+
+Both also assert the committed file is byte-identical to what the generator produces, so a hand edit is caught
+rather than silently reverted by the next `npm run installer:script`. Both were verified to fail when sabotaged:
+swapping two dropdown rows and changing one currency's decimals each break exactly the right assertions.
+
 ### What this environment could not do, and what is owed
 
 - **The installers cannot be compiled here.** `electron-builder --win nsis` fails downloading its Windows
