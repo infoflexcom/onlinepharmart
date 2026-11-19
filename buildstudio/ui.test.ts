@@ -97,7 +97,7 @@ function openWindow(options: { projectPath?: string | null } = {}): { dom: JSDOM
       onProgress: (handler: (value: unknown) => void) => { record('onProgress', handler); return remove },
     },
     artefacts: {
-      verify: async () => ({
+      verify: async () => (globalThis as unknown as { __verifyAnswer?: unknown }).__verifyAnswer ?? ({
         missing: [],
         artefacts: [
           { title: 'Infoflex Setup.exe', path: 'C:\\out\\a.exe', relativePath: 'a.exe', exists: true, sizeBytes: 2048, sha256: 'abc123' },
@@ -293,6 +293,23 @@ describe('the Build Studio window', () => {
     expect(saved.buildProfile.maximumOnsitePeriodYears).toBeNull()
     expect(saved.buildProfile.defaultCurrencyCode).toBe('GHS')
     expect(saved.buildProfile.lockCurrency).toBe(true)
+  })
+
+  it('says so plainly when the artefact check has no project yet, instead of crashing the screen', async () => {
+    const { dom } = openWindow()
+    await settle()
+    // This is what the main process really answers before a folder is chosen; the window used to throw on it.
+    ;(globalThis as unknown as { __verifyAnswer?: unknown }).__verifyAnswer = { ok: false, message: 'Choose the project folder first.' }
+    try {
+      dom.window.document.querySelector('[data-tab="output"]')?.dispatchEvent(new dom.window.Event('click'))
+      dom.window.document.getElementById('refresh-output')?.dispatchEvent(new dom.window.Event('click'))
+      await settle()
+      const panel = dom.window.document.getElementById('artefacts')
+      expect(panel?.textContent).toBe('Choose the project folder first.')
+      expect(panel?.querySelector('table')).toBeNull()
+    } finally {
+      delete (globalThis as unknown as { __verifyAnswer?: unknown }).__verifyAnswer
+    }
   })
 
   it('opens the licence policy page for the vendor, which is a separate local file', async () => {

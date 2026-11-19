@@ -540,7 +540,7 @@ Electron, and no Build Studio installer has been produced.
 
 | # | Requirement | Result | Evidence |
 | --- | --- | --- | --- |
-| 1 | One click builds everything | **Pass (logic and window) / could not test (Electron)** | `buildstudio.test.ts`: the eight-step plan resolves and every step names a real npm script; `build-steps.test.ts` covers grouping, weights and `explainFailure`. `ui.test.ts` presses *Build everything* in a real DOM and asserts the group runs and the window lands on Output. The Electron shell itself is unrun here. |
+| 1 | One click builds everything | **Pass (logic and window) / could not test (Electron)** | `buildstudio.test.ts`: the eleven-step plan resolves and every step names a real npm script; `build-steps.test.ts` covers grouping, weights and `explainFailure`. `ui.test.ts` presses *Build everything* in a real DOM and asserts the group runs and the window lands on Output. The Electron shell itself is unrun here. |
 | 2 | The on-site licence cap is enforced | **Pass** | `license-manager.test.ts`: a 3-year build refuses an `endsOn` five years out with `/maximum on-site period is 3 years/i` and **leaves the licence unactivated**, while a `null`-limit build accepts the identical input. A second test walks nine term/limit combinations so the boundary is checked in both directions, not at one point. |
 | 3 | The build's default currency is preselected, and locked when the vendor locked it | **Pass (all three programs) / could not test (window)** | `build-profile-wiring.test.ts` (6): a Ghana-locked profile reaches `generated.nsh` as `INSTALLER_DEFAULT_CURRENCY "GHS"`, `INSTALLER_CURRENCY_LOCKED 1`, and the row `INSTALLER_DEFAULT_INDEX` points at is *verified to be the cedi*; the same file is what `extraResources` packs for the app. `settings-store.test.ts` round-trips the saved profile through the shared parser. `install-config-reader` / `installer-to-setup` tests carry it into first-run setup. |
 
@@ -625,6 +625,36 @@ that button. The page is copied beside the window by `build:studio`. It opens in
 than an in-app view: the page handles the master password, and a local file with no preload and no Node is the safest
 place for that.
 
+### The Electron main process, executed for the first time
+
+`buildstudio/main.ts` holds everything in the tool that can write a file, spawn a process or read the machine, and it
+had never run. It type-checked and it bundled, which proves it compiles and nothing else.
+
+`buildstudio/main.test.ts` (18) mocks `electron` and imports the real module, then calls every IPC handler the way the
+window does. What it proves:
+
+- **Every channel the preload bridge offers has a handler.** The test reads `preload.ts`, extracts every `invoke(...)`
+  (more than twenty) and asserts each one is registered — a missing handler is a button that silently does nothing.
+- **Settings keep what the window never sends.** The password hash survives a later save from a window that has no
+  copy of it; a settings file containing `PRIVATE KEY` is refused.
+- **The master password is checked against the stored hash and never logged** — the log is read back and asserted not to
+  contain either the right or the wrong password.
+- **The private key is written only to the path the vendor picks**, with mode `0600`, and the log names the key but not
+  its contents. Cancelling the dialog writes nothing.
+- **A download that cannot be Authenticode-verified is not run** (the Linux answer is "cannot verify", and the safe
+  direction is to refuse) — and the vendor is told they can install it themselves.
+- The project folder must really contain a `package.json`; the check answers rows the window can draw; an unknown build
+  action is refused by name.
+
+It found two real defects:
+
+1. **Refresh on the Output screen crashed before a project was chosen.** `artefacts:verify` answers `{ ok: false, ... }`
+   with no project, and the window went straight on to read `.missing.length` of it. A vendor pressing Refresh on a
+   fresh install got a dead screen. The window now tells the two answers apart and shows the sentence; `ui.test.ts`
+   covers it, and `buildstudio/main.test.ts` pins the shape the main process really returns.
+2. **An unknown build action was reported as "choose the project folder first"**, because the project was validated
+   before the action was. The vendor would go looking for the wrong problem. The action is now validated first.
+
 ### Documentation checked against the tree, because prose is not compiled
 
 The lost policy exporter and a wrong migration name in `docs/SCHEMA.md` were the same failure: a document describing
@@ -675,5 +705,5 @@ the test rather than the Output screen.
 - **No Build Studio installer exists.** `electron-builder --win nsis` cannot fetch its toolchain here (TLS
   interception; no Wine, no `makensis`).
 - **No prerequisite was downloaded or installed for real**, and no Authenticode check ran against a real file.
-- **The eight screens have never been looked at.** Layout, contrast, tab order and control sizes are unjudged by
+- **The seven screens have never been looked at.** Layout, contrast, tab order and control sizes are unjudged by
   human eyes; `docs/RELEASE-CHECKLIST.md` Gate 6 is the script for that.

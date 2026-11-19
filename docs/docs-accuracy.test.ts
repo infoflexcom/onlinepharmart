@@ -99,6 +99,27 @@ describe('the documentation describes this repository', () => {
     for (const file of named) expect(existsSync(`src/db/migrations/${file}`), `${file} is in the table but not on disk`).toBe(true)
   })
 
+  it('counts Build Studio\'s screens and build steps the way the code does', () => {
+    // Both counts were wrong in two documents at once: the window has seven panels, and the plan has eleven steps.
+    // A number in prose is the easiest thing to leave behind, so it is read from the code and compared with the words.
+    const html = readFileSync('buildstudio/index.html', 'utf8')
+    const panels = new Set([...html.matchAll(/data-panel="([a-z]+)"/gu)].map((match) => match[1]!))
+    const tabs = new Set([...html.matchAll(/data-tab="([a-z]+)"/gu)].map((match) => match[1]!))
+    expect([...panels]).toEqual([...tabs])
+
+    const steps = readFileSync('buildstudio/src/build-steps.ts', 'utf8')
+    const planLength = Number(/export const BUILD_STEPS: readonly StepSpec\[\] = \[([\s\S]*?)\n\]/u.exec(steps)?.[1]
+      ?.match(/^\s{2}\{/gmu)?.length)
+    expect(planLength).toBeGreaterThan(5)
+
+    const words: Record<number, string> = {
+      3: 'three', 4: 'four', 5: 'five', 6: 'six', 7: 'seven', 8: 'eight', 9: 'nine', 10: 'ten', 11: 'eleven', 12: 'twelve',
+    }
+    const studio = readFileSync('buildstudio/README.md', 'utf8')
+    expect(studio).toContain(`sees ${words[panels.size]!} screens`)
+    expect(readFileSync('docs/PHASES.md', 'utf8')).toContain(`the ${words[planLength]!}-step plan`)
+  })
+
   it('does not call Build Studio planned, now that it exists', () => {
     const readme = readFileSync('README.md', 'utf8')
     expect(readme).not.toMatch(/planned graphical Build Studio/u)

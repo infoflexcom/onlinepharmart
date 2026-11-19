@@ -3,7 +3,7 @@
 The vendor's own tool: it turns the project folder into the customer's installers, on a Windows machine, without a
 terminal.
 
-The vendor sees eight screens and never a command prompt:
+The vendor sees seven screens and never a command prompt:
 
 | Screen | What it does |
 | --- | --- |

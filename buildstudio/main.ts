@@ -304,9 +304,11 @@ function runInstaller(path: string, args: string[]): Promise<number | null> {
 
 ipcMain.handle('build:run', async (_event, group: string) => {
   if (running) return { ok: false, message: 'A build is already running.' }
+  // Validated before anything else: an action that does not exist is a fault in the caller, and reporting it as
+  // "choose the project folder first" would send the vendor looking for the wrong problem.
+  const steps = stepsForGroup(group)
   const projectPath = settings.projectPath
   if (!projectPath) return { ok: false, message: 'Choose the project folder first.' }
-  const steps = stepsForGroup(group)
   const total = totalWeight(steps)
   let doneWeight = 0
 

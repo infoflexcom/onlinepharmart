@@ -49,6 +49,12 @@ interface CheckRow { id: string; title: string; required: boolean; state: 'ok' |
 interface CheckResult { checks: CheckRow[]; ready: boolean; headline: string }
 interface Artefact { title: string; path: string; relativePath: string; exists: boolean; sizeBytes: number; sha256: string | null }
 interface ArtefactReport { artefacts: Artefact[]; missing: string[] }
+/** What `artefacts:verify` answers before a project folder is chosen. */
+interface NotYetReport { ok: false; message?: string }
+
+function isReport(value: ArtefactReport | NotYetReport | null): value is ArtefactReport {
+  return Boolean(value) && Array.isArray((value as ArtefactReport).artefacts)
+}
 interface BuildResult { ok: boolean; cancelled?: boolean; message?: string; detail?: string[]; artefacts?: Artefact[]; missing?: string[] }
 
 /**
@@ -356,7 +362,20 @@ function renderArtefacts(report: ArtefactReport): void {
 
 async function refreshArtefacts(): Promise<void> {
   try {
-    renderArtefacts(await window.studio.artefacts.verify())
+    const report = await window.studio.artefacts.verify() as ArtefactReport | NotYetReport
+    // With no project chosen the main process answers "not yet" rather than an empty report — pressing Refresh must
+    // say that, not try to draw a list that is not there.
+    if (!isReport(report)) {
+      const container = $('artefacts')
+      container.textContent = ''
+      const note = document.createElement('div')
+      note.className = 'callout bad'
+      // The message comes from the main process and is assigned as text, never as markup.
+      note.textContent = report?.message ?? 'Choose the project folder first.'
+      container.append(note)
+      return
+    }
+    renderArtefacts(report)
   } catch (error) {
     showError('artefacts', error instanceof Error ? error.message : String(error))
   }
