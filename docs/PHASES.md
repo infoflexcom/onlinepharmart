@@ -964,3 +964,19 @@ the test rather than the Output screen.
 - **Four dead variables** (`CompLaunch`, `CompDesktop`, `LaunchWanted`, `DesktopWanted`) deleted; the checker now
   reports a `Var` nothing reads and a control whose value is discarded. The rule's first version counted uses in the
   raw text, so the comment explaining it satisfied it — caught by mutation, fixed to read comment-stripped text.
+- **A refusal fired after the application was already on disk, and said "Nothing was installed".** The offline build's
+  missing-runtime refusal lives in `customInstall`, which electron-builder inserts *after* `installApplicationFiles`
+  (`installSection.nsh:67` then `:82`) — so the payload, the shortcuts and the Apps & features entry already existed.
+  It now calls `RollBackPartialInstall`, which removes the payload, both registry keys, `HKLM\Software\Infoflex` and
+  `install-config.json` before aborting, and the message no longer claims the machine is untouched. My first draft of
+  that rollback deleted only `${INSTALL_REGISTRY_KEY}` — electron-builder's bookkeeping — and left
+  `${UNINSTALL_REGISTRY_KEY}`, the entry the *customer* sees; a test now pins both.
+- **The harnesses now `!include "multiUser.nsh"` instead of restating it.** My first attempt copied the two registry-key
+  formulas out of `multiUser.nsh:8-9`; the existing "defines no prerequisite path of its own" test rejected it, and was
+  right to — the whitelist cannot tell a faithful copy from an invention. They now supply only what electron-builder
+  passes with `-D` (`APP_GUID`, `UNINSTALL_APP_KEY`, `SHORTCUT_NAME`) and include the vendor header for the rest.
+  `compile-check-installer.ts` gained the templates directory on the include path, mirroring `cwd: nsisTemplatesDir`.
+- **A new checker rule needed three attempts** before it could fire at all: it first read only the macro body (missing
+  the `Abort`, which is in a called function), then collected called function *names* instead of their bodies, then
+  over-reached onto the download page where "Nothing was installed" is true. Each version reported nothing, and only
+  mutating the script revealed it.

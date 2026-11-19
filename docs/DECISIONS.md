@@ -708,3 +708,127 @@ and the comment explaining the rule names `$DownloadProgress`. Restoring the del
 looked "used" and the mutation passed when it should have failed. The rule now counts in the comment-stripped text.
 This is the second rule in this file defeated by reading comments as code; both were caught by mutation, neither by
 inspection.
+
+## A refusal that fired after the application was already on disk
+
+The offline build refuses to install when the VC++ runtime it was built to carry is missing. Correct decision: an
+installer that exists to be carried to a machine with no internet must not quietly leave behind the prerequisite it
+promises. The *message* was wrong, and so was everything that came after it.
+
+It said **"Nothing was installed."** That is false, and it was false before the customer finished reading it.
+
+electron-builder's install section does this, in this order (`installSection.nsh`):
+
+| line | action |
+| --- | --- |
+| 52-58 | `uninstallOldVersion` — remove any previous version |
+| 67 | `installApplicationFiles` — **copy the payload into `$INSTDIR`** |
+| 68 | `registryAddInstallInfo` — write the Apps & features entry |
+| 69-70 | `addStartMenuLink` / `addDesktopLink` |
+| 82 | `!insertmacro customInstall` — **our hook, where the refusal lives** |
+
+So at the moment of refusal the application was installed, the Start Menu and desktop shortcuts existed, and the app was
+listed in Apps & features with an `UninstallString`. `Abort` stops the script (`flowcontrol.but`: "Cancels the install,
+stops execution of script") but it does not undo any of that. The customer was told the machine was untouched while
+looking at a Start Menu entry for the thing that was "not installed", and a second run of the installer could not clear
+it because the first run never created a working uninstaller.
+
+**The fix: `RollBackPartialInstall`.** The refusal now removes what had been created and says so honestly ("will be
+removed again") instead of claiming nothing happened. It deletes:
+
+- `$newStartMenuLink` and `$newDesktopLink` — the paths `setLinkVars` computed (`common.nsh:85-110`), *not* a
+  reconstruction from `${SHORTCUT_NAME}`. That macro is the only place that knows about `MENU_FILENAME` (a Start Menu
+  folder), so a hand-built `$SMPROGRAMS\<name>.lnk` would miss the shortcut on any build that sets it.
+- `$oldStartMenuLink` / `$oldDesktopLink` — the previous version's links, already removed by `uninstallOldVersion` on an
+  upgrade, and identical to the new ones on a fresh install. Harmless, and it covers the case where they differ.
+- **Both** registry keys. This is where I made the bug myself: `${INSTALL_REGISTRY_KEY}` is `Software\<APP_GUID>`
+  (`multiUser.nsh:8`), electron-builder's own bookkeeping; the Apps & features entry the customer sees is
+  `${UNINSTALL_REGISTRY_KEY}`, `Software\Microsoft\Windows\CurrentVersion\Uninstall\<UNINSTALL_APP_KEY>`
+  (`multiUser.nsh:9`). My first draft deleted only the first — which would have removed the bookkeeping and left the
+  dead application listed with an `UninstallString` pointing into a folder that no longer exists. A test now asserts both
+  and was mutation-verified by deleting the `UNINSTALL_REGISTRY_KEY` line.
+- `HKLM\Software\Infoflex` — `InstallApplication` writes `InstallDir`, `CurrencyCode` and `KeepInTray` there before
+  `InstallPrerequisites` runs. Left behind, the next install of a different edition finds a stale `InstallDir` pointing
+  at a folder that does not exist.
+- `install-config.json` and its folder — written on a fresh install only (`$WasInstalled == "0"`), which is exactly the
+  case this refusal happens in. `customUnInstall` deletes the same two paths for the same reason.
+- `$INSTDIR` itself, and nothing above it.
+
+It deliberately does **not** touch the firewall rule: `ConfigureFirewall` runs *after* `InstallPrerequisites`, so no rule
+exists yet. A `netsh delete` there would look thorough and would be code that can never do anything; a test asserts it is
+absent.
+
+**Not proven.** That the rollback leaves a machine genuinely clean. Nothing here executed an installer. What is proven is
+that every step is reachable in the compiled script, that the two harnesses compile it (including the uninstaller pass),
+and that the checker now rejects the shape.
+
+## The harness was missing values the real build supplies
+
+The rollback reached for `${SHORTCUT_NAME}`, `${INSTALL_REGISTRY_KEY}` and `${UNINSTALL_REGISTRY_KEY}`, which belong to
+electron-builder's template, and for `$newStartMenuLink` and friends, which its `setLinkVars` computes. The harness has
+neither, so `-WX` turned `warning 6000: unknown variable/constant` into four failed builds — a failure about the harness
+presented as a failure about the script.
+
+The first attempt had both harnesses **restate** `multiUser.nsh:8-9`:
+
+```
+!define INSTALL_REGISTRY_KEY "Software\${APP_GUID}"
+!define UNINSTALL_REGISTRY_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_APP_KEY}"
+```
+
+The existing test *"defines no prerequisite path of its own"* failed on it, correctly. That test exists because the
+harness once defined `PREREQUISITE_VCREDIST` and thereby hid that no real build did. Its whitelist is the list of values
+electron-builder genuinely passes on the command line.
+
+The right fix was not to add to the whitelist. The real template does `!include "multiUser.nsh"`
+(`templates/nsis/installer.nsi:10`), so the harness now includes it too, and supplies only what electron-builder passes
+with `-D`: `APP_GUID`, `UNINSTALL_APP_KEY`, `SHORTCUT_NAME` (`node_modules/app-builder-lib/out/targets/nsis/NsisTarget.js`, defines at 265-267, shortcut name at 571). The two derived keys are
+no longer written anywhere twice.
+
+That distinction matters because the whitelist test cannot tell a faithful copy of a formula from an invention — both
+look like `!define NAME "value"`. Including the vendor's own header removes the question. A second assertion now forbids
+the harness restating either derived key and requires the `!include`, mutation-verified by putting the two defines back.
+
+`compile-check-installer.ts` gained the templates directory itself on the include path (not only its `include/`
+subdirectory), mirroring the same file's `cwd: nsisTemplatesDir`.
+
+## A checker rule that could never fire
+
+The rule for "a refusal that fires after the payload copy" was written three times before it worked, and only mutation
+found each version:
+
+1. **It read only the `customInstall` macro body.** The `Abort` is in `InstallPrerequisites`, which the macro *calls*.
+   The rule reported nothing on the script carrying the defect, and the mutation (deleting the rollback call) "passed"
+   because the rule was already reporting nothing.
+2. **It followed calls but collected their names, not their bodies.** `const bodies = [body, ...reachable].join()` where
+   `reachable` was a `Set<string>` of function names — so the concatenation contained the literal text
+   `InstallPrerequisites` and never its code. Same outcome, same false pass.
+3. **It then fired on the download page**, which says "Nothing was installed. Nothing on this computer was changed." and
+   is *right* to: that page runs before the install section. The rule is now scoped to functions that actually reach an
+   `Abort`.
+
+That is three defects in one rule, all silent, in a file that already carries two instances of the same class
+(reading comments as code; testing for a name rather than a write). The lesson is not "be careful"; it is that a rule with
+no inputs and a rule with wrong inputs are indistinguishable from the outside, and only breaking the thing on purpose
+tells them apart.
+
+### The rollback's own two bugs, and what an upgrade can and cannot preserve
+
+Both were mine, and both were in the fix rather than in the defect.
+
+**It deleted the wrong registry key.** `${INSTALL_REGISTRY_KEY}` is electron-builder's bookkeeping; the Apps & features
+entry is `${UNINSTALL_REGISTRY_KEY}`. Covered above, and pinned by a mutation-verified test.
+
+**It deleted `install-config.json` unconditionally.** `InstallApplication` writes that file only when
+`$WasInstalled == "0"`, precisely so an update never rewrites a working shop's currency. A rollback that deleted it
+regardless would have wiped that currency on a failed *upgrade* — a worse outcome than the half-install the function
+exists to clean up, because the half-install is visible and the lost setting is not. The deletion is now behind the same
+`$WasInstalled == "0"` test, and a test asserts the guard comes before the deletion.
+
+**What the rollback cannot do on an upgrade.** It cannot restore the previous version, and neither can anything else at
+that point: `installSection.nsh:52` runs `uninstallOldVersion` *before* line 67 copies the payload, so by the time
+`customInstall` is reached the old version is already uninstalled. A failed upgrade therefore leaves no working app
+either way; the rollback's job is to leave a *clean* machine rather than a broken-looking one. The earlier draft of the
+release-checklist step asserted the previous version must still work, which is not something this installer can deliver
+— it was a checklist item that could only ever fail. It now checks the thing that genuinely can regress: that the shop's
+currency file survives a failed upgrade.

@@ -1005,6 +1005,70 @@ FunctionEnd
   ; leaves the handle open, which is why .onInstFailed also calls FinishLog.
 !macroend
 
+; Undo what electron-builder's install section has already done, for the one path that refuses an install after that
+; point. Order matters: unregister first, so a machine that loses power halfway through does not keep an entry in
+; Apps & features pointing at a folder that is going away.
+;
+; This is NOT a general uninstall and must not grow into one. It exists because one refusal (the offline build with no
+; bundled runtime) fires after the payload copy, and "nothing was installed" has to be true when we say it.
+Function RollBackPartialInstall
+  !insertmacro LogLine "Rollback: removing the shortcuts, the uninstall entry and $INSTDIR."
+  ; The template's own link variables, not a reconstruction from ${SHORTCUT_NAME}. setLinkVars (common.nsh:85-110) has
+  ; already computed both, and it is the only place that knows about MENU_FILENAME -- a Start Menu folder -- so a
+  ; hand-built "$SMPROGRAMS\${SHORTCUT_NAME}.lnk" misses the shortcut on any build that sets it. It also does not
+  ; survive here for another reason: SHORTCUT_NAME and INSTALL_REGISTRY_KEY are compile-time defines in the template's
+  ; context, and this file is compiled by the harness too, where they do not exist ("warning 6000: unknown
+  ; variable/constant", which -WX turns into a build failure).
+  Delete "$newStartMenuLink"
+  Delete "$newDesktopLink"
+  ; oldStartMenuLink/oldDesktopLink name the PREVIOUS version's links, which uninstallOldVersion has already removed on
+  ; an upgrade; deleting them again is harmless and covers the fresh-install case where they point at the same paths.
+  Delete "$oldStartMenuLink"
+  Delete "$oldDesktopLink"
+  ; TWO keys, and they are not the same one. The Apps & features entry the customer sees is
+  ; ${UNINSTALL_REGISTRY_KEY} ("Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_APP_KEY}",
+  ; multiUser.nsh:9); ${INSTALL_REGISTRY_KEY} ("Software\${APP_GUID}", multiUser.nsh:8) is electron-builder's own
+  ; bookkeeping, holding InstallLocation, KeepShortcuts and ShortcutName. Deleting only the second -- which the first
+  ; draft of this function did -- would remove the bookkeeping and leave the half-installed app listed in Apps &
+  ; features with an UninstallString pointing into a folder that no longer exists. Both go.
+  ; SHELL_CONTEXT is the template's placeholder that the compiler resolves per install mode (installer.nsh:104-123).
+  DeleteRegKey SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}"
+  DeleteRegKey SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}"
+  ; $INSTDIR only, never a parent: on an upgrade this folder is the same one the previous version lived in, and the
+  ; shop's data lives in %APPDATA%, not here -- except install-config.json, which the uninstaller owns and this path
+  ; leaves to it.
+  RMDir /r "$INSTDIR"
+
+  ; The two things InstallApplication wrote before this refusal could fire, which the first draft of this function
+  ; forgot -- so "nothing was installed" would have been true of the app and false of the machine.
+  ;
+  ; HKLM\Software\Infoflex holds InstallDir, CurrencyCode and KeepInTray. Left behind, the *next* install of a
+  ; different edition would find a stale InstallDir pointing at a folder that no longer exists.
+  DeleteRegKey HKLM "Software\Infoflex"
+  ; install-config.json is the currency the setup screen arrives with, and it is written on a FRESH install only. So:
+  ;
+  ;   * a fresh install that then refuses DID write it, and it must go -- a machine that has never successfully
+  ;     installed Infoflex must not keep telling the next attempt which currency the abandoned one used.
+  ;   * an UPGRADE must not touch it. InstallApplication skips it when $WasInstalled == "1" precisely so a repair never
+  ;     rewrites a working shop's currency, and deleting it here would destroy the setting the refusal is supposed to
+  ;     leave alone. The first draft deleted it unconditionally, which would have wiped a working shop's currency on a
+  ;     failed upgrade -- worse than the half-install this function exists to clean up.
+  ;
+  ; customUnInstall deletes the same two paths, and does it unconditionally, because a real uninstall is not this case.
+  ${If} $WasInstalled == "0"
+    ReadEnvStr $0 "ProgramData"
+    ${If} $0 == ""
+      StrCpy $0 "C:\ProgramData"
+    ${EndIf}
+    Delete "$0\${INSTALLER_CONFIG_DIR}\${INSTALLER_CONFIG_FILE}"
+    RMDir "$0\${INSTALLER_CONFIG_DIR}"
+  ${EndIf}
+
+  ; NOT the firewall rule: ConfigureFirewall runs after InstallPrerequisites, so it has not been created yet. Adding a
+  ; netsh delete here would look thorough and would be untested code that never has anything to delete.
+  !insertmacro LogLine "Rollback: done."
+FunctionEnd
+
 Function InstallPrerequisites
   ${If} $NeedsVcRuntime != "1"
     Return
@@ -1034,7 +1098,19 @@ Function InstallPrerequisites
     ; offline download page is `!if`-excluded, so nothing ever set it. The offline arm refuses instead, because an
     ; installer that exists to be carried to a machine with no internet cannot quietly leave the prerequisite behind.
     ${If} ${INFOPLEX_OFFLINE} == 1
-      MessageBox MB_ICONSTOP|MB_OK "This offline installer is incomplete: the Microsoft Visual C++ runtime it was built to carry is missing, and there is no internet here to fetch it. Nothing was installed. Ask for a fresh copy of the offline installer." /SD IDOK
+      ; The message is careful about what it claims, because of WHERE this runs. customInstall is inserted after
+      ; electron-builder's installApplicationFiles (installSection.nsh:67 then :82), so by the time this fires the
+      ; application is already copied into $INSTDIR, the uninstall registry key is written, the shortcuts exist and
+      ; the uninstaller has been generated. An earlier version of this message said "Nothing was installed", which was
+      ; simply false -- the customer was told the machine was untouched while looking at a Start Menu entry.
+      ;
+      ; Refusing is still the right call (an installer built to carry its prerequisites cannot quietly leave one
+      ; behind), but the refusal must undo what it has already done, or it leaves a half-installed app with no
+      ; uninstaller the customer can reach. So: remove the payload, the shortcuts and the uninstall key here, and say
+      ; plainly what remains -- the log, which is the thing that explains the failure.
+      MessageBox MB_ICONSTOP|MB_OK "This offline installer is incomplete: the Microsoft Visual C++ runtime it was built to carry is missing, and there is no internet here to fetch it. ${PRODUCT_NAME} will be removed again. Ask for a fresh copy of the offline installer." /SD IDOK
+      !insertmacro LogLine "Result: FAILED. The offline installer carries no VC++ runtime; rolling the partial install back."
+      Call RollBackPartialInstall
       SetErrorLevel 4
       Abort
     ${EndIf}

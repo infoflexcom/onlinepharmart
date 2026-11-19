@@ -431,6 +431,96 @@ describe('the redefinition rule still catches a genuine duplicate', () => {
     expect(checkNsisScript(script).filter((p) => /prerequisite/u.test(p.message))).toEqual([])
   })
 
+  // electron-builder inserts customInstall AFTER it has copied the payload (installSection.nsh:67 then :82), so a
+  // refusal here must undo what has already been done.
+  it('reports a refusal inside customInstall that leaves the app half-installed', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '!macro customInstall',
+      '  Call InstallPrerequisites',
+      '!macroend',
+      'Function InstallPrerequisites',
+      '  Abort',
+      'FunctionEnd',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).map((p) => p.message).join('\n')).toMatch(/half-installed/u)
+  })
+
+  it('follows a called function to reach the Abort', () => {
+    // The Abort is not lexically in the macro; a rule that only read the macro body would miss it.
+    const script = [
+      'OutFile "x.exe"',
+      '!macro customInstall',
+      '  Call Step',
+      '!macroend',
+      'Function Step',
+      '  Call Deeper',
+      'FunctionEnd',
+      'Function Deeper',
+      '  Abort',
+      'FunctionEnd',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).map((p) => p.message).join('\n')).toMatch(/half-installed/u)
+  })
+
+  it('accepts a refusal that rolls the install back first', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '!macro customInstall',
+      '  Call InstallPrerequisites',
+      '!macroend',
+      'Function InstallPrerequisites',
+      '  Call RollBackPartialInstall',
+      '  Abort',
+      'FunctionEnd',
+      'Function RollBackPartialInstall',
+      '  RMDir /r "$INSTDIR"',
+      'FunctionEnd',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).filter((p) => /half-installed|Nothing was installed/u.test(p.message))).toEqual([])
+  })
+
+  it('reports a "Nothing was installed" claim made before the rollback', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '!macro customInstall',
+      '  Call InstallPrerequisites',
+      '!macroend',
+      'Function InstallPrerequisites',
+      '  MessageBox MB_OK "Nothing was installed." /SD IDOK',
+      '  Call RollBackPartialInstall',
+      '  Abort',
+      'FunctionEnd',
+      'Function RollBackPartialInstall',
+      'FunctionEnd',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).map((p) => p.message).join('\n')).toMatch(/before rolling the partial install back/u)
+  })
+
+  it('leaves the download page free to say nothing was installed, because there it is true', () => {
+    // That page runs before the install section, so no payload exists. A rule that flagged it would make honest text
+    // the thing to delete.
+    const script = [
+      'OutFile "x.exe"',
+      '!macro customInstall',
+      '!macroend',
+      'Function DownloadPageLeave',
+      '  ${NSD_SetText} $DownloadStatus "Nothing was installed. Nothing on this computer was changed."',
+      'FunctionEnd',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).filter((p) => /Nothing was installed/u.test(p.message))).toEqual([])
+  })
+
   // A page that collects an answer the installer ignores, and a bar that never moves. Both shipped.
   it('reports an editable folder box whose value goes into a register nothing reads', () => {
     const script = [

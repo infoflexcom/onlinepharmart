@@ -360,6 +360,13 @@ function compile(label: string, defines: string[], script = 'installer/nsis/harn
       ...(existsSync(join(root, 'node_modules/app-builder-lib/templates/nsis/include'))
         ? ['-X!addincludedir ' + join(root, 'node_modules/app-builder-lib/templates/nsis/include')]
         : []),
+      // The templates directory itself, not only its include/ subdirectory. multiUser.nsh lives at the top level and the
+      // real build reaches it because electron-builder compiles with its templates directory as the working directory
+      // (NsisTarget.js: `cwd: nsisTemplatesDir`). The harness must include multiUser.nsh rather than restating its two
+      // derives -- so it needs the same directory on the path. Same reasoning as the include/ line above.
+      ...(existsSync(join(root, 'node_modules/app-builder-lib/templates/nsis'))
+        ? ['-X!addincludedir ' + join(root, 'node_modules/app-builder-lib/templates/nsis')]
+        : []),
       '-DBUILD_RESOURCES_DIR=' + resources,
       join(root, script),
     ], { cwd: root, env: { ...process.env, NSISDIR } })

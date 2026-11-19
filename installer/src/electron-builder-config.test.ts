@@ -210,9 +210,19 @@ describe('the harness does not invent values the real build lacks', () => {
       'PRODUCT_NAME', 'PRODUCT_VERSION', 'APP_VERSION', 'APP_PACKAGE_NAME', 'INSTALL_MODE_PER_ALL_USERS',
       'BUILD_RESOURCES_DIR', 'HARNESS_OUTFILE', 'HARNESS_ENTRY',
       'MUI_UI', 'MUI_UI_HEADERIMAGE', 'MUI_UI_COMPONENTSPAGE_SMALLDESC', 'MUI_UI_COMPONENTSPAGE_NODESC',
+      // Passed by electron-builder on the makensis command line (NsisTarget.js:265-267, :571). The registry keys
+      // DERIVED from APP_GUID and UNINSTALL_APP_KEY are deliberately absent from this list: the harness gets them by
+      // including the real multiUser.nsh, so there is no second copy of the formula to drift.
+      'APP_GUID', 'UNINSTALL_APP_KEY', 'SHORTCUT_NAME',
     ])
     const invented = definitions.filter((name) => !legitimate.has(name))
     expect(invented, 'the harness defines values the real build does not, which can hide a build failure').toEqual([])
+    // And it must not restate what the real template derives. multiUser.nsh:8-9 owns these two formulas; a copy here
+    // would be a second source of truth that this very test could not distinguish from an invention.
+    for (const derived of ['INSTALL_REGISTRY_KEY', 'UNINSTALL_REGISTRY_KEY']) {
+      expect(definitions, `the harness restates ${derived}, which multiUser.nsh already derives`).not.toContain(derived)
+    }
+    expect(harness).toContain('!include "multiUser.nsh"')
   })
 })
 

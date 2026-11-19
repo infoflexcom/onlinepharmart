@@ -147,6 +147,83 @@ describe('the uninstaller hooks electron-builder actually calls', () => {
   })
 })
 
+// electron-builder's install section copies the application, writes the registry entries, creates the shortcuts and
+// generates the uninstaller, and only THEN inserts customInstall (installSection.nsh:67 then :82). The offline build's
+// "the runtime I was built to carry is missing" refusal fires inside customInstall -- so by then the app is installed.
+// It used to say "Nothing was installed" and Abort, leaving the payload, the shortcuts and an Apps & features entry
+// behind. Refusing is right; refusing without undoing is not.
+describe('the one refusal that fires after the payload copy undoes it', () => {
+  const script = readFileSync('installer/nsis/installer.nsi', 'utf8')
+  const code = script
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith(';'))
+    .join('\n')
+  const rollback = (() => {
+    const start = code.indexOf('Function RollBackPartialInstall')
+    return start === -1 ? '' : code.slice(start, code.indexOf('FunctionEnd', start))
+  })()
+
+  it('exists and is called before the refusal aborts', () => {
+    expect(rollback).not.toBe('')
+    const prerequisites = code.slice(code.indexOf('Function InstallPrerequisites'))
+    const call = prerequisites.indexOf('Call RollBackPartialInstall')
+    const abort = prerequisites.indexOf('Abort')
+    expect(call).toBeGreaterThanOrEqual(0)
+    expect(call).toBeLessThan(abort)
+  })
+
+  it('removes BOTH registry keys, not just electron-builder bookkeeping', () => {
+    // ${UNINSTALL_REGISTRY_KEY} is the Apps & features entry the customer sees. ${INSTALL_REGISTRY_KEY} is
+    // electron-builder's own record. A first draft deleted only the second, which would have removed the bookkeeping
+    // and left the dead app listed with an UninstallString pointing into a deleted folder.
+    expect(rollback).toContain('DeleteRegKey SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}"')
+    expect(rollback).toContain('DeleteRegKey SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}"')
+  })
+
+  it('deletes the template-computed shortcut paths rather than rebuilding them', () => {
+    // setLinkVars (common.nsh:85-110) is the only place that knows about MENU_FILENAME, so a hand-built
+    // "$SMPROGRAMS\<name>.lnk" misses the shortcut on any build that sets it.
+    expect(rollback).toContain('Delete "$newStartMenuLink"')
+    expect(rollback).toContain('Delete "$newDesktopLink"')
+    expect(rollback).not.toMatch(/Delete "\$SMPROGRAMS\\\$\{SHORTCUT_NAME\}/u)
+  })
+
+  it('removes the registry values the install had already written', () => {
+    // InstallApplication runs before InstallPrerequisites, so HKLM\Software\Infoflex exists by the time this refusal
+    // fires. The first draft rolled back the app and left it, leaving a stale InstallDir for the next install.
+    expect(rollback).toContain('DeleteRegKey HKLM "Software\\Infoflex"')
+  })
+
+  it('deletes install-config.json only on a fresh install, never on an upgrade', () => {
+    // InstallApplication writes it when $WasInstalled == "0", so a refused FRESH install must clear it. An upgrade
+    // skips that write deliberately, and deleting the file here would wipe a working shop's currency on a failed
+    // upgrade -- worse than the half-install this function exists to clean up.
+    const guard = rollback.indexOf('${If} $WasInstalled == "0"')
+    const deletion = rollback.indexOf('${INSTALLER_CONFIG_FILE}')
+    expect(guard).toBeGreaterThanOrEqual(0)
+    expect(deletion).toBeGreaterThan(guard)
+  })
+
+  it('does not delete the firewall rule, which is created after the refusal point', () => {
+    // ConfigureFirewall runs after InstallPrerequisites, so there is nothing to delete. A netsh call here would be
+    // untested code that can never do anything.
+    expect(rollback).not.toMatch(/netsh/u)
+  })
+
+  it('removes $INSTDIR itself and nothing above it', () => {
+    expect(rollback).toContain('RMDir /r "$INSTDIR"')
+    // A rollback that walked up a level would take the shop's neighbours with it.
+    expect(rollback).not.toMatch(/RMDir \/r "\$INSTDIR\\+/u)
+  })
+
+  it('does not claim nothing was installed while the app is still on disk', () => {
+    const prerequisites = code.slice(code.indexOf('Function InstallPrerequisites'))
+    const claim = prerequisites.indexOf('Nothing was installed')
+    const call = prerequisites.indexOf('Call RollBackPartialInstall')
+    expect(claim === -1 || call < claim).toBe(true)
+  })
+})
+
 // The download page used to carry a progress bar, and the only download is NSISdl::download. NSISdl paints the
 // wizard's STOCK progress control, which it locates with GetDlgItem(childwnd, 1004)/(1006) -- the InstallFiles page's
 // resource IDs (Contrib/UIs/resource.h). An nsDialogs page is dialog 1018 and creates its controls with IDs 1200+

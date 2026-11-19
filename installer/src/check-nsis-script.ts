@@ -651,6 +651,84 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
     }
   }
 
+  // ---- a refusal that fires after the payload is already on disk
+  //
+  // electron-builder's install section copies the application (installApplicationFiles), writes the uninstall registry
+  // entry, creates the shortcuts and generates the uninstaller, and only THEN inserts customInstall
+  // (installSection.nsh:67 then :82). So anything in customInstall that Aborts leaves a half-installed application
+  // behind. The offline build's "the runtime I was built to carry is missing" refusal did exactly that while telling
+  // the customer "Nothing was installed" -- false, and the Start Menu entry was on screen while it said so.
+  //
+  // The rule: inside customInstall, an Abort must be preceded by a call that undoes the install, and any claim that
+  // nothing was installed must be too. It cannot know whether the rollback is correct; it can know that one exists.
+  {
+    const code = strip.join('\n')
+    const start = code.indexOf('!macro customInstall')
+    if (start !== -1) {
+      const end = code.indexOf('!macroend', start)
+      const body = code.slice(start, end === -1 ? undefined : end)
+      // The Abort is not necessarily lexically inside the macro: the offline refusal lives in InstallPrerequisites,
+      // which customInstall Calls. Follow the calls, transitively, or the rule reports nothing on the exact script
+      // that carries the defect -- which is how its first version passed the mutation test.
+      const seen = new Set<string>()
+      const called: string[] = []
+      const queue = [...body.matchAll(/\bCall\s+(\w+)/gu)].map((match) => match[1]!)
+      while (queue.length > 0) {
+        const name = queue.pop()!
+        if (seen.has(name)) continue
+        seen.add(name)
+        const fnStart = code.indexOf(`Function ${name}\n`)
+        if (fnStart === -1) continue
+        const fnEnd = code.indexOf('FunctionEnd', fnStart)
+        const fnBody = code.slice(fnStart, fnEnd === -1 ? undefined : fnEnd)
+        // Collect the BODY, not the name. The first version of this collected names into a Set and then joined the
+        // Set, so `bodies` contained function names rather than their code and the rule could never see the Abort it
+        // was written for. It reported nothing on the script carrying the defect, and the mutation test "passed"
+        // because the rule was already reporting nothing.
+        called.push(fnBody)
+        for (const match of fnBody.matchAll(/\bCall\s+(\w+)/gu)) queue.push(match[1]!)
+      }
+      const bodies = [body, ...called].join('\n')
+      const aborts = bodies.includes('Abort')
+      const rollsBack = /Call\s+RollBackPartialInstall\b/u.test(bodies)
+      if (aborts && !rollsBack) {
+        problems.push({
+          line: lineOf(code, /^!macro customInstall/mu),
+          message:
+            'customInstall (or a function it calls) Aborts after electron-builder has already copied the application, ' +
+            'with no rollback. The customer is left with a half-installed app, shortcuts and an Apps & features entry.',
+        })
+      }
+      if (rollsBack) {
+        // The claim must come AFTER the rollback in the same function, or it describes a machine that is still
+        // half-installed when the sentence is on screen.
+        //
+        // Scoped to functions that actually reach an Abort: the download page also says "Nothing was installed.
+        // Nothing on this computer was changed.", and there it is TRUE -- that page runs before the install section,
+        // so no payload exists yet. A rule that flagged every occurrence would force honest text to be deleted to
+        // quiet a checker, which is the failure mode this file's ${PREREQUISITE_VCREDIST} note is about.
+        for (const fnName of seen) {
+          const fnStart = code.indexOf(`Function ${fnName}\n`)
+          if (fnStart === -1) continue
+          const fnEnd = code.indexOf('FunctionEnd', fnStart)
+          const fnBody = code.slice(fnStart, fnEnd === -1 ? undefined : fnEnd)
+          if (!/\bAbort\b/u.test(fnBody)) continue
+          const claimAt = fnBody.indexOf('Nothing was installed')
+          if (claimAt === -1) continue
+          const rollbackAt = fnBody.indexOf('Call RollBackPartialInstall')
+          if (rollbackAt === -1 || rollbackAt > claimAt) {
+            problems.push({
+              line: lineOf(code, /Nothing was installed/u),
+              message:
+                `Function ${fnName} claims "Nothing was installed" before rolling the partial install back. The ` +
+                'payload, the shortcuts and the uninstall key are already on disk at that point.',
+            })
+          }
+        }
+      }
+    }
+  }
+
   // ---- the installer must install the application
   //
   // This file is an electron-builder *include*: electron-builder's own template copies the payload, so the rule is

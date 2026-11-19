@@ -54,11 +54,28 @@ InstallDir "$PROGRAMFILES\${PRODUCT_NAME}"
 !ifndef BUILD_RESOURCES_DIR
   !define BUILD_RESOURCES_DIR "/tmp/infoflex-harness-resources"
 !endif
+; multiUser.nsh:8-9 in the real build. Both are needed because the rollback path deletes both keys.
+!ifndef INSTALL_REGISTRY_KEY
+  !define INSTALL_REGISTRY_KEY "Software\\${APP_GUID}"
+!endif
+!ifndef UNINSTALL_REGISTRY_KEY
+  !define UNINSTALL_REGISTRY_KEY "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${UNINSTALL_APP_KEY}"
+!endif
+!ifndef SHORTCUT_NAME
+  !define SHORTCUT_NAME "${PRODUCT_NAME}"
+!endif
 !define INSTALL_MODE_PER_ALL_USERS
 
 ; The electron-builder-provided macro our script expects in scope.
 !macro installApplicationFiles
 !macroend
+
+; setLinkVars (common.nsh:85-110) computes these before customInstall is reached; the rollback path deletes them, so the
+; harness must declare them or -WX turns "unknown variable" into a failed build about the harness.
+Var /GLOBAL newStartMenuLink
+Var /GLOBAL newDesktopLink
+Var /GLOBAL oldStartMenuLink
+Var /GLOBAL oldDesktopLink
 
 ; The condition that makes this the uninstaller pass, and the output path electron-builder passes so its own template
 ; can find the binary. Both are set after the defines above so they cannot be overridden by them.

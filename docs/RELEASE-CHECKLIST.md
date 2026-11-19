@@ -615,6 +615,18 @@ proves nothing about behaviour. The items below are that missing half, in the or
   running so the payload copy fails, or cancel at the point the wizard reports an error).
   - Expected: the error dialog names `$INSTDIR\install.log` and that file exists afterwards, ending with
     `Result: FAILED`. A log that only appears on success is useless, because the failures are when it is read.
+- [ ] **Confirm the offline build's missing-runtime refusal leaves no trace.** Build an offline installer without the
+  bundled runtime (or rename it out of the payload), run it on a clean VM and let it reach the refusal.
+  - Expected: the message says the app **will be removed again** — not "nothing was installed".
+  - Then check the machine: `%PROGRAMFILES%\Infoflex` must be gone, there must be **no** Start Menu or desktop entry,
+    and **no** `Infoflex` row in Apps & features. `reg query "HKLM\Software\Infoflex"` must find nothing, and
+    `%ProgramData%\Infoflex\install-config.json` must be gone.
+  - **Then repeat it over an existing installation and watch the currency specifically.** On an upgrade the template has
+    *already* run the old uninstaller before the payload is copied, so there is no working previous version to preserve
+    — that is electron-builder's design, not this fix. What must survive is `install-config.json`: the rollback deletes
+    it only when `$WasInstalled == "0"`, so a failed upgrade must leave the shop's currency file intact. Check
+    `%ProgramData%\Infoflex\install-config.json` still exists and still names the same currency code. If it is gone,
+    the guard is wrong and a failed update has just wiped a working shop's settings — release blocker.
 - [ ] **Confirm "Launch now" does not run the app as Administrator.** Finish the wizard with the launch box ticked,
   then look at the running process: Task Manager → Details → right-click the column header → *Select columns* →
   tick **Elevated**. The `Infoflex` process must show **No**.

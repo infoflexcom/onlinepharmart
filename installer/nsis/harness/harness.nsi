@@ -83,9 +83,27 @@ RequestExecutionLevel admin
 ; the finish page's "Launch now" uses it deliberately, because a plain Exec would start the app elevated.
 !include "StdUtils.nsh"
 
+; APP_GUID and UNINSTALL_APP_KEY are passed by electron-builder on the makensis command line
+; (NsisTarget.js:265, :267), so they belong with the other -D values above. Everything DERIVED from them --
+; INSTALL_REGISTRY_KEY, UNINSTALL_REGISTRY_KEY -- comes from multiUser.nsh:8-9, which electron-builder's own template
+; includes (templates/nsis/installer.nsi:10). The harness includes it too rather than restating the two defines: a copy
+; of a formula drifts from the formula, and the "the harness invents no values" test below cannot tell a faithful copy
+; from an invention.
+!define APP_GUID "00000000-0000-0000-0000-000000000000"
+!define UNINSTALL_APP_KEY "infoflex-harness-uninstall-key"
+!define SHORTCUT_NAME "${PRODUCT_NAME}"
+!include "multiUser.nsh"
+
 Var /GLOBAL customInstallDir
 Var /GLOBAL appExe
 Var /GLOBAL launchLink
+; The link variables electron-builder's setLinkVars computes (common.nsh:85-110) and its install section then uses.
+; The rollback path deletes them, so the harness must declare them or it reports "unknown variable" warnings that -WX
+; turns into a failed build -- a failure about the harness, presented as a failure about the script.
+Var /GLOBAL newStartMenuLink
+Var /GLOBAL newDesktopLink
+Var /GLOBAL oldStartMenuLink
+Var /GLOBAL oldDesktopLink
 
 ; ---- the electron-builder-provided macros our script expects in scope when its hooks are inserted ----------------
 ; In a real build these come from the template. The harness gives them a body that compiles, so a syntax error in the
