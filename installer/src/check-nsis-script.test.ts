@@ -431,6 +431,100 @@ describe('the redefinition rule still catches a genuine duplicate', () => {
     expect(checkNsisScript(script).filter((p) => /prerequisite/u.test(p.message))).toEqual([])
   })
 
+  // A page that collects an answer the installer ignores, and a bar that never moves. Both shipped.
+  it('reports an editable folder box whose value goes into a register nothing reads', () => {
+    const script = [
+      'OutFile "x.exe"',
+      'Section',
+      '  ${NSD_CreateDirRequest} 0 112u 70% 12u "$INSTDIR"',
+      '  Pop $0',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).map((problem) => problem.message).join('\n')).toMatch(/nothing reading it back/u)
+  })
+
+  it('reports a progress bar that nothing ever moves', () => {
+    const script = [
+      'OutFile "x.exe"',
+      'Section',
+      '  ${NSD_CreateProgressBar} 0 28u 100% 10u',
+      '  Pop $DownloadProgress',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).map((problem) => problem.message).join('\n')).toMatch(/never sets its position/u)
+  })
+
+  it('accepts a text field that is read back with NSD_GetText', () => {
+    const script = [
+      'OutFile "x.exe"',
+      'Section',
+      '  ${NSD_CreateText} 34u 24u 30% 12u ""',
+      '  Pop $2',
+      '  ${NSD_GetText} $2 $CurrencyCodeOut',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).filter((p) => /nothing reading it back/u.test(p.message))).toEqual([])
+  })
+
+  it('accepts a greyed-out checkbox, which states a fact instead of collecting an answer', () => {
+    const script = [
+      'OutFile "x.exe"',
+      'Section',
+      '  ${NSD_CreateCheckbox} 0 18u 100% 12u "required"',
+      '  Pop $0',
+      '  ${NSD_Check} $0',
+      '  SendMessage $0 ${WM_ENABLE} 0 0',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).filter((p) => /nothing reading it back/u.test(p.message))).toEqual([])
+  })
+
+  it('reports a Var that is declared and never read', () => {
+    const script = ['OutFile "x.exe"', 'Var LaunchWanted', 'Section', '  StrCpy $0 "1"', 'SectionEnd'].join('\n')
+    expect(checkNsisScript(script).map((problem) => problem.message).join('\n')).toMatch(/never uses it/u)
+  })
+
+  it('accepts a Var that is read somewhere', () => {
+    const script = ['OutFile "x.exe"', 'Var LaunchWanted', 'Section', '  StrCpy $LaunchWanted "1"', 'SectionEnd'].join('\n')
+    expect(checkNsisScript(script).filter((p) => /never uses it/u.test(p.message))).toEqual([])
+  })
+
+  // MUI's finish page runs MUI_FINISHPAGE_RUN with Exec unless a _FUNCTION is defined, and Exec inherits the
+  // elevated token of a perMachine installer. A path in that define is therefore the defect, not the feature.
+  it('reports a finish page that runs the application elevated', () => {
+    const script = ['OutFile "x.exe"', '  !define MUI_FINISHPAGE_RUN "$INSTDIR\\App.exe"', 'Section', 'SectionEnd'].join('\n')
+    const problems = checkNsisScript(script)
+    expect(problems.map((problem) => problem.message).join('\n')).toMatch(/launches the application elevated/u)
+  })
+
+  it('reports a path in MUI_FINISHPAGE_RUN even when a run function is also defined, because MUI ignores the path', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '  !define MUI_FINISHPAGE_RUN "$INSTDIR\\App.exe"',
+      '  !define MUI_FINISHPAGE_RUN_FUNCTION "LaunchAsUser"',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).some((problem) => /launches the application elevated/u.test(problem.message))).toBe(true)
+  })
+
+  it('accepts the empty MUI_FINISHPAGE_RUN plus a run function, which is the only correct combination', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '  !define MUI_FINISHPAGE_RUN',
+      '  !define MUI_FINISHPAGE_RUN_FUNCTION "LaunchAsUser"',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).some((problem) => /MUI_FINISHPAGE_RUN/u.test(problem.message))).toBe(false)
+  })
+
+  it('does not confuse MUI_FINISHPAGE_RUN_FUNCTION for MUI_FINISHPAGE_RUN', () => {
+    // The two names differ by a suffix, and a regex without a boundary reads the function's value as the path's.
+    const script = ['OutFile "x.exe"', '  !define MUI_FINISHPAGE_RUN_FUNCTION "LaunchAsUser"', 'Section', 'SectionEnd'].join('\n')
+    expect(checkNsisScript(script).some((problem) => /MUI_FINISHPAGE_RUN/u.test(problem.message))).toBe(false)
+  })
+
   it('reports a log the finish page advertises but nothing writes', () => {
     const script = [
       'OutFile "x.exe"',

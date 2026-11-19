@@ -948,3 +948,19 @@ the test rather than the Output screen.
   needs plugin DLLs this sandbox lacks), so the template is read rather than executed. And the `.exe` has never been executed. There is no Windows and no Wine here. The shippable
   installer still comes from `npm run build` on a Windows machine with the NSIS target, and the manual checklist in
   `RELEASE-CHECKLIST.md` is still the only thing that will tell us the pages behave.
+- **The finish page launched the app as Administrator.** `MUI_FINISHPAGE_RUN "$INSTDIR\...exe"` with no
+  `MUI_FINISHPAGE_RUN_FUNCTION`: MUI's finish page falls back to `Exec` (`Finish.nsh:482-486`), and `Exec` is
+  `CreateProcess` (`util.c:87-92`), which inherits the elevated token of a `perMachine` installer. The define is now
+  empty with `LaunchAsUser` doing the work through `${StdUtils.ExecShellAsUser}`, guarded on the plugin's presence
+  because the source-built makensis here has no `StdUtils.dll` — the `!else` is a plain `Exec` and is commented as the
+  defect it is. Both branches were compiled separately to show the guard selects correctly.
+- **The download page's progress bar could never move.** NSISdl locates the wizard's stock progress control by
+  `GetDlgItem(childwnd, 1004)/(1006)` (`nsisdl.cpp:61-66`, `Contrib/UIs/resource.h`); an nsDialogs page creates its
+  controls as `1200 + id` under the 1018 placeholder (`nsDialogs.c:394`), so both lookups return NULL and
+  `progress_callback` does nothing. The bar is gone. NSISdl also pumps no messages at all, so the status label could
+  not repaint either; the text is now followed by `UpdateWindow` before the blocking call.
+- **The Components page offered an install folder it did not use.** `${NSD_CreateDirRequest} -> Pop $0`, `$0` never
+  read, and `$INSTDIR` is owned by `MUI_PAGE_DIRECTORY` which electron-builder inserts earlier. It is a label now.
+- **Four dead variables** (`CompLaunch`, `CompDesktop`, `LaunchWanted`, `DesktopWanted`) deleted; the checker now
+  reports a `Var` nothing reads and a control whose value is discarded. The rule's first version counted uses in the
+  raw text, so the comment explaining it satisfied it — caught by mutation, fixed to read comment-stripped text.

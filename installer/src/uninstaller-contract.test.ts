@@ -147,6 +147,56 @@ describe('the uninstaller hooks electron-builder actually calls', () => {
   })
 })
 
+// The download page used to carry a progress bar, and the only download is NSISdl::download. NSISdl paints the
+// wizard's STOCK progress control, which it locates with GetDlgItem(childwnd, 1004)/(1006) -- the InstallFiles page's
+// resource IDs (Contrib/UIs/resource.h). An nsDialogs page is dialog 1018 and creates its controls with IDs 1200+
+// (Contrib/nsDialogs/nsDialogs.c:394), so both lookups return NULL, g_file_size stays 0, and progress_callback does
+// nothing (Contrib/NSISdl/nsisdl.cpp:61-66, 213-228, 469-471). The bar could only ever sit at zero.
+describe('the download page does not show a progress bar it cannot move', () => {
+  const script = readFileSync('installer/nsis/installer.nsi', 'utf8')
+  const code = script
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith(';'))
+    .join('\n')
+
+  it('creates no progress bar on the download page', () => {
+    expect(code).not.toMatch(/\$\{NSD_CreateProgressBar\}/u)
+  })
+
+  it('repaints the status line before NSISdl blocks, which pumps no messages', () => {
+    // Contrib/NSISdl/nsisdl.cpp contains no PeekMessage/DispatchMessage/UpdateWindow: while it runs, the page cannot
+    // repaint. Setting the text without forcing one repaint means the customer never sees it.
+    const leave = code.slice(code.indexOf('Function DownloadPageLeave'), code.indexOf('Function DownloadPageLeave') + 4000)
+    const setText = leave.indexOf('${NSD_SetText} $DownloadStatus "Downloading the Microsoft Visual C++ runtime')
+    const download = leave.indexOf('NSISdl::download')
+    expect(setText).toBeGreaterThanOrEqual(0)
+    expect(download).toBeGreaterThan(setText)
+    const repaint = leave.indexOf('UpdateWindow')
+    expect(repaint, 'a repaint must sit between the text and the download').toBeGreaterThan(setText)
+    expect(repaint).toBeLessThan(download)
+  })
+})
+
+// The Components page offered an editable "Install folder" using a DirRequest control, popped its value into $0 and
+// never read it. $INSTDIR is owned by MUI_PAGE_DIRECTORY, which electron-builder inserts earlier
+// (assistedInstaller.nsh:22-26, allowToChangeInstallationDirectory is true) and whose instFilesPre appends the app
+// sub-folder. So the customer could type any folder and the application still installed to the earlier choice.
+describe('the install folder is shown, not offered for editing', () => {
+  const script = readFileSync('installer/nsis/installer.nsi', 'utf8')
+  const code = script
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith(';'))
+    .join('\n')
+
+  it('does not create an editable directory control of its own', () => {
+    expect(code).not.toMatch(/\$\{NSD_CreateDirRequest\}/u)
+  })
+
+  it('does not assign $INSTDIR from a control, because MUI_PAGE_DIRECTORY owns it', () => {
+    expect(code).not.toMatch(/StrCpy\s+\$INSTDIR\s+\$/u)
+  })
+})
+
 describe('the install log the customer is promised', () => {
   // $INSTDIR\install.log is named in three places the customer sees: the finish-page "Open install log" button, the
   // finish-page text ("The install log is beside the app"), and the failure message. Nothing wrote it. Clicking the

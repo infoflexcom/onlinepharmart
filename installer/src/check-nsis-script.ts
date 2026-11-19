@@ -541,6 +541,116 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
     }
   }
 
+  // ---- a finish-page "run" that MUI executes with its own elevated token
+  //
+  // `MUI_FINISHPAGE_RUN "<path>"` looks like the obvious way to offer "Launch the application", and it is what this
+  // script did. But the finish page only wraps the target in a function when MUI_FINISHPAGE_RUN_FUNCTION is also
+  // defined; otherwise it emits `Exec "<path>"` (Contrib/Modern UI 2/Pages/Finish.nsh:482-486). Exec is
+  // CreateProcess (Source/exehead/util.c:87-92), which inherits the caller's token -- and a perMachine installer has
+  // elevated by then. The result is that "Launch now" starts the application as Administrator, which makes the
+  // per-user parts of the app (its data directory, its DPAPI-protected settings) Administrator-owned.
+  //
+  // So: a NON-EMPTY MUI_FINISHPAGE_RUN is the defect, whether or not a _FUNCTION is present -- if a function exists
+  // MUI ignores the value and it is misleading; if one does not, the value is executed elevated. The empty form plus
+  // a function is the only correct combination.
+  {
+    const runDefines = [...text.matchAll(/^[ \t]*!define[ \t]+MUI_FINISHPAGE_RUN(?!_)([ \t]+(.*))?$/gmu)]
+    for (const match of runDefines) {
+      const value = stripComments(match[2] ?? '').trim()
+      if (value !== '') {
+        problems.push({
+          line: lineOf(text, new RegExp(`!define[ \\t]+MUI_FINISHPAGE_RUN(?!_)[ \\t]+${escapeRegExp(value)}`, 'u')),
+          message:
+            `MUI_FINISHPAGE_RUN is set to ${value}, so the finish page launches the application elevated ` +
+            '(MUI runs this value with Exec). Define it empty and put the launch in MUI_FINISHPAGE_RUN_FUNCTION.',
+        })
+      }
+    }
+  }
+
+  // ---- a control the customer can change that nothing reads, and a progress bar nothing moves
+  //
+  // Three of these shipped at once, all in the same shape: the page offered an input and the installer ignored it.
+  //   * `${NSD_CreateDirRequest} ... "$INSTDIR"` then `Pop $0` and never read -- an editable install folder that did
+  //     not set the install folder ($INSTDIR is owned by MUI_PAGE_DIRECTORY, which runs earlier).
+  //   * a `${NSD_CreateProgressBar}` that no NSD_ProgressBar_SetPos/StepIt ever touched. It cannot be driven at all:
+  //     NSISdl paints the wizard's stock bar (GetDlgItem 1004/1006) and cannot see nsDialogs' 1200+ IDs.
+  //   * `Var`s declared and never used, which is how `$LaunchWanted` and friends survived.
+  //
+  // The rule is narrow on purpose: it only reports a nsDialogs control whose variable is never read after the line
+  // that Populates it, and a progress bar with no SetPos/StepIt anywhere.
+  {
+    // A control whose value the installer needs must be Pop'ped into a NAMED variable. `Pop $0` cannot be audited --
+    // $0 is reused by every label on the page -- and that is exactly how the editable install-folder box went
+    // unnoticed: it popped to $0 and $INSTDIR was never assigned from it. So: every nsDialogs control that can carry
+    // an answer (everything except Label, Link, Icon and the buttons, which are decorations) must have a name.
+    // Controls whose value IS the answer. A register cannot be audited for these, because every label on the page
+    // reuses $0..$9, so a `Pop $0` here means the value is gone -- which is precisely what happened to the editable
+    // install-folder box (DirRequest -> $0, $INSTDIR never assigned).
+    const MUST_BE_NAMED = new Set(['DirRequest', 'FileRequest', 'ProgressBar'])
+    // Controls read explicitly by NSD_GetText/NSD_GetState. A text field popped into a register is fine when the
+    // script later does `${NSD_GetText} $2 $CurrencyCodeOut`; that is a read, and the rule can see it.
+    const READ_BY_GETTER = new Set(['Text', 'Password', 'Edit', 'ComboBox', 'DropList', 'ListBox', 'Checkbox'])
+    // strip, not the raw `text` parameter: the script's own comments explain this rule and name the variables it
+    // is about, so counting uses in the raw text made every flagged variable look used. (That is also how this rule
+    // passed the mutation test on its first attempt when it should not have.)
+    const code = strip.join('\n')
+    const controlCreate = new RegExp(
+      '\\$\\{NSD_Create(\\w+)\\}[^\\n]*\\n\\s*Pop\\s+\\$(\\w+)',
+      'gu',
+    )
+    for (const match of code.matchAll(controlCreate)) {
+      const kind = match[1]!
+      const name = match[2]!
+      if (/^\d+$/u.test(name)) {
+        const readBack =
+          new RegExp(`\\$\\{NSD_(?:GetText|GetState)\\}\\s+\\$${name}\\b[^\\n]*\\$\\w+`, 'u').test(code) ||
+          new RegExp(`\\$\\{NSD_GetText\\}\\s+\\$${name}\\b`, 'u').test(code)
+        // A control that is then disabled cannot be changed, so it states a fact rather than collecting an answer.
+        // The two prerequisite checkboxes use exactly that: ticked, greyed, and never read.
+        const disabled = new RegExp(`\\$\\{NSD_Check\\}\\s+\\$${name}\\b[\\s\\S]{0,120}?WM_ENABLE\\} 0`, 'u').test(code)
+        if (MUST_BE_NAMED.has(kind) || (READ_BY_GETTER.has(kind) && !readBack && !disabled)) {
+          problems.push({
+            line: lineOf(code, new RegExp(`Pop\\s+\\$${name}\\b`, 'u')),
+            message:
+              `Creates a ${kind} control into register $${name} with nothing reading it back. An answer goes into a ` +
+              'named Var; a register is reused by every other control on the page, so the value is lost.',
+          })
+        }
+        continue
+      }
+      // Named and therefore auditable: it must be read somewhere beyond the Pop.
+      const uses = [...code.matchAll(new RegExp(`\\$${name}\\b`, 'gu'))].length
+      if (uses > 1) continue
+      problems.push({
+        line: lineOf(code, new RegExp(`Pop\\s+\\$${name}\\b`, 'u')),
+        message:
+          kind === 'ProgressBar'
+            ? `Creates progress bar $${name} and never sets its position. NSISdl cannot drive a nsDialogs progress bar, ` +
+              'so a bar here can only sit at zero -- remove it rather than show one that never moves.'
+            : `Creates a ${kind} control whose value goes into $${name}, which nothing ever reads.`,
+      })
+    }
+  }
+
+  // ---- a Var that is declared and never used
+  //
+  // `Var LaunchWanted` / `StrCpy $LaunchWanted "1"` was the shape: an option that a page used to offer, whose state
+  // was initialised on every run and never read by anything. Four of these survived at once (CompLaunch, CompDesktop,
+  // LaunchWanted, DesktopWanted) because NSIS does not warn about them and no test looked.
+  {
+    const code = strip.join('\n')
+    for (const match of code.matchAll(/^[ \t]*Var[ \t]+(\w+)[ \t]*$/gmu)) {
+      const name = match[1]!
+      const uses = [...code.matchAll(new RegExp(`\\$${name}\\b`, 'gu'))].length
+      if (uses > 0) continue
+      problems.push({
+        line: lineOf(code, new RegExp(`Var[ \\t]+${name}[ \\t]*$`, 'mu')),
+        message: `Declares Var ${name} and never uses it. A variable nothing reads is an option the page no longer honours.`,
+      })
+    }
+  }
+
   // ---- the installer must install the application
   //
   // This file is an electron-builder *include*: electron-builder's own template copies the payload, so the rule is
@@ -565,6 +675,11 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
 
   // ---- a ${If} inside a function must reach an ${EndIf} before FunctionEnd; covered by the stack above.
   return problems
+}
+
+/** Escapes a literal string for use inside a RegExp. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
 }
 
 /** The 1-based line number of the first match, for reporting. */

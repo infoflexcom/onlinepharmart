@@ -78,6 +78,10 @@ RequestExecutionLevel admin
 !include "WinVer.nsh"
 !include "FileFunc.nsh"
 !include "Sections.nsh"
+; electron-builder's shared header includes this before the templates compile, so the real build has
+; ${StdUtils.ExecShellAsUser}. The harness has to provide the same names or it tests a script that cannot exist:
+; the finish page's "Launch now" uses it deliberately, because a plain Exec would start the app elevated.
+!include "StdUtils.nsh"
 
 Var /GLOBAL customInstallDir
 Var /GLOBAL appExe

@@ -615,6 +615,29 @@ proves nothing about behaviour. The items below are that missing half, in the or
   running so the payload copy fails, or cancel at the point the wizard reports an error).
   - Expected: the error dialog names `$INSTDIR\install.log` and that file exists afterwards, ending with
     `Result: FAILED`. A log that only appears on success is useless, because the failures are when it is read.
+- [ ] **Confirm "Launch now" does not run the app as Administrator.** Finish the wizard with the launch box ticked,
+  then look at the running process: Task Manager → Details → right-click the column header → *Select columns* →
+  tick **Elevated**. The `Infoflex` process must show **No**.
+  - Also confirm there was no second UAC prompt after the wizard closed. The installer is `perMachine` and is already
+    elevated; before this phase the finish page used `MUI_FINISHPAGE_RUN "<path>"`, which MUI runs with `Exec`, which
+    inherits that token — so the app started as Administrator on every install.
+  - Then check ownership, which is the damage rather than the symptom: `%APPDATA%\Infoflex` must **not** be owned by
+    `Administrators`, and `dir /q "%APPDATA%\Infoflex"` must not show `BUILTIN\Administrators` as owner. If it is,
+    the DPAPI-protected mobile TLS identity was written under the Administrator's key and the next non-elevated launch
+    will not be able to read it.
+  - If this fails, it is a release blocker, not a cosmetic issue.
+- [ ] **Confirm the downloaded runtime page shows its status text while it is working.** Uninstall the VC++ runtime and
+  run the **online** installer with the network on. As the download page starts, its status line must read
+  *Downloading the Microsoft Visual C++ runtime…* **while** it downloads.
+  - There is deliberately **no progress bar** on that page: NSISdl drives the wizard's stock progress control by ID
+    (1004/1006) and cannot address an nsDialogs control, so a bar there could only sit at zero.
+  - The status line is set and then `UpdateWindow` is called before NSISdl blocks, because NSISdl pumps no messages.
+    If the line stays blank until the download finishes, that `UpdateWindow` is not enough on this Windows build and
+    the ordering needs revisiting — record what you saw.
+- [ ] **Confirm the install folder is not editable on the Components page.** It must read *Install folder (change it
+  on the previous page)* with the path underneath, and there must be no text box there. Go *back* to the Directory
+  page, change the folder, continue, and confirm the Components page shows the new path and the app installs there.
+  (Previously it offered an editable box whose value was discarded.)
 - [ ] Install. On the finish page confirm the currency summary, the launch checkbox and the log link. Confirm a Start Menu entry, a desktop shortcut and an entry in **Apps & features**. (DONE WHEN 1)
 - [ ] Launch the app. It must open on **Activation** with the store name blank, and the first-run setup screen must arrive with the installer's currency already selected — including for the **custom** currency. (DONE WHEN 4, 9)
 - [ ] In `%ProgramData%\Infoflex\install-config.json`, confirm it holds the currency and no secret of any kind.

@@ -170,16 +170,11 @@ Var ComponentsDlg
 Var CompFirewall
 Var CompStartup
 Var CompTray
-Var CompLaunch
-Var CompDesktop
 Var FirewallWanted
 Var StartupWanted
 Var TrayWanted
-Var LaunchWanted
-Var DesktopWanted
 
 Var DownloadDlg
-Var DownloadProgress
 Var DownloadStatus
 Var DownloadAttempts
 Var DownloadFailed
@@ -213,11 +208,45 @@ Var PrereqExitCode
   !endif
 !macroend
 
+; Launch the application as the logged-on user, not as the elevated installer. See the note in customFinishPage for
+; why this function exists at all rather than MUI_FINISHPAGE_RUN pointing straight at the executable.
+Function LaunchAsUser
+  ; StdUtils is a PLUGIN (StdUtils.dll), not a header, and it ships with electron-builder's NSIS distribution rather
+  ; than with a source-built makensis. The compile check builds makensis from source in this sandbox, so the plugin is
+  ; absent there and the call cannot even be resolved.
+  ;
+  ; Rather than delete the correct behaviour to satisfy the harness -- which would ship the elevated launch back to
+  ; customers to make a test pass -- the call is guarded on the plugin's presence at compile time, and the fallback is
+  ; the plain Exec it is trying to avoid. That fallback is a DEFECT, and it is labelled as one: it exists so the
+  ; harness can compile, and the real build (electron-builder's distribution) always takes the first branch.
+  ;
+  ; `!if /FileExists` is evaluated by makensis at compile time, in the real build, against the real plugin directory.
+  !if /FileExists "${NSISDIR}\Plugins\x86-unicode\StdUtils.dll"
+    ${StdUtils.ExecShellAsUser} $0 "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "open" ""
+  !else
+    ; Unreachable in the shipping build. Documented in docs/DECISIONS.md under "what the harness cannot prove".
+    Exec '"$INSTDIR\${APP_EXECUTABLE_FILENAME}"'
+  !endif
+FunctionEnd
+
 !macro customFinishPage
   !define MUI_FINISHPAGE_TITLE "${PRODUCT_NAME} is installed"
   !define MUI_FINISHPAGE_TEXT "Currency: $CurrencyCodeOut - $CurrencyNameOut ($CurrencySymbolOut)$\r$\n$\r$\nThe Admin can use a phone by opening Mobile Access inside the app. Cashiers work on this computer.$\r$\n$\r$\nThe install log is beside the app in the folder you chose."
-  !define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
-  !define MUI_FINISHPAGE_RUN_TEXT "Launch ${PRODUCT_NAME} now"
+  ; NOT `MUI_FINISHPAGE_RUN "<path>"` on its own. With only that define, MUI's finish page runs the target with
+  ; `Exec` (Contrib/Modern UI 2/Pages/Finish.nsh:482-486), and `Exec` is `CreateProcess` (Source/exehead/util.c:87-92),
+  ; which inherits the caller's token. This installer is perMachine and elevates, so "Launch now" would start the
+  ; application as Administrator -- every time, for every customer, from the one button most likely to be clicked.
+  ;
+  ; A shop app running elevated is the wrong shape: it makes the SQLite database and the DPAPI-protected TLS identity
+  ; owned by an elevated context, it lets the renderer touch things that should need a UAC prompt, and it trains the
+  ; operator to click yes to UAC prompts. electron-builder's own template avoids this by defining
+  ; MUI_FINISHPAGE_RUN empty and using a FUNCTION that launches via ${StdUtils.ExecShellAsUser}
+  ; (assistedInstaller.nsh:52-61); this does the same, because the reason applies identically to a custom finish page.
+  ;
+  ; The property is declared, not inferred: MUI_FINISHPAGE_RUN must be DEFINED for the checkbox to appear at all, so it
+  ; is defined to an empty value, and the function below is what runs.
+  !define MUI_FINISHPAGE_RUN
+  !define MUI_FINISHPAGE_RUN_FUNCTION "LaunchAsUser"
   !define MUI_FINISHPAGE_SHOWREADME "$INSTDIR\install.log"
   !define MUI_FINISHPAGE_SHOWREADME_TEXT "Open install log"
   !insertmacro MUI_PAGE_FINISH
@@ -327,8 +356,6 @@ Function .onInit
   StrCpy $FirewallWanted "1"
   StrCpy $StartupWanted "1"
   StrCpy $TrayWanted "1"
-  StrCpy $LaunchWanted "1"
-  StrCpy $DesktopWanted "1"
   StrCpy $WasInstalled "0"
 
   ; An existing installation keeps its currency and never rewrites install-config.json. Read that now, before
@@ -740,9 +767,16 @@ Function ComponentsPageCreate
   Pop $CompTray
   ${NSD_Check} $CompTray
 
-  ${NSD_CreateLabel} 0 98u 100% 12u "Install folder"
+  ; NOT an editable folder box. This was ${NSD_CreateDirRequest} 0 112u 70% 12u "$INSTDIR" -> Pop $0, and $0 was never
+  ; read: the customer could type any folder, press Next, and the application still installed to the folder the
+  ; *Directory* page chose. It looked like the place where the folder is set and was not.
+  ;
+  ; electron-builder inserts MUI_PAGE_DIRECTORY before this page (assistedInstaller.nsh:22-26, because
+  ; allowToChangeInstallationDirectory is true) and its instFilesPre then appends the app sub-folder, so $INSTDIR is
+  ; already final here. Showing it is useful; editing it belongs on the page that owns it.
+  ${NSD_CreateLabel} 0 98u 100% 12u "Install folder (change it on the previous page)"
   Pop $0
-  ${NSD_CreateDirRequest} 0 112u 70% 12u "$INSTDIR"
+  ${NSD_CreateLabel} 0 112u 100% 24u "$INSTDIR"
   Pop $0
 
   ${NSD_CreateLabel} 0 132u 100% 40u ""
@@ -774,9 +808,19 @@ Function DownloadPageCreate
 
   ${NSD_CreateLabel} 0 0 100% 20u "Files are downloaded from Microsoft's official address only, and checked before they are run."
   Pop $0
-  ${NSD_CreateProgressBar} 0 28u 100% 10u
-  Pop $DownloadProgress
-  ${NSD_CreateLabel} 0 44u 100% 30u ""
+  ; NO progress bar. There used to be one here (${NSD_CreateProgressBar} -> $DownloadProgress) and nothing ever moved
+  ; it: the only download is NSISdl::download, and NSISdl cannot drive a nsDialogs control. It paints its own overlay
+  ; on the wizard's *stock* progress bar, which it finds by GetDlgItem(childwnd, 1004) / 1006 -- the InstallFiles
+  ; page's resource IDs (Contrib/UIs/resource.h: IDC_PROGRESS 1004, IDC_INTROTEXT 1006). An nsDialogs page is the
+  ; 1018 placeholder dialog and its controls are created with IDs 1200+ (Contrib/nsDialogs/nsDialogs.c:394), so both
+  ; GetDlgItem calls return NULL, the `if (childwnd && hwndP && hwndS)` block is skipped, and g_file_size is never
+  ; set -- progress_callback then does nothing at all (Contrib/NSISdl/nsisdl.cpp:61-66, 213-228, 469-471). NSISdl
+  ; also never pumps messages, so nothing it drew could repaint during the download anyway.
+  ;
+  ; The bar therefore sat at zero for the whole download: a control that is decorative in the strongest sense. It was
+  ; replaced by a label that says what is happening and, because NSISdl blocks without servicing the message queue,
+  ; is honest about when it updates.
+  ${NSD_CreateLabel} 0 28u 100% 30u ""
   Pop $DownloadStatus
 
   ; ---- the fallback panel. Hidden until a download actually fails, because three buttons offering to rescue you
@@ -880,6 +924,14 @@ Function DownloadPageLeave
   ${EndIf}
 
   ${NSD_SetText} $DownloadStatus "Downloading the Microsoft Visual C++ runtime…"
+  ; The line above is only true if the page repaints before the download starts. NSISdl::download blocks inside the
+  ; plugin and never pumps the message queue -- there is no PeekMessage/DispatchMessage anywhere in
+  ; Contrib/NSISdl/nsisdl.cpp -- so set the text, force one repaint, and only then block. Without the UpdateWindow the
+  ; customer sees whatever the page looked like on entry (a blank status line) for the whole download, and the text
+  ; "Downloading…" appears only in the moment it is replaced by the result.
+  ;
+  ; This is also the reason there is no progress bar on this page: see the note in DownloadPageCreate.
+  System::Call 'user32::UpdateWindow(p $HWNDPARENT)'
   InitPluginsDir
   NSISdl::download "${VCREDIST_URL}" "$PLUGINSDIR\vc_redist.x64.exe"
   Pop $0

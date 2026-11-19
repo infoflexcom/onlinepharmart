@@ -122,7 +122,12 @@ describe('shortcuts point at the executable electron-builder actually wrote', ()
 
   it('uses electron-builder’s APP_EXECUTABLE_FILENAME for every executable it points at', () => {
     const script = readFileSync('installer/nsis/installer.nsi', 'utf8')
-    expect(script).toContain('MUI_FINISHPAGE_RUN "$INSTDIR\\${APP_EXECUTABLE_FILENAME}"')
+    // This used to assert `MUI_FINISHPAGE_RUN "$INSTDIR\\${APP_EXECUTABLE_FILENAME}"` -- i.e. it pinned the elevated
+    // launch as though it were the requirement. The finish page now hands the path to LaunchAsUser instead, so the
+    // assertion moves with it: still the vendor's filename, no longer passed straight to MUI.
+    expect(script).toMatch(/LaunchAsUser/u)
+    // ExecShellAsUser takes an out-variable first: ${StdUtils.ExecShellAsUser} $0 <path> <verb> <args>.
+    expect(script).toContain('${StdUtils.ExecShellAsUser} $0 "$INSTDIR\\${APP_EXECUTABLE_FILENAME}" "open" ""')
     expect(script).toMatch(/CurrentVersion\\Run" "\$\{PRODUCT_NAME\}" '"\$INSTDIR\\\$\{APP_EXECUTABLE_FILENAME\}" --hidden'/u)
   })
 
@@ -146,6 +151,49 @@ describe('shortcuts point at the executable electron-builder actually wrote', ()
     const script = readFileSync('installer/nsis/installer.nsi', 'utf8')
     const define = script.slice(script.indexOf('!ifndef APP_EXECUTABLE_FILENAME'), script.indexOf('!endif', script.indexOf('!ifndef APP_EXECUTABLE_FILENAME')))
     expect(define).toContain('PRODUCT_FILENAME')
+  })
+})
+
+describe('the finish page does not launch the app elevated', () => {
+  // This installer is perMachine and elevates. MUI's finish page runs MUI_FINISHPAGE_RUN with `Exec` unless a
+  // _FUNCTION is given (Contrib/Modern UI 2/Pages/Finish.nsh:482-486), and Exec is CreateProcess
+  // (Source/exehead/util.c:87-92), which inherits the elevated token. So "Launch now" would start the shop application
+  // as Administrator on every install -- the one button most likely to be clicked.
+  const script = readFileSync('installer/nsis/installer.nsi', 'utf8')
+  const code = script.split('\n').filter((line) => !line.trimStart().startsWith(';')).join('\n')
+
+  it('never points MUI_FINISHPAGE_RUN at an executable path', () => {
+    // A non-empty value here means Exec(elevated). It must be defined and empty, with a _FUNCTION doing the work.
+    // The trailing (?!_) matters: without it this matches MUI_FINISHPAGE_RUN_FUNCTION and reads its value as though it
+    // belonged to MUI_FINISHPAGE_RUN, which is a different define and legitimately non-empty.
+    const defines = [...code.matchAll(/^[ \t]*!define MUI_FINISHPAGE_RUN(?!_)([ \t]+(.*))?$/gmu)].map((match) => match[2] ?? '')
+    expect(defines.length).toBeGreaterThan(0)
+    for (const value of defines) expect(value.trim(), 'MUI_FINISHPAGE_RUN must be empty').toBe('')
+  })
+
+  it('launches through a function that runs as the logged-on user', () => {
+    expect(code).toMatch(/!define MUI_FINISHPAGE_RUN_FUNCTION "LaunchAsUser"/u)
+    const fn = (() => {
+      const start = code.indexOf('Function LaunchAsUser')
+      const end = code.indexOf('FunctionEnd', start)
+      return start === -1 ? '' : code.slice(start, end)
+    })()
+    expect(fn).not.toBe('')
+    expect(fn).toMatch(/\$\{StdUtils\.ExecShellAsUser\}/u)
+    // The elevated launch must exist only as the harness fallback, inside an !else, never as the plain path.
+    const elseIndex = fn.indexOf('!else')
+    expect(elseIndex).toBeGreaterThanOrEqual(0)
+    expect(fn.indexOf('Exec ')).toBeGreaterThan(elseIndex)
+  })
+
+  it('guards the plugin call on the plugin being there, so the harness can still compile', () => {
+    const fn = (() => {
+      const start = code.indexOf('Function LaunchAsUser')
+      const end = code.indexOf('FunctionEnd', start)
+      return code.slice(start, end)
+    })()
+    // StdUtils is a plugin DLL that ships with electron-builder's NSIS, not with a source-built makensis.
+    expect(fn).toMatch(/!if \/FileExists[^\n]*StdUtils\.dll/u)
   })
 })
 

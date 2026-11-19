@@ -352,6 +352,14 @@ function compile(label: string, defines: string[], script = 'installer/nsis/harn
       '-INPUTCHARSET', 'UTF8',
       `-DHARNESS_OUTFILE=${expected}`,
       '-X!addincludedir ' + join(root, 'installer/nsis'),
+      // electron-builder adds its own templates/include directory to the include path before compiling
+      // (NsisTarget.js:685-687: `addIncludeDir(includeDir)`), which is where StdUtils.nsh comes from. Without it the
+      // harness could not compile a script that uses ${StdUtils.ExecShellAsUser} -- and the real build supplies it.
+      // A harness missing something the real build provides is the same failure mode as a harness inventing something
+      // the real build lacks: in both cases it is testing itself.
+      ...(existsSync(join(root, 'node_modules/app-builder-lib/templates/nsis/include'))
+        ? ['-X!addincludedir ' + join(root, 'node_modules/app-builder-lib/templates/nsis/include')]
+        : []),
       '-DBUILD_RESOURCES_DIR=' + resources,
       join(root, script),
     ], { cwd: root, env: { ...process.env, NSISDIR } })

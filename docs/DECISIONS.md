@@ -606,3 +606,105 @@ break the rule on purpose before trusting it — is not superstition; it is the 
 executed an installer. The claims are that the compiled script opens, writes, closes and copies the log, verified by
 compiling and reading NSIS's verbose log of the directives emitted; and that the checker rejects a script that
 advertises the file without producing it.
+
+## The finish page launched the application elevated
+
+`MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXECUTABLE_FILENAME}"` was the whole of the "Launch now" wiring. It reads like the
+documented way to offer the button and it is the wrong way, for this installer specifically.
+
+MUI only routes that value through a function when a second define is present. From `Contrib/Modern UI
+2/Pages/Finish.nsh:482-486`, the fallback branch is `!ifndef MUI_FINISHPAGE_RUN_FUNCTION` → `Exec "$\"${MUI_FINISHPAGE_RUN}$\""`.
+`Exec` is `CreateProcess` (`Source/exehead/util.c:87-92`, `myCreateProcess`), which does not change security context —
+it inherits the caller's token. This installer is `perMachine` and therefore elevated by the time the finish page
+draws. So "Launch now" started the shop application **as Administrator**, every install, on the button most customers
+click.
+
+That is not cosmetic. The application's data directory and its DPAPI-protected settings would be created under the
+Administrator identity: a different user's `%APPDATA%`, a different key owner, and a running app whose files a later
+non-elevated launch cannot read. The first thing a storekeeper does after installing is click that checkbox.
+
+**The fix.** `MUI_FINISHPAGE_RUN` must be *defined* (MUI only draws the checkbox when the define exists) and must be
+*empty*; the launch moves into `MUI_FINISHPAGE_RUN_FUNCTION "LaunchAsUser"`, which calls
+`${StdUtils.ExecShellAsUser}` — electron-builder's own assisted template does exactly this
+(`assistedInstaller.nsh:52-61`). `ExecShellAsUser` starts the process through the shell so it runs as the logged-on
+user.
+
+**Why there is a fallback, and why it is labelled a defect.** `StdUtils` is a plugin (`StdUtils.dll`), and it ships with
+electron-builder's NSIS distribution, not with the makensis this sandbox builds from source — that build has only
+NSISdl, System, nsDialogs and nsExec. Compiling the call there fails outright (`Plugin not found, cannot call
+StdUtils::ExecShellAsUser`). The tempting fix is to delete the `ExecShellAsUser` call so the compile check goes green,
+which would ship the elevated launch to customers to make a test pass. Instead the call is guarded with
+`!if /FileExists "${NSISDIR}\Plugins\x86-unicode\StdUtils.dll"` and the `!else` branch is a plain `Exec` with a comment
+saying it is the defect. In the shipping build the plugin is present and the first branch is taken.
+
+Both branches were exercised separately (not merely "it compiles"): with a dummy `StdUtils.dll` present the compiler
+selects the `ExecShellAsUser` branch and fails only because the dummy is not a real plugin; with it absent the fallback
+compiles and all four harness builds are green.
+
+**Not proven.** That the launched process is genuinely non-elevated. That needs an installed build on Windows and a
+look at Task Manager's "Elevated" column, and it is a line in `docs/RELEASE-CHECKLIST.md` rather than something this
+environment can assert.
+
+## The download page showed a progress bar that could not move
+
+The page created a `${NSD_CreateProgressBar}` and no code ever called `NSD_ProgressBar_SetPos` on it. The obvious
+reading is "forgotten to wire it up". The real reason is that it cannot be wired up.
+
+`NSISdl::download` owns the download and takes no progress callback. It paints an overlay on the wizard's *stock*
+progress control, which it finds positionally:
+
+- `Contrib/NSISdl/nsisdl.cpp:61-66` — `childwnd = FindWindowEx(lParam, NULL, "#32770", NULL)`, then
+  `GetDlgItem(childwnd, 1004)` and `GetDlgItem(childwnd, 1006)`, and the painting block runs only `if (childwnd &&
+  hwndP && hwndS)`.
+- Those IDs are the InstallFiles page's: `Contrib/UIs/resource.h` defines `IDC_PROGRESS 1004`, `IDC_INTROTEXT 1006`.
+- An nsDialogs page is not that dialog. `nsDialogs::Create 1018` shows the `IDC_CHILDRECT` placeholder, and nsDialogs
+  creates its own controls as children of it with IDs `1200 + id` (`Contrib/nsDialogs/nsDialogs.c:394`).
+
+So both `GetDlgItem` calls return `NULL`, the block is skipped, `g_file_size` is never set (`nsisdl.cpp:469-471`), and
+`progress_callback` returns without doing anything (`nsisdl.cpp:213-228`). The bar sat at zero for the whole download.
+The bar is gone; the status label stays.
+
+**The related half of the same finding.** NSISdl also never pumps messages: there is no `PeekMessage`,
+`DispatchMessage`, `UpdateWindow` or `InvalidateRect` anywhere in `nsisdl.cpp`. So even the *label* cannot repaint
+while the download runs — `${NSD_SetText} $DownloadStatus "Downloading…"` was invisible, replaced by the result at the
+moment the download ended. The fix sets the text and then calls
+`System::Call 'user32::UpdateWindow(p $HWNDPARENT)'` to force one repaint before blocking. That is a real improvement
+and it is still a poor progress indicator; the honest answer is that this page cannot show progress, which is why it
+no longer pretends to.
+
+**Not proven.** That the repaint looks right. `UpdateWindow` sends `WM_PAINT` if the update region is non-empty; whether
+the static control has queued an invalidation from `SetWindowText` at that instant is a runtime detail. The claim
+pinned by the test is the ordering — text, then repaint, then block — not the visual result.
+
+## The Components page offered an install folder it did not use
+
+`${NSD_CreateDirRequest} 0 112u 70% 12u "$INSTDIR"` → `Pop $0`, and `$0` was never read. A customer could type any
+folder, press Next, and `$INSTDIR` was whatever had been chosen earlier.
+
+The earlier page is the real owner: electron-builder inserts `MUI_PAGE_DIRECTORY` because
+`allowToChangeInstallationDirectory` is true (`assistedInstaller.nsh:22-26`), and its `instFilesPre` appends the
+`${APP_FILENAME}` sub-folder. `$INSTDIR` is therefore already final when this page draws.
+
+The box is now a label showing `$INSTDIR`, captioned "change it on the previous page". Two controls for one variable is
+the same shape of mistake as the two owners of the shortcut file, described above.
+
+**Not proven.** How the page reads with a long install path — a `NSD_CreateLabel` wraps and the layout was not adjusted
+for a two-line path.
+
+## Four dead variables, and the rule that now catches them
+
+`Var CompLaunch`, `Var CompDesktop`, `Var LaunchWanted`, `Var DesktopWanted` — the first two were referenced nowhere
+at all, and the latter two were assigned `"1"` on every run in `.onInit` and never read. They are the residue of a
+Components page that used to offer "launch at the end" and "create a desktop shortcut"; both options went away and the
+variables did not, which is how a reader comes to believe the wizard still honours them.
+
+All four are deleted. The static checker now reports any `Var` in `installer.nsi` whose `$name` appears nowhere, and any
+nsDialogs control whose value is popped into a register that is never read back (with an exception for a control that
+is then disabled, which states a fact rather than collecting an answer, and for values read by `NSD_GetText`/
+`NSD_GetState`).
+
+**A bug in that rule, found by mutating it.** The first version counted uses in the raw script text, comments included —
+and the comment explaining the rule names `$DownloadProgress`. Restoring the deleted progress bar therefore still
+looked "used" and the mutation passed when it should have failed. The rule now counts in the comment-stripped text.
+This is the second rule in this file defeated by reading comments as code; both were caught by mutation, neither by
+inspection.
