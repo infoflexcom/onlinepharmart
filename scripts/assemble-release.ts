@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { assertReleasePin, UNPINNED_SHA256, verifyCachedPrerequisite } from '../installer/src/prerequisite-release'
@@ -37,6 +37,30 @@ interface Deliverable {
 
 function sha256(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
+}
+
+/**
+ * The files `release/installer-sources/` must contain, and what produces each one.
+ *
+ * Exported so a test can check the list against the tree without running the assembly: the assembly cannot run on a
+ * machine whose cached prerequisite is not signed by Microsoft, which is every machine in this project's CI.
+ */
+export function requiredInstallerSources(): Array<[string, string]> {
+  return [
+    ['installer/nsis/generated.nsh', 'npm run installer:script'],
+    ['installer/nsis/prerequisite.nsh', 'npm run installer:script'],
+    ['installer/nsis/currency-ui.nsh', 'npm run installer:script'],
+    ['installer/nsis/json-escaping.nsh', 'npm run installer:script'],
+    ['installer/nsis/installer.nsi', 'the repository'],
+    ['installer/nsis/offline-include.nsh', 'the repository'],
+    // The profile carries the pin the rebuild needs, and the app reads it from resources/ at runtime.
+    ['installer/nsis/build-profile.json', 'npm run installer:script'],
+  ]
+}
+
+/** Which of the required sources are absent, with the command that produces each. Empty means the kit is complete. */
+export function missingInstallerSources(list: Array<[string, string]>, exists: (path: string) => boolean = present): string[] {
+  return list.filter(([from]) => !exists(from)).map(([from, madeBy]) => `${from} (made by: ${madeBy})`)
 }
 
 function present(path: string): boolean {
@@ -181,11 +205,33 @@ function main(): void {
   }
 
   // The installer's own sources, so the .exe can be rebuilt on a Windows machine without the rest of the repository.
-  mkdirSync(join(RELEASE, 'installer-sources'), { recursive: true })
-  for (const from of ['installer/nsis/generated.nsh', 'installer/nsis/currency-ui.nsh', 'installer/nsis/installer.nsi',
-    'installer/nsis/json-escaping.nsh', 'installer/nsis/offline-include.nsh', 'installer/nsis/prerequisite.nsh', 'installer/nsis/build-profile.json']) {
-    if (!present(from)) continue
-    const to = join(RELEASE, 'installer-sources', basename(from))
+  //
+  // TWO defects lived in the three lines this replaces, and both pointed the same way -- a rebuild kit that cannot
+  // rebuild what the release claims to be:
+  //
+  //   1. `if (!present(from)) continue`. generated.nsh and prerequisite.nsh are produced by `installer:script`, and a
+  //      release assembled without that step shipped BOTH installers and NEITHER of the headers they were compiled
+  //      from. The kit looked complete -- it had installer.nsi -- and could not be recompiled.
+  //   2. The folder was never cleared. A second release into the same tree kept the first release's headers beside the
+  //      second release's installers: an installer-sources/generated.nsh carrying one digest next to an installer
+  //      carrying another. Silence, and the worst kind -- the rebuild would produce a different installer from the one
+  //      being shipped.
+  //
+  // So: the directory is rebuilt from scratch, and every file in the list is REQUIRED. A missing one stops the release
+  // with the command that produces it, rather than being skipped.
+  const sourcesDirectory = join(RELEASE, 'installer-sources')
+  rmSync(sourcesDirectory, { recursive: true, force: true })
+  mkdirSync(sourcesDirectory, { recursive: true })
+  const REQUIRED_INSTALLER_SOURCES = requiredInstallerSources()
+  const missingSources = missingInstallerSources(REQUIRED_INSTALLER_SOURCES)
+  if (missingSources.length > 0) {
+    console.error('\nRELEASE STOPPED: the installer sources a rebuild needs are not here, so release/installer-sources would be incomplete:\n')
+    for (const entry of missingSources) console.error(`  - ${entry}`)
+    console.error('\nNothing was written. Run `npm run installer:script` and assemble again.\n')
+    process.exit(1)
+  }
+  for (const [from] of REQUIRED_INSTALLER_SOURCES) {
+    const to = join(sourcesDirectory, basename(from))
     copyFileSync(from, to)
     collected.push({ file: to, bytes: statSync(to).size, sha256: sha256(to) })
   }

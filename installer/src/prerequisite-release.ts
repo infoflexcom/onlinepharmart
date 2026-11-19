@@ -414,6 +414,10 @@ export function verifyCachedPrerequisite(options: {
   // forever after. Cheap, so it is done on every release rather than once.
   const signer = readSigner(path)
   const publisher = releaseComponent().publisher
+  // `signer === null` means "no valid signature", and reaching the return below means it was valid. The invariant
+  // that a passing verification never reports a null signer is asserted in the tests, because it was observed once:
+  // a probe that stubbed the signature reader printed "Prerequisite verified ... signed by null." A caller printing
+  // a signer must be able to assume the string is a signer.
   if (signer === null || !signer.includes(publisher)) {
     throw new Error(
       `The cached prerequisite does not carry a valid signature from ${publisher}, so it cannot be bundled. ` +

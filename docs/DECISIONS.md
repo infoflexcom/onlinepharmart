@@ -989,3 +989,22 @@ problem instead of a release that misdescribes itself.
 **Why id and not position.** A list read as `[0]` is a list that will eventually be read wrong, and the profile is a
 document a vendor can edit. Matching by id also means a pin for a component the header does not describe cannot have its
 digest compiled into the installer's defines.
+
+
+## The release kit is required, not best-effort
+
+**Decided:** every file in `release/installer-sources/` is required, and the folder is rebuilt from scratch on each
+assembly. A missing file stops the release with the command that produces it.
+
+**Why the earlier version was wrong in a way that looked fine.** It copied what it found and skipped what it did not.
+`generated.nsh` and `prerequisite.nsh` are build products, so they are exactly the files most likely to be absent on a
+machine that has not run `installer:script` — and exactly the files a recompile cannot proceed without. The kit still
+contained `installer.nsi`, `json-escaping.nsh` and `currency-ui.nsh`, so it looked like a kit. Nobody counts files they
+did not know to expect.
+
+**Why clear rather than overwrite.** Overwriting leaves anything no longer produced behind. A header from the previous
+release sitting beside this release's installer is not detectable by looking at it — it has the right name and a
+plausible digest. The only reliable statement that the kit matches the release is that the kit was built from nothing.
+
+**The general rule this belongs to**, and the one this phase keeps rediscovering: a check that runs and produces a
+plausible answer is more dangerous than a check that is absent, because the plausible answer stops anyone looking.

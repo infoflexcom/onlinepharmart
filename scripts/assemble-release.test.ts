@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { deliverables } from './assemble-release.ts'
+import { deliverables, missingInstallerSources, requiredInstallerSources } from './assemble-release.ts'
 
 /**
  * The release manifest tells the customer why an `.exe` is missing. Twice now that explanation has gone stale in the
@@ -240,5 +240,74 @@ describe('pinning one component does not discard another', () => {
     expect(script).toContain("entry.id === 'vcredist-x64'")
     // And never takes the first entry: a list read positionally is a list that will be read wrong.
     expect(script).not.toMatch(/prerequisites\?\.\[0\]/u)
+  })
+})
+
+
+/**
+ * The rebuild kit.
+ *
+ * `release/installer-sources/` exists so the `.exe` can be rebuilt without the rest of the repository. It had two
+ * defects, both pointing the same way -- a kit that looks complete and cannot rebuild what was shipped:
+ *
+ *   1. Every missing file was skipped (`if (!present(from)) continue`). `generated.nsh` and `prerequisite.nsh` are
+ *      produced by `installer:script`, so a release assembled without that step shipped both installers and neither of
+ *      the headers they were compiled from.
+ *   2. The folder was never cleared, so a second release kept the first release's headers beside the second release's
+ *      installers.
+ *
+ * These tests exercise the list and the completeness check directly. The copy itself cannot be run on a machine whose
+ * cached prerequisite is not signed by Microsoft -- the signature gate stops the assembly first, correctly -- so this is
+ * a test of the guard rather than of the copy, and it says so.
+ */
+describe('the installer sources a rebuild needs are required, not optional', () => {
+  it('lists the two generated headers among the required sources', () => {
+    const paths = requiredInstallerSources().map(([from]) => from)
+    // The exact pair that was silently skippable, and the pair a rebuild of the installer cannot do without.
+    expect(paths).toContain('installer/nsis/generated.nsh')
+    expect(paths).toContain('installer/nsis/prerequisite.nsh')
+    expect(paths).toContain('installer/nsis/installer.nsi')
+  })
+
+  it('reports a missing generated header instead of skipping it', () => {
+    // Driven by an injected predicate, so the test states the behaviour rather than depending on the tree's state.
+    const missing = missingInstallerSources(
+      [['installer/nsis/generated.nsh', 'npm run installer:script']],
+      () => false,
+    )
+    expect(missing).toHaveLength(1)
+    // The message names the command that produces it, because "generated.nsh is missing" is not actionable alone.
+    expect(missing[0]).toContain('npm run installer:script')
+  })
+
+  it('reports nothing when every source is present', () => {
+    expect(missingInstallerSources([['a.nsh', 'somewhere']], () => true)).toEqual([])
+  })
+
+  it('is complete in this repository right now', () => {
+    // The other direction: the list must not name a file this project never produces, or every release would stop.
+    expect(missingInstallerSources(requiredInstallerSources())).toEqual([])
+  })
+
+  it('clears the old kit rather than merging into it', () => {
+    // A stale header is not detectable after the fact -- it is simply a different digest in a file with the right name.
+    const source = readFileSync('scripts/assemble-release.ts', 'utf8')
+    const clearAt = source.indexOf('rmSync(sourcesDirectory, { recursive: true, force: true })')
+    // Anchored on the sources-kit copy, not on the FIRST `copyFileSync` in the file -- which belongs to a different
+    // copy (build-studio) and made the first version of this test pass for the wrong reason.
+    const copyAt = source.indexOf('copyFileSync(from, to)', clearAt)
+    expect(clearAt).toBeGreaterThan(-1)
+    expect(copyAt).toBeGreaterThan(clearAt)
+  })
+
+  it('no longer skips an absent source', () => {
+    // The CODE, not the prose: the string `if (!present(from)) continue` also appears in the comment that records the
+    // defect, so a test that grepped the whole file would fail on its own explanation -- or, if written the other way
+    // round, pass on it. Everything from the sources-kit marker onwards is the executable part.
+    const source = readFileSync('scripts/assemble-release.ts', 'utf8')
+    const code = source.slice(source.indexOf('const sourcesDirectory = join(RELEASE'))
+    expect(code).not.toMatch(/if \(!present\(from\)\) continue/u)
+    // And the guard that replaced it is there, with a non-zero exit.
+    expect(code).toMatch(/missingSources[\s\S]{0,600}process\.exit\(1\)/u)
   })
 })

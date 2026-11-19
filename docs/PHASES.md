@@ -1166,3 +1166,34 @@ and both were caught). The list change was verified end to end: a pinned profile
 **What is still not proven.** The `info` about `aka.ms`'s redirect chain, and every claim about behaviour on a real
 Windows PC, remain as they were: no networked release run and no Windows execution of these installers has happened
 here. `docs/RELEASE-CHECKLIST.md` is what converts those into a person's observation.
+
+## Phase 15 (continued) — the rebuild kit could not rebuild what it shipped
+
+`release/installer-sources/` exists so the installer `.exe` can be rebuilt on a Windows machine without the rest of the
+repository. It had two defects, and they pointed the same way: a folder that looks complete and cannot reproduce what
+was shipped.
+
+1. **Every missing file was skipped.** `if (!present(from)) continue`. `generated.nsh` and `prerequisite.nsh` are produced
+   by `installer:script`, so a release assembled without that step shipped **both installers and neither of the headers
+   they were compiled from** — while the folder still contained `installer.nsi`, which makes it look like a kit. The
+   list is now explicit and required, each entry naming the command that produces it, and a missing one stops the
+   release with the reason. Observed: running the assembly with `prerequisite.nsh` deleted now prints the file, the
+   command, and `Nothing was written`, where before it copied six files and exited 0.
+2. **The folder was never cleared.** A second release into the same tree kept the first release's headers beside the
+   second release's installers: a `generated.nsh` carrying one digest next to an installer carrying another, and a
+   rebuild that would silently differ from the shipped binary. Observed: a file planted in
+   `release/installer-sources/generated.nsh` is gone after assembly, and all seven sources are present.
+
+Both were found by asking what the release folder is *for*, not by running anything. The copy path itself cannot run on
+this machine — the signature gate stops the assembly before it, correctly — so the guard is tested through an injected
+predicate and the list is exported for a test, and both are labelled as tests of the guard rather than of the copy.
+
+**A third observation, small and worth recording.** While observing the assembly messages the signature guard was
+temporarily disabled; the tool then printed `Prerequisite verified on disk: … signed by null.` The guard was immediately
+restored and nothing was committed in that state, but the observation was kept: a passing verification must never report
+a null signer, and a caller that prints one must be able to assume it exists. The type says `string`; a test now says so
+too, along with the case where the reader returns an empty string.
+
+**What is still not proven.** Unchanged: no real Microsoft download, no Windows execution, no run of the offline
+installer on a machine without the runtime. `docs/RELEASE-CHECKLIST.md` remains the place where those become a person's
+observation rather than this project's claim.

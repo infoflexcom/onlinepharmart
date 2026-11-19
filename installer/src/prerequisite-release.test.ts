@@ -571,3 +571,32 @@ describe('the installer refuses a profile pinning more than it can carry', () =>
     expect(() => generateInstallerHeader(profile)).not.toThrow()
   })
 })
+
+describe('a passing verification always reports who signed it', () => {
+  it('never returns a null or empty signer from verifyCachedPrerequisite', () => {
+    // Observed once during a probe: a stubbed reader returned null, the guard was temporarily disabled to inspect the
+    // assembly messages, and the tool printed "Prerequisite verified ... signed by null." The signer type is `string`,
+    // so this is a type-level guarantee, but the observation is worth a test: a caller that prints the signer must be
+    // able to assume there is one.
+    const directory = mkdtempSync(join(scratch, 'signer-'))
+    writeFileSync(join(directory, 'vc_redist.x64.exe'), PAYLOAD)
+    const result = verifyCachedPrerequisite({
+      directory,
+      pin: { sha256: digestOf(PAYLOAD), sizeBytes: PAYLOAD.byteLength },
+      readSigner: () => 'CN=Microsoft Corporation, O=Microsoft Corporation',
+    })
+    expect(typeof result.signerSubject).toBe('string')
+    expect(result.signerSubject.length).toBeGreaterThan(0)
+    expect(result.signerSubject).not.toBe('null')
+  })
+
+  it('refuses rather than passing when the reader has nothing to report', () => {
+    const directory = mkdtempSync(join(scratch, 'nosigner-'))
+    writeFileSync(join(directory, 'vc_redist.x64.exe'), PAYLOAD)
+    expect(() => verifyCachedPrerequisite({
+      directory,
+      pin: { sha256: digestOf(PAYLOAD), sizeBytes: PAYLOAD.byteLength },
+      readSigner: () => '',
+    })).toThrow(/valid signature/u)
+  })
+})
