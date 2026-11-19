@@ -505,7 +505,7 @@ things it had been missing:
 | `npm run check:phase13` | All of the above, plus generating the installer includes and running `installer:check`. |
 | `npm run check:phase14` | Typecheck, the whole suite, and bundling the Build Studio window. |
 | `npm run check:phase15` | Everything, plus the secret scan and assembling `/release`, `/tools` and `/cloud-package` (current phase bundle). |
-| `npm run installer:compile` | **Builds makensis from source and compiles both installers for real.** Proves every page, function, macro and instruction resolves. Stops at the final write because the stub is a placeholder -- see DECISIONS.md for what that does and does not prove. |
+| `npm run installer:compile` | **Builds makensis from source and compiles all four shapes for real** -- online, offline, offline wrapper, and the uninstaller pass. Proves every page, function, macro and instruction resolves. Stops at the final write because the stub is a placeholder -- see DECISIONS.md for what that does and does not prove. |
 | `npm run release:scan` | Searches source, builds, cloud package and installer sources for the master password (plain, base64, hex, punctuation-stripped) and for private-key material. **Plants both first and refuses to report unless it finds them**, so a clean result means something. |
 | `npm run release:assemble` | Copies the deliverables into `release/`, `tools/` and `cloud-package/`, writes `release/SHA256SUMS.txt`, and names every missing artefact with its reason in the release manifest. |
 | `npm run studio` | Bundles and starts Build Studio. **Needs a display and an Electron runtime that can open a window.** |
@@ -808,6 +808,27 @@ the test rather than the Output screen.
   nothing: the error was on stderr and only stdout was read; `makensis` exits 0 on script errors without `-V2`; and
   the regex patching MUI lacked the `m` flag so it silently matched nothing. It now demands positive proof of a full
   compile and treats "no compile output" as failure.
+- **The uninstaller had never been compiled, and it did not compile.** electron-builder builds the installer twice; the
+  second pass defines `BUILD_UNINSTALLER` and is the only one that includes `uninstaller.nsh`, which owns
+  `customUnInstall` and the uninstaller's own `un.onInit`. All three harness shapes were installer passes, so the
+  uninstaller was never built by anything in this repository. Compiling it produced three findings:
+  - **A hard build failure.** This script defined `Function un.onInit`; so does electron-builder's template, and the two
+    compile together because our script is an `nsis.include` rather than a replacement script. NSIS refuses the second
+    definition: `Error: Function named "un.onInit" already exists.` The installer half built perfectly throughout, which
+    is why the defect went unseen. Rewritten as the supported `customUnInit` hook, which the template inserts inside its
+    own function, after `initMultiUser`.
+  - **"Remove my data" removed nothing.** It deleted `$APPDATA\Infoflex` — but under `perMachine: true` the template has
+    already run `SetShellVarContext all`, so `$APPDATA` there is `C:\ProgramData`. The database, licence and paired
+    phones were never touched, and the customer was told they had been. The deletion now switches
+    `SetShellVarContext current` first, the same way electron-builder's own delete-app-data code does.
+  - **`install-config.json` outlived the program**, leaving a previous shop's currency in `%ProgramData%\Infoflex\`
+    forever. Now removed unconditionally, since it is installer state rather than shop data.
+  A fourth build shape (`uninstaller-pass`) compiles the pass, deliberately reproducing the template's `un.onInit` so the
+  collision is a build failure; a mutation that restores `Function un.onInit` fails the compile check with that exact
+  error. Ten contract tests and four new checker tests cover the class. The compile-time checker also gained a rule for a
+  function declared twice within one script — the same mistake one level in, since the checker cannot see the template.
+  None of this executes the uninstaller: there is no Windows or Wine here, so "the hooks compile in the layering
+  electron-builder uses" is the claim, and `RELEASE-CHECKLIST.md` carries the rest as manual checks.
 - **Still not proven:** that electron-builder's template agrees with our hooks, that the payload lands in the right
   place, or that anything behaves correctly on Windows.
 
@@ -819,8 +840,10 @@ the test rather than the Output screen.
   NSIS's own `Source/exehead`, using **Zig** — published to PyPI as a plain wheel, and a complete clang+lld
   cross-compiler — behind `i686-w64-mingw32-*` shims so NSIS's SConstruct builds unmodified. Twelve stubs, three
   compressions by four variants.
-- **`npm run installer:compile` now produces a real `.exe` for both builds:** 111,049 bytes online, 110,816 bytes
-  offline, each a verified i386 PE with the Windows GUI subsystem.
+- **`npm run installer:compile` now produces a real `.exe` for every build:** 111,177 bytes online, 110,947 bytes
+  offline, 110,947 bytes for the offline wrapper and 110,846 bytes for the uninstaller pass, each a verified i386 PE with
+  the Windows GUI subsystem. (Sizes move with every script change; the ones recorded earlier in this file are history,
+  not a contract.)
 - **The check inspects the artefact instead of trusting the log.** `installer/src/pe-artifact.ts` validates the DOS
   magic, the PE signature, the machine, the optional-header size, the section count and the subsystem, with 11 tests.
   It immediately earned its keep: dropping `-Wl,--subsystem,windows` from the stub link produced a **console** binary,

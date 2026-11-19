@@ -19,7 +19,7 @@ every file that *is* there.
 Not for want of code, and now down to **one** reason rather than three:
 
 1. **electron-builder must download the Electron runtime for Windows.** It fetches `electron-v45.3.3-win32-x64.zip` from `github.com/electron/electron/releases/download/…`, which redirects to `objects.githubusercontent.com`. This build agent cannot reach that host — a direct `curl` of the redirect target exits 35 (SSL connect error). The rest of `github.com` is reachable, which is what makes this easy to mistake for a working network. Without a Windows payload there is nothing to put inside an installer.
-2. **Not `makensis`.** An earlier version of this file said the compiler could not be installed without root. That is no longer true and is not the reason: NSIS is built from source here and its Windows stubs are cross-compiled with Zig, so `npm run installer:compile` produces a **real installer** for all three build shapes. Verified from each output's PE header.
+2. **Not `makensis`.** An earlier version of this file said the compiler could not be installed without root. That is no longer true and is not the reason: NSIS is built from source here and its Windows stubs are cross-compiled with Zig, so `npm run installer:compile` produces a **real installer** for all four build shapes -- online, offline, the offline wrapper, and the uninstaller pass. Verified from each output's PE header.
 3. **No Wine**, so the produced installer cannot be *run* here. That limits testing, not building.
 
 The same wall stops `npm run dist:win`, `installer:online`, `installer:offline` and `dist:studio` on this machine — all

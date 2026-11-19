@@ -345,6 +345,50 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
     }
   }
 
+  // ---- a function declared twice
+  //
+  // NSIS refuses the second definition outright -- `Function named "un.onInit" already exists` -- and it refuses it at
+  // the end of the compile, so the error names a line that may be far from the mistake. This script declared
+  // `un.onInit`, which electron-builder's own uninstaller.nsh also defines; because this file is layered into that
+  // template, the pair was fatal and the uninstaller pass could not build.
+  //
+  // A checker reading this file alone cannot see the template. What it CAN see is a name declared twice *here*, which
+  // is the same mistake one level in, and the same reasoning about branches applies: two declarations under opposite
+  // arms of an `!ifdef` are never compiled together and are not a conflict.
+  const functions = new Map<string, { line: number; branch: string }>()
+  {
+    const functionBranches: string[] = []
+    let functionBranchOrdinal = 0
+    for (const [index, raw] of strip.entries()) {
+      const line = raw.trim()
+      const conditional = /^!(ifdef|ifndef|if|ifmacrodef|ifmacrondef|else|endif)\b(.*)$/u.exec(line)
+      if (conditional) {
+        const [, keyword, rest] = conditional
+        if (keyword === 'else') {
+          functionBranches[functionBranches.length - 1] = `else${functionBranchOrdinal++}`
+        } else if (keyword === 'endif') {
+          functionBranches.pop()
+        } else {
+          functionBranches.push(`${keyword}${functionBranchOrdinal++}${(rest ?? '').trim()}`)
+        }
+        continue
+      }
+      const declaration = /^Function\s+(un\.)?(\S+)\s*$/u.exec(line)
+      if (!declaration) continue
+      const [, unPrefix, name] = declaration
+      const branch = functionBranches.join('>')
+      const seen = functions.get(name!)
+      if (!seen) {
+        functions.set(name!, { line: index + 1, branch })
+      } else if (seen.branch === branch) {
+        problems.push({
+          line: index + 1,
+          message: `Function ${unPrefix ?? ''}${name} was already declared on line ${seen.line}.`,
+        })
+      }
+    }
+  }
+
   // ---- the installer must install the application
   //
   // This file is an electron-builder *include*: electron-builder's own template copies the payload, so the rule is

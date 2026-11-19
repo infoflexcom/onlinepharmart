@@ -39,7 +39,20 @@ import { inspectPe, type PeArtifact } from '../installer/src/pe-artifact.ts'
  * "--codepage" mode NSIS does not have. Neither has anything to do with the file under test.
  *
  * Usage: npx tsx scripts/compile-check-installer.ts
- */
+  *
+ * THE FOURTH BUILD
+ *
+ * `uninstaller-pass` is not another flavour of the installer. electron-builder compiles the installer twice, and the
+ * second pass -- the one that defines BUILD_UNINSTALLER -- is the only path that reaches `uninstaller.nsh`, which owns
+ * the single `!insertmacro customUnInstall` and defines `Function un.onInit`. Every other build here is an installer
+ * pass, so the first three shapes together still never compiled the uninstaller.
+ *
+ * Compiling it found that this script defined its own `Function un.onInit`, which collides with the template's and
+ * aborted the uninstaller build outright -- while the installer half built perfectly. That is the reason this build
+ * exists and the reason its harness reproduces the template's `un.onInit`: a check that compiles only what builds
+ * today would have gone on reporting success.
+ *
+*/
 
 const NSIS_VERSION = 'v310'
 const WORK = '/tmp/infoflex-nsis-build'
@@ -293,6 +306,9 @@ const EXPECTED_UNREFERENCED: Record<string, string[]> = {
   // offline-include.nsh sets INFOPLEX_OFFLINE and includes installer.nsi, so the compiler sees exactly what the offline
   // build sees and drops exactly the same functions.
   'offline-wrapper': ['LoadDefaultCurrencyFields', 'DownloadPageCreate', 'DownloadOfflineClicked'],
+  // The uninstaller pass inserts the page hooks, so the currency field loader (a custom-page callback) is referenced
+  // here even though the plain online build never calls it. Nothing is expected to drop out of this build.
+  'uninstaller-pass': [],
 }
 
 interface Result {
@@ -306,7 +322,7 @@ interface Result {
 }
 
 /** Compiles the harness, twice: once for the online build and once for the offline build. */
-function compile(label: string, defines: string[]): Result {
+function compile(label: string, defines: string[], script = 'installer/nsis/harness/harness.nsi'): Result {
   const root = process.cwd()
   const resources = join(WORK, 'resources')
   mkdirSync(resources, { recursive: true })
@@ -337,7 +353,7 @@ function compile(label: string, defines: string[]): Result {
       `-DHARNESS_OUTFILE=${expected}`,
       '-X!addincludedir ' + join(root, 'installer/nsis'),
       '-DBUILD_RESOURCES_DIR=' + resources,
-      join(root, 'installer/nsis/harness/harness.nsi'),
+      join(root, script),
     ], { cwd: root, env: { ...process.env, NSISDIR } })
     let artifact: PeArtifact | null = null
     if (existsSync(expected)) {
@@ -390,9 +406,18 @@ function main(): void {
   // The third build is the one the shipping offline installer actually performs. electron-builder's `include` for that
   // configuration is offline-include.nsh, not installer.nsi, and compiling the second never compiled the first.
   const wrapper = compile('offline-wrapper', ['-DHARNESS_ENTRY=offline-include.nsh'])
+  // The fourth build is electron-builder's second pass. It compiles the installer again with BUILD_UNINSTALLER defined,
+  // and only that pass reaches uninstaller.nsh, which owns the single `!insertmacro customUnInstall`. Until this
+  // existed, the macro that removes the firewall rule, the autostart entry and the registry key had never been compiled
+  // by anything. It needs its own script because the uninstaller pass has a different NSIS environment.
+  // PRODUCT_NAME is the one define electron-builder always supplies and this script needs at parse time (it names the
+  // section, the uninstaller and the OutputFile). The real build passes it; the check must too, or it tests a build
+  // nobody performs.
+  const uninstaller = compile('uninstaller-pass', ['-DPRODUCT_NAME=Infoflex'],
+    'installer/nsis/harness/uninstaller-pass.nsi')
 
   let failed = false
-  for (const result of [online, offline, wrapper]) {
+  for (const result of [online, offline, wrapper, uninstaller]) {
     if (result.blocking.length > 0) {
       failed = true
       console.log(`\n${result.label}: NSIS rejected the script.`)
@@ -449,7 +474,7 @@ function main(): void {
     process.exitCode = 1
     return
   }
-  console.log('\nAll three builds produced real installers. See docs/DECISIONS.md for what this does and does not prove.')
+  console.log('\nAll four builds produced real installers. See docs/DECISIONS.md for what this does and does not prove.')
 }
 
 main()

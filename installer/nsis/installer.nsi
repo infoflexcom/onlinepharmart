@@ -941,14 +941,43 @@ Function ConfigureStartup
 FunctionEnd
 
 ; =================================================================================== uninstall
-Function un.onInit
+;
+; This is a MACRO, not `Function un.onInit`, and that distinction cost the whole uninstaller.
+;
+; electron-builder's own uninstaller.nsh already defines `Function un.onInit`. This script is layered into
+; electron-builder's template via `nsis.include`, so both definitions land in the same compile, and NSIS rejects the
+; second one outright: `Error: Function named "un.onInit" already exists.` The uninstaller pass therefore could not
+; build at all -- which nothing here noticed, because nothing here compiled that pass.
+;
+; The supported hook is `customUnInit`, which the template inserts *inside* its own `un.onInit`:
+;
+;     !ifmacrodef customUnInit
+;       !insertmacro customUnInit
+;     !endif
+;
+; Defining our own `un.onInit` did not merely collide. Had it somehow replaced the template's function, it would also
+; have dropped `initMultiUser`, which is what makes `un.onInit` here run with the right shell variable context.
+!macro customUnInit
   ; The brief: "Keep my data?" defaults to yes. The database, the licence, the paired phones and the currency
   ; live in the app's data folder, which this uninstaller does not touch unless the customer says so.
+  ; `SetShellVarContext current` is not decoration. This installer is perMachine (INSTALL_MODE_PER_ALL_USERS), and the
+  ; template calls `initMultiUser` -- which runs `setInstallModePerAllUsers` -> `SetShellVarContext all` -- BEFORE this
+  ; hook. With `all`, `$APPDATA` is `C:\ProgramData` and `$LOCALAPPDATA` is `C:\ProgramData` too. So the two RMDir
+  ; lines that used to sit here pointed at folders that do not hold the shop's data at all, and the "remove my data"
+  ; choice would have left the database, the licence and the paired phones exactly where they were -- while reporting
+  ; that everything had been removed. electron-builder's own delete-app-data code switches context for this same
+  ; reason (uninstaller.nsh:234-237).
+  ;
+  ; The folder name is the app's Electron name, not the product name and not ${APP_FILENAME}: src/main/index.ts pins
+  ; `app.setName('Infoflex')`, and Electron derives userData from that. The install directory name and the Electron
+  ; app name are independent values, so a literal is what matches.
   MessageBox MB_YESNO|MB_ICONQUESTION "Keep your shop data (products, sales, users, licence and currency)?$\r$\n$\r$\nChoose Yes to keep everything and remove only the program — this is safe and is what you want if you may reinstall. Choose No to remove the program AND all shop data." IDYES KeepData
+    SetShellVarContext current
     RMDir /r "$APPDATA\Infoflex"
     RMDir /r "$LOCALAPPDATA\Infoflex"
+    SetShellVarContext all
   KeepData:
-FunctionEnd
+!macroend
 
 ; electron-builder removes the files, the shortcuts and the registry entries it made. These are ours: the firewall
 ; rule, the autostart value, our own key, and the deliberate decision NOT to touch install-config.json.
@@ -956,6 +985,19 @@ FunctionEnd
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Infoflex Mobile Access"'
   DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_NAME}"
   DeleteRegKey HKLM "Software\Infoflex"
+
+  ; install-config.json is ours, not the shop's data: the installer wrote it into ProgramData so the setup screen could
+  ; arrive with the right currency preselected. It used to survive every uninstall, so a machine that had once been
+  ; set up for one shop kept that shop's currency sitting in ProgramData. Nothing reads it once the program is gone,
+  ; and every fresh install rewrites it (InstallApplication opens it with truncation when $WasInstalled == "0"), so
+  ; deleting it unconditionally -- the "keep my data" answer does not apply to it -- is both safe and what a
+  ; "removed" machine should look like.
+  ReadEnvStr $0 "ProgramData"
+  ${If} $0 == ""
+    StrCpy $0 "C:\ProgramData"
+  ${EndIf}
+  Delete "$0\${INSTALLER_CONFIG_DIR}\${INSTALLER_CONFIG_FILE}"
+  RMDir "$0\${INSTALLER_CONFIG_DIR}"
 !macroend
 
 ; ================================================================================== tracing

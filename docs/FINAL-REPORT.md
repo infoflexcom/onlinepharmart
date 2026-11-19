@@ -18,7 +18,7 @@ the Windows Electron runtime and has no Wine. Details in §5. This is the single
 and it is why several items below are marked "could not test" rather than "passed".
 
 **But the installer script now compiles.** `makensis` turned out to be buildable from source with the gcc that was
-here all along, and `npm run installer:compile` now builds it and compiles both the online and the offline installer.
+here all along, and `npm run installer:compile` now builds it and compiles all four shapes: the online installer, the offline installer, the offline wrapper, and the uninstaller pass.
 The first successful compile found **six defects, every one of them a hard failure** that would have stopped the
 installer being built at all. See §3.
 
@@ -103,7 +103,7 @@ Each of these is now covered by a test that fails if the defect returns.
   against the template electron-builder actually ships.
 - `npm run installer:compile` — **a real makensis, built from NSIS source in this sandbox, producing a real installer
   for both the online and the offline build.** Not a parse: the stubs are cross-compiled from NSIS's own sources with
-  Zig, so makensis writes a complete 111 KB i386 executable, and the check verifies the result from its own PE header
+  Zig, so makensis writes a complete ~111 KB i386 executable, and the check verifies the result from its own PE header
   (MZ, PE signature, machine 0x014c, Windows GUI subsystem, seven sections). The check was itself verified twice: by
   planting two of the six defects above and confirming it rejects them, and by removing `customPageAfterChangeDir` and
   confirming it names the eight page functions NSIS silently discarded.

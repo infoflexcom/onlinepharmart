@@ -208,4 +208,63 @@ describe('the redefinition rule still catches a genuine duplicate', () => {
     ].join('\n')
     expect(checkNsisScript(script).filter((p) => /already defined/u.test(p.message))).toEqual([])
   })
+
+  it('reports a function declared twice, which NSIS rejects at the end of the compile', () => {
+    const script = [
+      'OutFile "x.exe"',
+      'Function Widget',
+      'FunctionEnd',
+      'Function Widget',
+      'FunctionEnd',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    const problems = checkNsisScript(script)
+    expect(problems.some((problem) => /already declared/u.test(problem.message))).toBe(true)
+  })
+
+  it('reports an un.onInit declared twice, the exact shape that broke the uninstaller', () => {
+    // This script defined it; electron-builder's uninstaller.nsh defines it as well. The checker cannot see the
+    // template, but it can see the same name twice here -- and the fix is the same either way.
+    const script = [
+      'OutFile "x.exe"',
+      'Function un.onInit',
+      'FunctionEnd',
+      'Function un.onInit',
+      'FunctionEnd',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    const problems = checkNsisScript(script)
+    expect(problems.some((problem) => /already declared/u.test(problem.message))).toBe(true)
+  })
+
+  it('allows a function and a macro of the same name, which do not share a namespace', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '!macro Widget',
+      '!macroend',
+      'Function Widget',
+      'FunctionEnd',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).filter((p) => /already declared/u.test(p.message))).toEqual([])
+  })
+
+  it('allows the same function name in opposite arms of an !ifdef', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '!ifdef MAYBE',
+      '  Function Widget',
+      '  FunctionEnd',
+      '!else',
+      '  Function Widget',
+      '  FunctionEnd',
+      '!endif',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).filter((p) => /already declared/u.test(p.message))).toEqual([])
+  })
 })

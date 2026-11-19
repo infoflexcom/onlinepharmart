@@ -75,6 +75,40 @@ build agent has no Windows, no Wine, and no DPAPI.
 7. Confirm `basic_text` fallback never appears in the packaged app; that path is only reachable on
    unsupported Linux storage backends and is already covered by automated tests.
 
+### 1.4 Uninstall, and check what it actually removed
+
+Everything in this section is **compiled and inspected, never run**. `npm run installer:compile` builds the uninstaller
+pass, so the hooks are known to compile in the layering electron-builder uses; nothing here has executed, because there
+is no Windows and no Wine in the build environment. These steps are the only thing that will tell us the uninstaller
+behaves.
+
+Do this on a machine you can throw away, after a full install with mobile access enabled and a first-run setup done.
+
+1. **Before** uninstalling, note the state you expect to be gone:
+   - `netsh advfirewall firewall show rule name="Infoflex Mobile Access"` — one rule.
+   - `reg query "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v Infoflex` — one value.
+   - `reg query "HKLM\Software\Infoflex"` — the installer's InstallDir/CurrencyCode/KeepInTray values.
+   - `%ProgramData%\Infoflex\install-config.json` — exists.
+   - `%APPDATA%\Infoflex\` — the database, licence and paired phones.
+2. Run the uninstaller and answer **No** to "Keep your shop data" (i.e. remove everything).
+3. Confirm all of these are gone: the firewall rule, the `Run` value, `HKLM\Software\Infoflex`,
+   `%ProgramData%\Infoflex\install-config.json`, and `%APPDATA%\Infoflex\`.
+
+   The `%APPDATA%` one is the check that matters most. Under `perMachine: true` the uninstaller's shell variable context
+   is `all` until the hook switches it, so `$APPDATA` there is `C:\ProgramData`; the fix switches to `current` before
+   deleting. If `%APPDATA%\Infoflex\` survives, that switch is not working, and the "remove everything" answer is
+   lying to the customer.
+
+   Also confirm `%APPDATA%\infoflex-pharmart\` and `%APPDATA%\Infoflex Pharmart\` — electron-builder may target the
+   package name rather than the app name — and record which one actually existed.
+4. Reinstall, and answer **Yes** to "Keep your shop data" this time.
+   - Expected: the program is replaced and the database, licence and paired phones are still there.
+   - Expected: `install-config.json` is written again, so the setup screen still arrives with the right currency.
+5. Run the uninstaller as a **different** Windows administrator from the one who installed.
+   - Expected: it still removes the machine-wide items, because it elevates. Record the exact outcome if it does not.
+6. Install, then uninstall **without** ever completing first-run setup.
+   - Expected: `%APPDATA%\Infoflex\` may not exist at all; the uninstaller must not fail on its absence.
+
 ### Gate 1 record
 
 | Check | Result | Notes / exact message |
@@ -86,6 +120,10 @@ build agent has no Windows, no Wine, and no DPAPI.
 | Identity file stores base64, no plaintext key | ☐ pass ☐ fail | |
 | Same-user restart keeps fingerprint | ☐ pass ☐ fail | |
 | Different Windows user fails closed | ☐ pass ☐ fail | |
+| Uninstall removes firewall rule, Run value, HKLM key | ☐ pass ☐ fail | |
+| Uninstall removes `install-config.json` from ProgramData | ☐ pass ☐ fail | |
+| "Remove everything" really removes `%APPDATA%\Infoflex` | ☐ pass ☐ fail | |
+| Uninstall as a different admin still removes machine-wide items | ☐ pass ☐ fail | |
 
 ---
 

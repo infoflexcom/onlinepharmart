@@ -1,0 +1,142 @@
+import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+/**
+ * The uninstaller, which this phase found had never once been compiled.
+ *
+ * WHY THIS FILE EXISTS
+ *
+ * electron-builder builds the installer twice. The second pass re-runs makensis with `BUILD_UNINSTALLER` defined, and
+ * only that pass includes `uninstaller.nsh` — the file that owns the `!insertmacro customUnInstall` call. Until this
+ * phase, nothing in this repository ever compiled that pass: the harness has three shapes (online, offline,
+ * offline-wrapper) and all three are installer passes.
+ *
+ * What was hiding there, found by finally compiling it:
+ *
+ *   1. This script defined `Function un.onInit`. electron-builder's `uninstaller.nsh` defines it too, and this script
+ *      is layered into that same compile via `nsis.include`, so the uninstaller could not build at all:
+ *      `Error: Function named "un.onInit" already exists.` The installer half still built perfectly, which is why
+ *      nobody noticed.
+ *
+ *   2. That function deleted `$APPDATA\Infoflex` to honour "remove my data". Under `perMachine: true` the template has
+ *      already run `SetShellVarContext all`, so `$APPDATA` was `C:\ProgramData` — the delete pointed at a folder that
+ *      never held the database. Choosing "remove everything" would have kept everything, and said otherwise.
+ *
+ *   3. `install-config.json`, which the installer writes into ProgramData, was never removed.
+ *
+ * Each test below pins one of those, and each fails if the defect returns. The compile itself is pinned by
+ * `scripts/compile-check-installer.ts`, whose fourth build (`uninstaller-pass`) reproduces electron-builder's layering
+ * — including the template's own `un.onInit` — so the collision is a build failure and not just a missing assertion.
+ */
+
+const script = readFileSync(join(process.cwd(), 'installer/nsis/installer.nsi'), 'utf8')
+const harness = readFileSync(join(process.cwd(), 'installer/nsis/harness/uninstaller-pass.nsi'), 'utf8')
+
+/**
+ * The body of a `!macro name` / `Function name` block, or '' when it does not exist.
+ *
+ * Comments are stripped first, and that is not tidiness. The first version of the context test passed against a script
+ * whose `SetShellVarContext current` had been deleted, because the string still appeared in the explanatory comment
+ * above it -- a test satisfied by prose. Every assertion below reads code, so the input has to be code.
+ */
+function blockOf(source: string, name: string): string {
+  const opener = new RegExp(`^(?:!macro|Function)\\s+${name}\\s*$`, 'mu')
+  const match = opener.exec(source)
+  if (!match) return ''
+  const rest = source.slice(match.index)
+  const end = /^(?:!macroend|FunctionEnd)\s*$/mu.exec(rest)
+  const body = end ? rest.slice(0, end.index) : ''
+  return body
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith(';'))
+    .join('\n')
+}
+
+describe('the uninstaller hooks electron-builder actually calls', () => {
+  it('does not define un.onInit, which the template already defines', () => {
+    // electron-builder's uninstaller.nsh:5 defines `Function un.onInit`. Defining it here is a hard compile error, not
+    // a shadowed duplicate -- NSIS refuses the second definition outright.
+    expect(script).not.toMatch(/^\s*Function\s+un\.onInit\b/mu)
+  })
+
+  it('uses the customUnInit hook for the keep-my-data question', () => {
+    const body = blockOf(script, 'customUnInit')
+    expect(body).not.toBe('')
+    expect(body).toMatch(/Keep your shop data/u)
+  })
+
+  it('switches to the per-user shell context before deleting the app data folder', () => {
+    const body = blockOf(script, 'customUnInit')
+    expect(body).not.toBe('')
+
+    // The template runs `initMultiUser` -> `setInstallModePerAllUsers` -> `SetShellVarContext all` before this hook,
+    // so $APPDATA here is C:\ProgramData unless the context is switched back. Find where each matters.
+    const contextIndex = body.indexOf('SetShellVarContext current')
+    expect(contextIndex).toBeGreaterThanOrEqual(0)
+
+    const appDataIndex = body.indexOf('$APPDATA\\Infoflex')
+    const localAppDataIndex = body.indexOf('$LOCALAPPDATA\\Infoflex')
+    expect(appDataIndex).toBeGreaterThanOrEqual(0)
+    expect(localAppDataIndex).toBeGreaterThanOrEqual(0)
+
+    // Both deletes must come AFTER the switch, or they still resolve against C:\ProgramData.
+    expect(appDataIndex).toBeGreaterThan(contextIndex)
+    expect(localAppDataIndex).toBeGreaterThan(contextIndex)
+  })
+
+  it('names the data folder the app actually uses, not the product name', () => {
+    // src/main/index.ts pins app.setName('Infoflex'), and Electron derives userData from the app name. The install
+    // directory name is a different value, so this must be the literal -- not ${PRODUCT_NAME} and not ${APP_FILENAME}.
+    const body = blockOf(script, 'customUnInit')
+    expect(body).not.toMatch(/\$APPDATA\\\$\{(?:PRODUCT_NAME|APP_FILENAME|PRODUCT_FILENAME)\}/u)
+    expect(body).toMatch(/\$APPDATA\\Infoflex/u)
+  })
+
+  it('removes the install-config.json the installer wrote to ProgramData', () => {
+    const body = blockOf(script, 'customUnInstall')
+    expect(body).not.toBe('')
+    expect(body).toMatch(/\$\{INSTALLER_CONFIG_FILE\}/u)
+    expect(body).toMatch(/\$\{INSTALLER_CONFIG_DIR\}/u)
+  })
+
+  it('still removes the firewall rule, the autostart value and our registry key', () => {
+    // Pinned because these are the three things electron-builder does not know about, and they were the only things
+    // the uninstaller did before this phase. A rewrite that lost one would leave it behind on every machine.
+    const body = blockOf(script, 'customUnInstall')
+    expect(body).toMatch(/netsh advfirewall firewall delete rule name="Infoflex Mobile Access"/u)
+    expect(body).toMatch(/DeleteRegValue HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Run"/u)
+    expect(body).toMatch(/DeleteRegKey HKLM "Software\\Infoflex"/u)
+  })
+})
+
+describe('the uninstaller-pass build shape', () => {
+  it('reproduces the template own un.onInit, which is what makes the collision visible', () => {
+    // Without this function in the harness, the harness compiles while the shipping build does not -- the failure
+    // mode the fourth build exists to prevent.
+    expect(harness).toMatch(/^Function un\.onInit$/mu)
+  })
+
+  it('inserts both hooks the way the template does', () => {
+    expect(harness).toMatch(/!ifmacrodef customUnInit\s*\n\s*!insertmacro customUnInit/u)
+    expect(harness).toMatch(/!insertmacro customUnInstall/u)
+  })
+
+  it('is a fourth build in the compile check, not a file nobody runs', () => {
+    const check = readFileSync(join(process.cwd(), 'scripts/compile-check-installer.ts'), 'utf8')
+    expect(check).toMatch(/uninstaller-pass/u)
+    expect(check).toMatch(/installer\/nsis\/harness\/uninstaller-pass\.nsi/u)
+  })
+
+  it('is not named like an uninstaller section, which NSIS would route to a different list', () => {
+    // NSIS's add_section switches to uninstaller mode when a section is named "Uninstall" or begins with "un.".
+    // The section then lands in ubuild_sections, and the installer pass reports `no sections specified` -- an error
+    // that says nothing about the name being the cause.
+    const sectionNames = [...harness.matchAll(/^Section\s+(?:"([^"]*)"|(\S+))\s*$/gmu)].map((m) => m[1] ?? m[2])
+    expect(sectionNames.length).toBeGreaterThan(0)
+    for (const name of sectionNames) {
+      expect(name?.toLowerCase()).not.toBe('uninstall')
+      expect(name?.toLowerCase().startsWith('un.')).toBe(false)
+    }
+  })
+})

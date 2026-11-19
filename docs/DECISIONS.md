@@ -235,7 +235,7 @@ could not have been built at all had anyone run the build:
   phase could only get as far as "every macro resolved, then the final byte-write failed on the placeholder". They are
   now cross-compiled from NSIS's own `Source/exehead` by `scripts/nsis-stub-builder.ts`, using Zig — which is on PyPI
   as a plain wheel and is a complete clang+lld cross-compiler — driven through `i686-w64-mingw32-*` shims so NSIS's
-  SConstruct builds unmodified. `npm run installer:compile` now writes a 111 KB i386 PE for each build.
+  SConstruct builds unmodified. `npm run installer:compile` now writes a ~111 KB i386 PE for each build.
 - **The produced file is inspected, not assumed.** `installer/src/pe-artifact.ts` reads the DOS magic, the PE
   signature at `e_lfanew`, the machine, the optional-header size, the section count and the subsystem, and the build
   fails if any of them is wrong. This has already earned its keep: dropping `-Wl,--subsystem,windows` from the stub
@@ -325,3 +325,55 @@ could not have been built at all had anyone run the build:
   NSIS distribution from GitHub at build time, and the plugin DLLs it needs do not exist in this sandbox — so the
   hook contract is checked by reading its template rather than by running it. `installer:check` no longer
   claims that compiling "needs Windows or Wine", because that stopped being true.
+
+## The uninstaller, which had never been compiled
+
+Phase 15 closed with the installer compiling in three shapes and nothing ever compiling the *uninstaller*. That gap was
+not cosmetic. `electron-builder` builds the installer twice: the second makensis run defines `BUILD_UNINSTALLER`, and
+only that pass includes `uninstaller.nsh` — the file that owns `!insertmacro customUnInstall` and the uninstaller's own
+`Function un.onInit`. Every harness shape was an installer pass, so the uninstaller was, in the only sense that matters
+here, unbuilt. Compiling it took one afternoon and found three defects, two of which would have shipped.
+
+**1. The uninstaller could not build at all.** This script defined `Function un.onInit`. So does electron-builder's
+`uninstaller.nsh`, and — this is the part that makes it fatal rather than merely redundant — this script is layered
+into that same compile via `nsis.include`, not substituted for the template. NSIS rejects the second definition outright:
+
+```
+Error: Function named "un.onInit" already exists.
+```
+
+The installer half of the build was unaffected, which is exactly why nobody had seen it. The supported hook is
+`customUnInit`, which the template inserts *inside* its own `un.onInit`. That placement is not incidental: it is what
+runs after `initMultiUser`, and `initMultiUser` is what gives the hook the right shell variable context (defect 2). A
+working `un.onInit` of our own would have had to reimplement that setup, and would have silently skipped the UAC
+outer/inner-instance handling that `initMultiUser` performs for the per-machine case.
+
+**2. "Remove my data" deleted the wrong folder and said otherwise.** The hook that honours the keep-data question ran
+`RMDir /r "$APPDATA\Infoflex"`. This installer is `perMachine: true`, and `initMultiUser` →
+`setInstallModePerAllUsers` → `SetShellVarContext all` runs before it, so `$APPDATA` at that moment is
+`C:\ProgramData` — not the user's roaming AppData, and `$LOCALAPPDATA` is `C:\ProgramData` too. The two deletions pointed
+at folders that have never held the database. A customer who answered "remove everything" would have kept the database,
+the licence and the paired phones, been told it was all gone, and — worse — a subsequent reinstall would have adopted the
+old data as though it were new. The fix switches to `SetShellVarContext current` around the deletions. electron-builder's
+own delete-app-data code does the same thing for the same reason (`uninstaller.nsh`), which is the strongest available
+evidence that the reasoning is right.
+
+**3. `install-config.json` survived every uninstall.** The installer writes it into `%ProgramData%\Infoflex\` so the
+setup screen can arrive with the shop's currency preselected. Nothing removed it. It is not the shop's data — every
+fresh install rewrites it, and once the program is gone nothing reads it — so the correct answer is to delete it
+unconditionally rather than tie it to the keep-data answer.
+
+**Why the missing compile pass is the real finding.** Each of the three defects is individually small. What made them
+survive is that a whole build step had no coverage, and the three shapes of the harness looked like thorough coverage of
+the installer. A harness that compiles the thing you ship, and never compiles the second thing you ship, reports success
+about half the artefact. The fourth build shape (`uninstaller-pass`) exists to close that, and it reproduces the
+template's own `un.onInit` precisely so that defect 1 is a build failure rather than an assertion — confirmed by
+mutation: restoring `Function un.onInit` makes `npm run installer:compile` fail with electron-builder's real error
+message.
+
+**What this still does not prove.** The new build compiles our hooks in the layering electron-builder uses; it does not
+execute the uninstaller, because there is no Windows and no Wine here. It does not prove the firewall rule is actually
+removed on a real machine, that `netsh` succeeds, that the registry value is the one the app set, or that
+`SetShellVarContext current` resolves to the right user when the uninstaller is launched by an administrator whose
+account differs from the one that ran the app. Those remain release-time checks, and they are listed as such in
+`docs/RELEASE-CHECKLIST.md` — described as **compiled and inspected**, never as **run**.
