@@ -277,6 +277,7 @@ proves the behaviour and the arithmetic; it does not prove layout.
 | First-run rejects an empty store name | Pass — `first-run-authentication.test.ts`, `pos-currency-end-to-end.test.ts` | n/a |
 | Desktop login per role | Pass — `first-run-authentication.test.ts` (Admin, Supervisor, Cashier) | n/a |
 | A sale to receipt in NGN, USD, JPY, KWD | Pass — `pos-currency-end-to-end.test.ts` (sale → receipt → reprint → report, per currency) | Emulator only — receipt rendering is asserted as markup, not a screenshot |
+| The phone draws and accepts those amounts in each currency | Pass — `mobile-currency-routes.test.ts`: a real sale in each currency, read back over the real admin routes (dashboard, product, sale, report), then formatted and re-parsed by the phone's own money module | Emulator only — layout unproven |
 | A wholesale sale by a cashier on desktop | Pass — `pos-currency-end-to-end.test.ts` | n/a |
 | A return | Pass — `return-service.test.ts` | Emulator only |
 | Reports and Excel export | Pass — `accounting-report-service.test.ts` (opened with `exceljs`, real cell values and formats), `report-export-sections.test.ts` | n/a |
@@ -303,6 +304,10 @@ proves the behaviour and the arithmetic; it does not prove layout.
 | Both (desktop) | Pass | Pass | Pass | Pass | Pass (currency module sweep) |
 | Pharmacy / Supermarket / Both (phone API) | Pass | Pass | Pass | Pass | Pass (currency module sweep) |
 
+*The phone-API row is backed by `src/api/mobile-currency-routes.test.ts`, which was written after the matrix
+first claimed it: the route layer previously had no money test in ANY currency. Writing it found two
+defects, both now fixed and both covered by tests that fail without the fix.*
+
 | Platform | Automated here | Owed to hardware/emulator |
 | --- | --- | --- |
 | Windows desktop (Electron) | Host, IPC, preload bridge and DOM tests | Installer, DPAPI `safeStorage`, tray, print output (Gate 1) |
@@ -310,6 +315,29 @@ proves the behaviour and the arithmetic; it does not prove layout.
 | Admin PWA in Chromium (Android profile) | Served shell, cache and route tests | Install prompt, splash, camera scan, touch layout |
 | Admin PWA in WebKit (iPhone profile) | Same served shell and cache tests | Safari install, certificate trust, safe-area layout |
 | Physical iOS / Android phone | Not possible here | Gate 2 in the release checklist |
+
+### Two defects found while closing this phase, and fixed
+
+A test matrix is only worth the tests behind it. Checking my own claim that the phone API was proven in all four
+currencies showed that **the claim was false** — `src/api/mobile-admin-routes.test.ts` only ever asserted refusals
+(403) on the admin routes, never a successful response with money in it. Writing the missing test found:
+
+1. **The phone's reports route answered 500 with money in the shop.** `GET /api/v1/mobile/admin/reports` returned
+   `Do not know how to serialize a BigInt`, because the generic route wrapper sent the host's `bigint` minor units
+   straight to `JSON.stringify`. Only one older route on the same server called `serializeBigInts`; every route
+   added since did not. The refusal tests could never have caught it, because a refusal never reaches the send
+   path. **Fixed** by moving the converter to `src/api/serialize-money.ts` and applying it once in the wrapper
+   for every phone route. Proved by reverting the fix and watching
+   `mobile-currency-routes.test.ts` fail with the exact 500, then restoring it.
+2. **The phone refused its own formatted amounts.** `parseMoneyInput` rejected anything containing a currency
+   symbol, so an Admin who copied `₦40.00` off the dashboard and pasted it into a price field was told "Enter an
+   amount using digits only" — while the desktop's `parseMoney` accepted the same text. **Fixed** by stripping a
+   leading or trailing symbol or ISO code (and a minus placed outside the symbol) before parsing, and by refusing
+   a negative price with a sentence rather than a regex failure.
+
+Both fixes are regression-covered: `src/api/wire-money.test.ts` tests the converter on nested objects, arrays,
+null, a 64-bit amount and binary payloads, and drives a real report through a real Fastify send path in NGN, JPY
+and KWD. `mobile/src/money.test.ts` gains the symbol round-trip.
 
 ### What could only be tested on emulators, or not at all
 

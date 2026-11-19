@@ -9,6 +9,7 @@ import type {
   MobileStockReceiptInput,
 } from '../shared/mobile/admin-types'
 import { MobileAdminService, MobileReloadRequiredError, MobileStaleVersionError } from './mobile-admin-service'
+import { serializeBigInts } from './serialize-money'
 
 const GENERIC_DENIAL = 'This account cannot use the mobile app'
 
@@ -81,7 +82,10 @@ export function registerMobileAdminRoutes(server: FastifyInstance, options: Mobi
         const result = await handler(principal, request)
         // A late refusal (the licence expired between the gate and the call) is still a refusal.
         if (reply.raw.headersSent) return reply
-        return reply.header('cache-control', 'no-store').send(result ?? { ok: true })
+        // Every figure below came out of a host service as `bigint` minor units, and `JSON.stringify` throws on
+        // a BigInt. Converting here, once, is what stops a route from silently answering 500 the first time
+        // somebody actually loads it with money in the shop.
+        return reply.header('cache-control', 'no-store').send(serializeBigInts(result ?? { ok: true }))
       } catch (error) {
         if (reply.raw.headersSent) return reply
         return sendError(reply, error)

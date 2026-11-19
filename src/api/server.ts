@@ -8,6 +8,7 @@ import type { ReturnApprovalDecision, ReturnRecord } from '../shared/returns/typ
 import type { ReturnService } from '../services/return-service'
 import { AccountingReportService, buildMobileAccountingSummary } from '../services/accounting-report-service'
 import type { AccountingReport, MobileAccountingSummary, ReportPeriodInput } from '../shared/reports/types'
+import { serializeBigInts } from './serialize-money'
 import type { Edition } from '../editions'
 import { registerMobileClientRoutes } from './mobile-client'
 import { registerMobileAdminRoutes } from './mobile-admin-routes'
@@ -573,15 +574,6 @@ function mobileReportInput(queryValue: unknown, now: number): ReportPeriodInput 
 function localDateString(timestamp: number): string {
   const date = new Date(timestamp)
   return `${String(date.getFullYear()).padStart(4, '0')}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}
-
-function serializeBigInts(value: unknown): unknown {
-  if (typeof value === 'bigint') return value.toString()
-  if (Array.isArray(value)) return value.map(serializeBigInts)
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, serializeBigInts(entry)]))
-  }
-  return value
 }
 
 function toMobileReturnSummary(record: ReturnRecord) {

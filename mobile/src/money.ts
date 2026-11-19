@@ -57,13 +57,19 @@ export function parseMinor(minor: string): bigint | null {
  */
 export function parseMoneyInput(input: string, context: MobileCurrencyContext): { ok: true; minor: string } | { ok: false; message: string } {
   const { currency } = context
-  const raw = input.trim()
+  // An Admin who copies an amount off the dashboard and pastes it back into a price field brings the symbol
+  // with it. The desktop's parser already tolerates that, so the phone does too rather than telling a
+  // shopkeeper their own shop's money is "not a number".
+  const raw = stripCurrencyLabel(input.trim(), currency)
   if (raw === '') return { ok: false, message: 'Enter an amount.' }
   // Strip the shop's thousands separator and any ordinary spaces/NBSP a phone keyboard inserts.
   const withoutThousands = currency.thousandsSeparator
     ? raw.split(currency.thousandsSeparator).join('')
     : raw
   const cleaned = withoutThousands.replace(/[\s\u00a0\u202f]/gu, '')
+  // A price is never negative, so a pasted minus is refused with a sentence rather than parsed into a negative
+  // minor amount that the host would then have to reject.
+  if (cleaned.startsWith('-')) return { ok: false, message: 'A price cannot be negative.' }
   if (!/^\d*[.,]?\d*$/u.test(cleaned) && !/^\d+(?:[.,]\d+)?$/u.test(cleaned)) {
     return { ok: false, message: 'Enter an amount using digits only.' }
   }
@@ -83,6 +89,21 @@ export function parseMoneyInput(input: string, context: MobileCurrencyContext): 
   const minor = BigInt(whole) * scale + BigInt(fraction.padEnd(currency.decimalPlaces, '0') || '0')
   if (minor > 9_007_199_254_740_991n) return { ok: false, message: 'That amount is too large.' }
   return { ok: true, minor: minor.toString() }
+}
+
+/** Removes a leading or trailing currency symbol or ISO code, and a minus sign placed outside the symbol. */
+function stripCurrencyLabel(text: string, currency: MobileCurrencyContext['currency']): string {
+  let value = text
+  const negative = value.startsWith('\u2212') || value.startsWith('-')
+  if (negative) value = value.slice(1).trim()
+  for (const token of [currency.symbol, currency.code]) {
+    if (!token) continue
+    const upper = value.toUpperCase()
+    const upperToken = token.toUpperCase()
+    if (upper.startsWith(upperToken)) value = value.slice(token.length).trim()
+    else if (upper.endsWith(upperToken)) value = value.slice(0, -token.length).trim()
+  }
+  return negative ? `-${value}` : value
 }
 
 function normaliseDecimal(cleaned: string, separator: string): string {
