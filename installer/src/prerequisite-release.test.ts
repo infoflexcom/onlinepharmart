@@ -600,3 +600,47 @@ describe('a passing verification always reports who signed it', () => {
     })).toThrow(/valid signature/u)
   })
 })
+
+describe('a profile pinned by an earlier version keeps its pin', () => {
+  /**
+   * The singular `prerequisite` field became `prerequisites` in this phase. A profile written before that carried a
+   * real digest under the old key, and `parseBuildProfile` -- which reads fields one at a time -- simply did not look at
+   * it: the file parsed, still looked pinned to anyone reading it, and described a development build. `release:assemble`
+   * would then have said "no pin" and told the operator to fetch one they already had.
+   *
+   * Observed on a real legacy profile before the fix: "parsed: true | pins now: undefined".
+   */
+  const legacy = JSON.stringify({
+    format: 'infoflex-build-profile', version: 1, appVersion: '2.3.4', defaultCurrencyCode: 'NGN',
+    lockCurrency: false, maximumOnsitePeriodYears: null, licenseServerUrl: null,
+    prerequisite: {
+      id: 'vcredist-x64', sha256: 'a'.repeat(64), sizeBytes: 25_000_000, microsoftVersion: '14.40.33810.0',
+      url: 'https://aka.ms/vs/17/release/vc_redist.x64.exe', fetchedAt: '2026-11-17T00:00:00.000Z',
+    },
+  })
+
+  it('reads the old field rather than dropping it', () => {
+    const profile = parseBuildProfile(legacy)
+    expect(profile).not.toBeNull()
+    expect(profile?.prerequisites).toHaveLength(1)
+    expect(profile?.prerequisites?.[0]?.sha256).toBe('a'.repeat(64))
+  })
+
+  it('marks the profile so the tool can say the file needs rewriting', () => {
+    const profile = parseBuildProfile(legacy) as BuildProfile & { legacyPrerequisiteShape?: boolean }
+    expect(profile.legacyPrerequisiteShape).toBe(true)
+  })
+
+  it('does not mark a profile already in the current shape', () => {
+    const current = defaultBuildProfile()
+    current.prerequisites = [{ ...JSON.parse(legacy).prerequisite }]
+    const profile = parseBuildProfile(serializeBuildProfile(current)) as BuildProfile & { legacyPrerequisiteShape?: boolean }
+    expect(profile.legacyPrerequisiteShape).toBeUndefined()
+  })
+
+  it('does not write the marker into the file', () => {
+    // It exists only to drive a message; serialising it would put a field of ours into a document the vendor edits.
+    const profile = parseBuildProfile(legacy)!
+    expect(serializeBuildProfile(profile)).not.toContain('legacyPrerequisiteShape')
+  })
+})

@@ -42,6 +42,13 @@ function readProfile(): BuildProfile {
   const text = readFileSync(PROFILE_PATH, 'utf8')
   const profile = parseBuildProfile(text)
   if (!profile) fail(`${PROFILE_PATH} is not a build profile this tool understands. Fix it, or delete it to start fresh.`)
+  // A profile written before the pin became a list. Its digest was read, not dropped -- the point of the migration --
+  // but the file still holds the old shape, and the next write fixes that. Say so here rather than in a validator
+  // message nobody sees: this is the command that rewrites it.
+  if ((profile as BuildProfile & { legacyPrerequisiteShape?: boolean }).legacyPrerequisiteShape === true) {
+    console.log(`${PROFILE_PATH} uses the old single-component "prerequisite" field; its digest was read and will be`)
+    console.log('rewritten in the current shape on the next write.')
+  }
   return profile
 }
 

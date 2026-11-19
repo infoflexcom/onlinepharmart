@@ -1197,3 +1197,36 @@ too, along with the case where the reader returns an empty string.
 **What is still not proven.** Unchanged: no real Microsoft download, no Windows execution, no run of the offline
 installer on a machine without the runtime. `docs/RELEASE-CHECKLIST.md` remains the place where those become a person's
 observation rather than this project's claim.
+
+## Phase 15 (continued) — the change broke the profile it had already written
+
+Making the pin a list was correct and it introduced a migration defect, found by asking what happens to a
+`build-profile.json` written by the previous commit rather than to one written by the current code.
+
+The old file carries a real digest under `prerequisite` (singular). `parseBuildProfile` reads fields one at a time and
+did not look at the old key, so the file **parsed successfully and silently became a development build**:
+
+```
+parsed: true
+pins now: undefined
+=> a pinned release profile from the previous commit becomes a DEV build, silently
+```
+
+That is the worst shape this class of bug takes. Nothing errored. `release:assemble` would have reported "no pin" and
+told the operator to run `release:prerequisite` on a build that was already pinned, and the reasonable response —
+running it again — would have hidden the fact that a file had been silently emptied of meaning.
+
+`parseBuildProfile` now reads the old shape and marks the profile, and `release:prerequisite` prints a line naming the
+command that rewrites the file. The marker is a runtime flag only: `serializeBuildProfile` builds its output from known
+fields, so it never reaches disk. Verified on a real legacy profile: the pin is preserved
+(`[ 'vcredist-x64 aaaaaaaa' ]`), the notice is printed, and the cache check then complains about the *right* digest —
+which is how it should behave, and is proof the migration read the value rather than inventing a default.
+
+**Why not refuse the old shape.** A refusal would strand a checked-out release profile with a message about a field
+rather than about the build. The pin is valid data; the file merely holds it in a shape this version no longer writes.
+
+**Why this keeps happening**, and it is worth stating once for the whole phase: every one of these defects lives where a
+reader can succeed with an incomplete answer. A dropped field, a skipped copy, an allowlist checked before the redirect,
+a digest compared without the file, a linear scan that finds the key in the wrong structure. The code ran, the answer
+looked plausible, and plausible is what stops anybody looking. The tests added this phase are mostly assertions that a
+check *fails* when it should — which is the only way to tell a working check from a decorative one.

@@ -1008,3 +1008,21 @@ plausible digest. The only reliable statement that the kit matches the release i
 
 **The general rule this belongs to**, and the one this phase keeps rediscovering: a check that runs and produces a
 plausible answer is more dangerous than a check that is absent, because the plausible answer stops anyone looking.
+
+
+## A changed profile field is read from the old shape, not refused
+
+**Decided:** when `prerequisite` became `prerequisites`, `parseBuildProfile` gained a migration that reads the old
+singular field into the list and marks the profile so the tool can name the command that rewrites it. The marker is
+runtime-only and never serialised.
+
+**Why read rather than refuse.** The old file holds a real, verified digest. Refusing it would strand a checked-out
+release profile with an error about a field name, when what the operator needs is for the build to keep working. The
+data is valid; only its shape is old.
+
+**Why warn at all, then.** Because silently reading it leaves an old-shaped file in the tree that the next hand-editor
+will copy. One line naming `npm run release:prerequisite` is enough.
+
+**The rule behind it:** a migration that drops data is worse than one that refuses, and far worse than one that
+proceeds. Dropping is invisible — the profile still parses, still looks pinned, and describes a different build from the
+one the reader believes they have.

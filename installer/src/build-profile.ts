@@ -121,6 +121,9 @@ export function buildProfileProblems(profile: BuildProfile): BuildProfileProblem
   if (typeof profile.appVersion !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(profile.appVersion)) {
     problems.push({ field: 'appVersion', message: 'The version must look like 1.4.2 (numbers separated by dots).' })
   }
+  // Reported, not refused: the pin was read (see parseBuildProfile), and the file needs rewriting rather than
+  // rejecting. Silently dropping it was the defect; silently keeping it in the old shape would be untidy but harmless.
+  // Both are worse than a line that says which command fixes it.
   if (profile.prerequisites !== undefined) {
     if (!Array.isArray(profile.prerequisites)) {
       problems.push({ field: 'prerequisite', message: 'The release prerequisite record must be a list.' })
@@ -201,6 +204,16 @@ export function serverUrlProblem(value: string): string | null {
 }
 
 /** Parses a profile file, returning null for anything unusable rather than throwing at the vendor. */
+/**
+ * Reads the pre-list pin shape, so a profile written by an earlier commit keeps its digest.
+ *
+ * The alternative -- ignoring it -- is how a pinned release profile became a development build without a word. The
+ * warning is still emitted (see `parseBuildProfile`), so the file gets rewritten rather than lingering in the old shape.
+ */
+function migrateLegacyPin(legacy: unknown): unknown {
+  return legacy !== undefined ? [legacy] : undefined
+}
+
 export function parseBuildProfile(text: string): BuildProfile | null {
   let parsed: unknown
   try {
@@ -222,7 +235,12 @@ export function parseBuildProfile(text: string): BuildProfile | null {
   }
   // The release prerequisite pin, when the file carries one. Parsed explicitly rather than spread: a profile is a
   // document a vendor can edit, so an unknown field must not become a value the release trusts.
-  const pins = record.prerequisites
+  // The pre-list shape (`prerequisite`, singular). A profile written by an earlier commit carries a real pin under the
+  // old key, and until this migration existed `parseBuildProfile` dropped it: the profile still parsed, still looked
+  // pinned to a reader, and described a development build. `release:assemble` would then have reported "no pin" and
+  // told the operator to fetch one they already had. Reading it is cheap; refusing it would strand a checked-out
+  // release profile, and silently dropping it is the failure this whole module exists to prevent.
+  const pins = record.prerequisites ?? migrateLegacyPin(record.prerequisite)
   if (Array.isArray(pins)) {
     const parsed: BuildPrerequisitePin[] = []
     for (const entry of pins) {
@@ -247,6 +265,11 @@ export function parseBuildProfile(text: string): BuildProfile | null {
       }
     }
     if (parsed.length > 0) profile.prerequisites = parsed
+    if (record.prerequisites === undefined && record.prerequisite !== undefined) {
+      // Carried only so the validator can say which command rewrites the file. Not serialised: `ordered` is built from
+      // known fields, so this flag never reaches disk.
+      ;(profile as BuildProfile & { legacyPrerequisiteShape?: boolean }).legacyPrerequisiteShape = true
+    }
   }
   return buildProfileProblems(profile).length === 0 ? profile : null
 }
