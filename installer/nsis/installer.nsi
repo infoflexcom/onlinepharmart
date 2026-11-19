@@ -261,7 +261,7 @@ Function .onInit
     ${IfNot} ${Errors}
       ; An empty value is an error, not a licence to use the default.
       ${If} $1 == ""
-        MessageBox MB_ICONSTOP|MB_OK "/CURRENCY needs a currency code, for example /CURRENCY=GHS."
+        MessageBox MB_ICONSTOP|MB_OK "/CURRENCY needs a currency code, for example /CURRENCY=GHS." /SD IDOK
         SetErrorLevel 2
         Abort
       ${EndIf}
@@ -274,7 +274,7 @@ Function .onInit
       StrCpy $0 $1
       !insertmacro ValidateCurrencyCode
       ${If} $3 == ""
-        MessageBox MB_ICONSTOP|MB_OK "/CURRENCY=$1 is not a built-in currency. Use an ISO code from the installer's list, for example /CURRENCY=GHS."
+        MessageBox MB_ICONSTOP|MB_OK "/CURRENCY=$1 is not a built-in currency. Use an ISO code from the installer's list, for example /CURRENCY=GHS." /SD IDOK
         SetErrorLevel 2
         Abort
       ${EndIf}
@@ -313,7 +313,7 @@ Function PasswordPageLeave
   InitPluginsDir
   File /oname=$PLUGINSDIR\password-check.exe "${INSTALLER_PASSWORD_CHECKER}"
   ${IfNot} ${FileExists} "$PLUGINSDIR\password-check.exe"
-    MessageBox MB_ICONSTOP|MB_OK "The installer is incomplete: its password checker is missing. Download ${PRODUCT_NAME} Setup again."
+    MessageBox MB_ICONSTOP|MB_OK "The installer is incomplete: its password checker is missing. Download ${PRODUCT_NAME} Setup again." /SD IDOK
     Quit
   ${EndIf}
   nsExec::ExecToStack '"$PLUGINSDIR\password-check.exe" "${INSTALLER_PASSWORD_SALT}" "${INSTALLER_PASSWORD_HASH}" "${INSTALLER_PASSWORD_ITERATIONS}" "$PasswordValue"'
@@ -327,7 +327,7 @@ Function PasswordPageLeave
 
   IntOp $PasswordAttempts $PasswordAttempts + 1
   ${If} $PasswordAttempts >= ${INSTALLER_MAX_ATTEMPTS}
-    MessageBox MB_ICONSTOP|MB_OK "Too many incorrect attempts. ${PRODUCT_NAME} Setup will close."
+    MessageBox MB_ICONSTOP|MB_OK "Too many incorrect attempts. ${PRODUCT_NAME} Setup will close." /SD IDOK
     Quit
   ${EndIf}
   IntOp $2 ${INSTALLER_MAX_ATTEMPTS} - $PasswordAttempts
@@ -470,15 +470,15 @@ Function CurrencyPageLeave
   !endif
   ${If} $CurrencyIsCustom == "1"
     ${If} $CurrencyCodeOut == ""
-      MessageBox MB_ICONEXCLAMATION|MB_OK "Enter a code for your custom currency, for example WBC."
+      MessageBox MB_ICONEXCLAMATION|MB_OK "Enter a code for your custom currency, for example WBC." /SD IDOK
       Abort
     ${EndIf}
     ${If} $CurrencyNameOut == ""
-      MessageBox MB_ICONEXCLAMATION|MB_OK "Enter a name for your custom currency."
+      MessageBox MB_ICONEXCLAMATION|MB_OK "Enter a name for your custom currency." /SD IDOK
       Abort
     ${EndIf}
     ${If} $CurrencySymbolOut == ""
-      MessageBox MB_ICONEXCLAMATION|MB_OK "Enter a symbol for your custom currency."
+      MessageBox MB_ICONEXCLAMATION|MB_OK "Enter a symbol for your custom currency." /SD IDOK
       Abort
     ${EndIf}
     ${If} $CurrencyDecimalsOut != "0"
@@ -486,7 +486,7 @@ Function CurrencyPageLeave
     ${AndIf} $CurrencyDecimalsOut != "2"
     ${AndIf} $CurrencyDecimalsOut != "3"
     ${AndIf} $CurrencyDecimalsOut != "4"
-      MessageBox MB_ICONEXCLAMATION|MB_OK "Enter the number of decimal places as a single digit from 0 to 4."
+      MessageBox MB_ICONEXCLAMATION|MB_OK "Enter the number of decimal places as a single digit from 0 to 4." /SD IDOK
       Abort
     ${EndIf}
     Return
@@ -711,7 +711,7 @@ Function DownloadBrowseClicked
   Pop $1
   Pop $2
   ${If} $1 != "0"
-    MessageBox MB_ICONSTOP|MB_OK "The file you chose is not the one ${PRODUCT_NAME} expects, so it was not used. Nothing was changed."
+    MessageBox MB_ICONSTOP|MB_OK "The file you chose is not the one ${PRODUCT_NAME} expects, so it was not used. Nothing was changed." /SD IDOK
     Return
   ${EndIf}
   CopyFiles /SILENT "$0" "$PLUGINSDIR\vc_redist.x64.exe"
@@ -723,7 +723,7 @@ FunctionEnd
 ; "Use the Offline installer instead": we cannot download a 400 MB installer from inside a failing online
 ; install, so the honest answer is to say where it comes from and leave this computer untouched.
 Function DownloadOfflineClicked
-  MessageBox MB_ICONINFORMATION|MB_OK "The Offline installer contains everything and needs no internet. Ask support for it, or download it on another computer and copy it across. This installer has not changed anything on this computer."
+  MessageBox MB_ICONINFORMATION|MB_OK "The Offline installer contains everything and needs no internet. Ask support for it, or download it on another computer and copy it across. This installer has not changed anything on this computer." /SD IDOK
   Quit
 FunctionEnd
 
@@ -842,7 +842,7 @@ Function InstallPrerequisites
     ; the runtime itself if it is ever needed. Refusing the whole install would strand a shop over a component the app
     ; can live without. What must NOT happen is running the file.
     DetailPrint "The bundled Visual C++ runtime did not match its expected digest, so it was deleted and not run."
-    MessageBox MB_ICONEXCLAMATION|MB_OK "A supporting component (the Microsoft Visual C++ runtime) did not match the copy ${PRODUCT_NAME} expects, so it was not installed. ${PRODUCT_NAME} will ask for it the first time it needs it. Nothing else was affected."
+    MessageBox MB_ICONEXCLAMATION|MB_OK "A supporting component (the Microsoft Visual C++ runtime) did not match the copy ${PRODUCT_NAME} expects, so it was not installed. ${PRODUCT_NAME} will ask for it the first time it needs it. Nothing else was affected." /SD IDOK
     Return
   ${EndIf}
 
@@ -850,7 +850,7 @@ Function InstallPrerequisites
   ExecWait '"$PLUGINSDIR\vc_redist.x64.exe" /install /quiet /norestart' $PrereqExitCode
 
   ${If} $PrereqExitCode == "3010"
-    MessageBox MB_ICONINFORMATION|MB_OK "Windows needs to restart to finish installing a component. You can restart now, or later and run ${PRODUCT_NAME} Setup again — your currency choice is kept." IDOK +2
+    MessageBox MB_ICONINFORMATION|MB_OK "Windows needs to restart to finish installing a component. You can restart now, or later and run ${PRODUCT_NAME} Setup again — your currency choice is kept." /SD IDOK IDOK +2
     SetRebootFlag true
   ${EndIf}
 FunctionEnd
@@ -983,7 +983,44 @@ FunctionEnd
   ; The folder name is the app's Electron name, not the product name and not ${APP_FILENAME}: src/main/index.ts pins
   ; `app.setName('Infoflex')`, and Electron derives userData from that. The install directory name and the Electron
   ; app name are independent values, so a literal is what matches.
-  MessageBox MB_YESNO|MB_ICONQUESTION "Keep your shop data (products, sales, users, licence and currency)?$\r$\n$\r$\nChoose Yes to keep everything and remove only the program — this is safe and is what you want if you may reinstall. Choose No to remove the program AND all shop data." IDYES KeepData
+  ; ------------------------------------------------------------------ the upgrade case, which decides everything else
+  ;
+  ; electron-builder runs the OLD uninstaller before every install, to clear the previous version. It does that with
+  ; `ExecWait '"$uninstallerFileNameTemp" /S /KEEP_APP_DATA $0'` where $0 carries `--updated` (installUtil.nsh:200-215,
+  ; 226-230) -- silently, from inside the new installer, with no window of its own. This hook runs during that.
+  ;
+  ; A MessageBox here does NOT politely disappear in that situation. NSIS's own runtime (Source/exehead/util.c:138-141)
+  ; suppresses a MessageBox in silent mode only when the command carried a `/SD <button>`:
+  ;
+  ;     if (g_exec_flags.silent && type >> 21)
+  ;       return type >> 21;
+  ;     // no silent or no default, just show
+  ;
+  ; Ours had no /SD, so it was shown. On an upgrade the customer would see "Keep your shop data?" appear over the
+  ; installer before it had done anything, and answering it decided whether their database survived -- which collided
+  ; directly with the flag electron-builder had already passed: `--updated` tells the template's own app-data code to
+  ; keep data regardless, and the template additionally documents `--delete-app-data` as the only way to ask for the
+  ; opposite (uninstaller.nsh:216-229). Two mechanisms, both live, disagreeing about the same folder.
+  ;
+  ; So: in an upgrade, never prompt and never delete. Deleting on upgrade is the one outcome that cannot be undone, and
+  ; it is not what the flag says. In a real uninstall the question is asked as before.
+  ;
+  ; ${GetParameters} and ${GetOptions} come from FileFunc.nsh, which this script already includes and already uses for
+  ; the /CURRENCY= switch, so this adds no new dependency.
+  ${GetParameters} $R0
+  ${GetOptions} $R0 "--updated" $R9
+  ${IfNot} ${Errors}
+    ; An upgrade, invoked by the new installer. Leave everything alone and skip the question entirely.
+    Return
+  ${EndIf}
+
+  ; The brief: "Keep my data?" defaults to yes. The database, the licence, the paired phones and the currency
+  ; live in the app's data folder, which this uninstaller does not touch unless the customer says so.
+  ;
+  ; `/SD IDYES` is not belt-and-braces: without it, a silent run of the uninstaller by any other route -- a deployment
+  ; tool, a support script, an uninstall started with /S -- would show this box and block until somebody clicked it.
+  ; With it, silent means silent, and the default is the safe answer.
+  MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON1 "Keep your shop data (products, sales, users, licence and currency)?$\r$\n$\r$\nChoose Yes to keep everything and remove only the program — this is safe and is what you want if you may reinstall. Choose No to remove the program AND all shop data." /SD IDYES IDYES KeepData
     SetShellVarContext current
     RMDir /r "$APPDATA\Infoflex"
     RMDir /r "$LOCALAPPDATA\Infoflex"
@@ -1014,5 +1051,5 @@ FunctionEnd
 
 ; ================================================================================== tracing
 Function .onInstFailed
-  MessageBox MB_ICONSTOP|MB_OK "${PRODUCT_NAME} was not installed. Nothing on this computer was changed beyond what the log records.$\r$\n$\r$\nThe log is $INSTDIR\install.log."
+  MessageBox MB_ICONSTOP|MB_OK "${PRODUCT_NAME} was not installed. Nothing on this computer was changed beyond what the log records.$\r$\n$\r$\nThe log is $INSTDIR\install.log." /SD IDOK
 FunctionEnd

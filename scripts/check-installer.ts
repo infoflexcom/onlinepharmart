@@ -124,4 +124,4 @@ if (failures.length > 0) {
   process.exit(1)
 }
 console.log('\nInstaller sources are consistent. This is the STATIC check only -- it does not compile the script.')
-console.log('Run `npm run installer:compile` for that: it builds makensis from source and compiles both builds for real.')
+console.log('Run `npm run installer:compile` for that: it builds makensis from source and compiles all four builds for real.')

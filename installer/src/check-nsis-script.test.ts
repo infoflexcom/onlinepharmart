@@ -267,4 +267,25 @@ describe('the redefinition rule still catches a genuine duplicate', () => {
     ].join('\n')
     expect(checkNsisScript(script).filter((p) => /already declared/u.test(p.message))).toEqual([])
   })
+
+  it('reports a MessageBox with no /SD, which blocks a silent run', () => {
+    const script = [
+      'OutFile "x.exe"',
+      'Section',
+      '  MessageBox MB_ICONSTOP|MB_OK "Something went wrong."',
+      'SectionEnd',
+    ].join('\n')
+    const problems = checkNsisScript(script)
+    expect(problems.some((problem) => /no "\/SD/u.test(problem.message))).toBe(true)
+  })
+
+  it('accepts a MessageBox that names its silent default', () => {
+    const script = [
+      'OutFile "x.exe"',
+      'Section',
+      '  MessageBox MB_ICONSTOP|MB_OK "Something went wrong." /SD IDOK',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).filter((p) => /\/SD/u.test(p.message))).toEqual([])
+  })
 })

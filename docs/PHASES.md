@@ -829,6 +829,17 @@ the test rather than the Output screen.
   function declared twice within one script — the same mistake one level in, since the checker cannot see the template.
   None of this executes the uninstaller: there is no Windows or Wine here, so "the hooks compile in the layering
   electron-builder uses" is the claim, and `RELEASE-CHECKLIST.md` carries the rest as manual checks.
+- **Silent mode did not silence anything.** Thirteen `MessageBox` commands had no `/SD`, and NSIS only suppresses a box
+  in silent mode when one is given (`Source/exehead/util.c:138-141`: `if (g_exec_flags.silent && type >> 21)`). The
+  `.onInit` validation errors, the VC++ digest mismatch, the install-failed notice and the password-attempt limit would
+  all have appeared and blocked an unattended install. All thirteen now name a default — the safe one, not the
+  dismissable one — and the rule is enforced by `installer:check`, which rejects a script with a single `/SD` removed.
+- **The keep-my-data question ran during upgrades, where it could destroy data.** electron-builder runs the old
+  uninstaller before every install, silently, with `--updated`; `customUnInit` prompted anyway, and "No" deletes the
+  database, licence and paired phones. It also contradicted the flag the caller had passed, since `--updated` means keep
+  data and `--delete-app-data` is the only way to ask otherwise. The hook now checks `--updated` first and returns. The
+  ordering is the point — a check after a blocking dialog cannot prevent it — and the test compares offsets, so moving
+  the check below the prompt fails it.
 - **Still not proven:** that electron-builder's template agrees with our hooks, that the payload lands in the right
   place, or that anything behaves correctly on Windows.
 

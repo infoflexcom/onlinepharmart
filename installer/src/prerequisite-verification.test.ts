@@ -25,19 +25,31 @@ const SCRIPT = readFileSync('installer/nsis/installer.nsi', 'utf8')
 
 /** The body of a function, by name, without its trailing FunctionEnd. */
 function functionBody(name: string): string {
-  const start = SCRIPT.indexOf(`Function ${name}`)
+  const start = CODE.indexOf(`Function ${name}`)
   expect(start, `${name} is gone; this test is now checking nothing`).toBeGreaterThan(-1)
-  const end = SCRIPT.indexOf('FunctionEnd', start)
-  return SCRIPT.slice(start, end)
+  const end = CODE.indexOf('FunctionEnd', start)
+  return CODE.slice(start, end)
 }
+
+/**
+ * The script with its comment lines removed.
+ *
+ * Comments are stripped here for the same reason they are stripped in `uninstaller-contract.test.ts`: a test that
+ * matches text will match prose. This suite originally scanned the raw file, and a comment explaining electron-builder's
+ * own `ExecWait` of the previous uninstaller was reported as an unverified launch in `ConfigureStartup` -- a function
+ * that has nothing to do with it. A test satisfied by a comment is a test that proves nothing.
+ */
+const CODE = SCRIPT.split('\n')
+  .filter((line) => !line.trimStart().startsWith(';'))
+  .join('\n')
 
 /** Every executable path the script launches, with the function it is launched from. */
 function executedPrograms(): Array<{ fn: string; line: string }> {
   const found: Array<{ fn: string; line: string }> = []
   const functionPattern = /^Function (\w+)$/gmu
-  const starts = [...SCRIPT.matchAll(functionPattern)].map((match) => ({ name: match[1]!, index: match.index! }))
+  const starts = [...CODE.matchAll(functionPattern)].map((match) => ({ name: match[1]!, index: match.index! }))
   for (const [index, entry] of starts.entries()) {
-    const body = SCRIPT.slice(entry.index, starts[index + 1]?.index ?? SCRIPT.length)
+    const body = CODE.slice(entry.index, starts[index + 1]?.index ?? CODE.length)
     for (const match of body.matchAll(/^.*\b(?:ExecWait|nsExec::Exec(?:ToStack|ToLog)?)\b.*$/gmu)) {
       found.push({ fn: entry.name, line: match[0].trim() })
     }

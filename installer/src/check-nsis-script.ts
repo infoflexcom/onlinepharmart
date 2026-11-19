@@ -345,6 +345,26 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
     }
   }
 
+  // ---- a MessageBox that will block a silent run
+  //
+  // NSIS suppresses a MessageBox in silent mode only when the command carries `/SD <button>`; without one it shows the
+  // box and waits (Source/exehead/util.c:138-141 in NSIS's own runtime). That turns a silent install or a silent
+  // uninstall into a process hanging on a dialog nobody is watching -- an unattended deployment stalls, and during an
+  // upgrade the box appears over an installer the user did not ask a question of.
+  //
+  // This is a property of one line, which is exactly what a static checker is good at. It cannot know whether a given
+  // box is *reachable* in silent mode; the rule is deliberately unconditional because the safe answer is the same
+  // everywhere, and a conditional rule would need the checker to model control flow it does not have.
+  for (const [index, raw] of strip.entries()) {
+    const line = raw.trim()
+    if (!/^MessageBox\s/u.test(line)) continue
+    if (/\/SD\s+ID[A-Z]+/u.test(line)) continue
+    problems.push({
+      line: index + 1,
+      message: 'MessageBox has no "/SD <button>", so it will block a silent install or uninstall.',
+    })
+  }
+
   // ---- a function declared twice
   //
   // NSIS refuses the second definition outright -- `Function named "un.onInit" already exists` -- and it refuses it at

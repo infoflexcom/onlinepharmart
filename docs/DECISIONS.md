@@ -386,3 +386,73 @@ removed on a real machine, that `netsh` succeeds, that the registry value is the
 `SetShellVarContext current` resolves to the right user when the uninstaller is launched by an administrator whose
 account differs from the one that ran the app. Those remain release-time checks, and they are listed as such in
 `docs/RELEASE-CHECKLIST.md` — described as **compiled and inspected**, never as **run**.
+
+## Silence is a mode, not an absent window
+
+The uninstaller work above left the keep-my-data question sitting in `customUnInit`. That hook also runs during every
+**upgrade**: electron-builder executes the previous version's uninstaller before installing the new one, with
+`ExecWait '"$uninstallerFileNameTemp" /S /KEEP_APP_DATA $0'` where `$0` carries `--updated` — silently, from inside the
+new installer, with no window of its own. Asking the question there was wrong five ways, and only the first is obvious.
+
+**A `MessageBox` is not suppressed by silent mode unless it says so.** NSIS's runtime decides (`Source/exehead/util.c`):
+
+```
+if (g_exec_flags.silent && type >> 21)
+  return type >> 21;
+// no silent or no default, just show
+```
+
+`type >> 21` is the `/SD <button>` value, set at compile time from bit 21 of the command's flags. With no `/SD`, the
+shift yields 0, the condition fails, and the box is shown **even in a fully silent run**. Thirteen `MessageBox` commands
+in this script had no `/SD` — including the two `.onInit` validation errors, the VC++ digest-mismatch warning, the
+install-failed notice, and the "too many password attempts" message. Under `/S` each of those would have appeared and
+waited for a click that nobody was there to make: an unattended deployment, a support script or an upgrade would hang.
+Every one now names its default, and the choice of default is the safe answer rather than the dismissable one.
+
+**The upgrade question could have destroyed the shop's database.** Answering "No" to the prompt deletes the database,
+the licence and the paired phones. During an upgrade that prompt appeared *before* the new installer had done anything,
+and its answer silently overrode what the caller had already decided: `--updated` means keep the data, and
+`--delete-app-data` is the only documented way to ask for the opposite. Two mechanisms were live and disagreeing about
+the same folder, and the one the customer saw was the one that could lose their data. `customUnInit` now reads
+`--updated` first and returns before prompting or deleting.
+
+**Why the order of those two things matters more than either.** The check has to precede the prompt, because a check
+after a blocking dialog cannot prevent it. The test that pins this compares string offsets (`--updated` must appear
+before `MessageBox`, with a `Return` between them), and a mutation that moves the check below the prompt fails it — a
+mutation that merely deleted the check would have passed a weaker test.
+
+**Pinning it.** The `/SD` rule went into the static checker rather than only into a test, because it is a property of a
+single line, which is what a checker is for. Running it against the real script found the thirteen; running it against
+a script with one `/SD` removed fails `installer:check` on its own, without any test runner involved. The trade-off is
+stated in the rule: it cannot tell whether a given box is reachable in silent mode, so it is unconditional. A
+conditional rule would need control-flow modelling the checker does not have, and the safe answer is the same for every
+box anyway.
+
+**Not proven.** Whether these dialogs appear, and in what order, is a runtime property. Nothing here executed an
+installer or an uninstaller — there is still no Windows and no Wine — so the claim is that every `MessageBox` now
+carries a silent default in the compiled script, verified by reading NSIS's own runtime logic and by compiling. The
+upgrade sequence itself is read from `installUtil.nsh`, not observed.
+
+## The tests kept reading their own commentary
+
+Three separate times this phase, a test failed on a *comment* rather than on code. The pattern is worth naming because
+each instance was caught by a mutation rather than by the suite going red on its own:
+
+1. `blockOf` in `uninstaller-contract.test.ts` matched `SetShellVarContext current` inside the explanatory comment above
+   the line it was supposed to find. Deleting the actual instruction passed the test.
+2. The `/SD` rule counted the phrase "MessageBox ... `/SD`" in a comment as a compliant command.
+3. `prerequisite-verification.test.ts` scanned the raw script for `ExecWait`, and a comment quoting electron-builder's
+   `ExecWait '"$uninstallerFileNameTemp" /S /KEEP_APP_DATA $0'` was reported as an unverified launch in a function that
+   has nothing to do with it.
+
+The cause is the same each time: the assertion was written against source text, and prose in a source file is still
+source text. The fix is mechanical — strip comment lines before scanning, in every helper that reads the script — and it
+is now done in all three. The generalisation is the part worth keeping: **a test over a file's text must decide whether
+it is testing the text or the program**, and if the latter, comments have to go before the match. Case 3 is the most
+instructive, because the file was *right* and the comment was *new*: that test had been passing for two commits and only
+broke when a new comment explained something the test was already checking. A suite whose correctness depends on nobody
+writing prose is not a suite.
+
+Two things that did not come out of this, and are recorded so they are not claimed as wins: no test caught these on its
+own, and the docs-accuracy failure alongside them was real — `installUtil.nsh` was named in prose as a file, and that
+suite requires each such name to exist or to be listed with a reason. It was listed.

@@ -93,6 +93,43 @@ describe('the uninstaller hooks electron-builder actually calls', () => {
     expect(body).toMatch(/\$APPDATA\\Infoflex/u)
   })
 
+  it('never prompts during an upgrade, which electron-builder runs silently', () => {
+    // electron-builder runs the OLD uninstaller before every install, silently, passing --updated
+    // (installUtil.nsh:200-230). This hook runs during that. A MessageBox with no /SD is NOT suppressed in silent mode:
+    // NSIS returns the /SD button only when one was given, and otherwise shows the box (Source/exehead/util.c:138-141).
+    // So the keep-my-data question would have appeared over an upgrade, and the answer would have decided whether the
+    // customer's database survived -- while --updated says it must survive regardless.
+    const body = blockOf(script, 'customUnInit')
+    expect(body).not.toBe('')
+
+    const updatedCheck = body.indexOf('--updated')
+    expect(updatedCheck).toBeGreaterThanOrEqual(0)
+
+    const messageBoxIndex = body.indexOf('MessageBox')
+    expect(messageBoxIndex).toBeGreaterThanOrEqual(0)
+
+    // The upgrade test must come FIRST: a check after the prompt cannot prevent the prompt.
+    expect(updatedCheck).toBeLessThan(messageBoxIndex)
+
+    // And the upgrade path must abandon the hook outright, not fall through to the deletion.
+    const between = body.slice(updatedCheck, messageBoxIndex)
+    expect(between).toMatch(/Return/u)
+  })
+
+  it('gives every MessageBox a /SD so a silent uninstall cannot block on it', () => {
+    // Without /SD, NSIS shows the box even in silent mode -- a deployment tool or support script would hang until
+    // somebody clicked it. Pinned as a rule over the whole file, not just this hook, because the same mistake in the
+    // installer's own pages blocks an unattended install for the same reason.
+    const code = script
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith(';'))
+      .join('\n')
+    const messageBoxes = [...code.matchAll(/MessageBox\s+[^\n]*/gu)].map((match) => match[0])
+    expect(messageBoxes.length).toBeGreaterThan(0)
+    const withoutDefault = messageBoxes.filter((line) => !/\/SD\s+ID/u.test(line))
+    expect(withoutDefault, 'these MessageBoxes have no /SD and will block a silent run').toEqual([])
+  })
+
   it('removes the install-config.json the installer wrote to ProgramData', () => {
     const body = blockOf(script, 'customUnInstall')
     expect(body).not.toBe('')

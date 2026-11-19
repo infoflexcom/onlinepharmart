@@ -109,6 +109,30 @@ Do this on a machine you can throw away, after a full install with mobile access
 6. Install, then uninstall **without** ever completing first-run setup.
    - Expected: `%APPDATA%\Infoflex\` may not exist at all; the uninstaller must not fail on its absence.
 
+### 1.5 Silent install, silent uninstall, and an upgrade
+
+These are the paths an unattended deployment takes, and none of them can be exercised here. A `MessageBox` with no
+`/SD` is shown even under `/S`, so the failure mode is a process that waits forever rather than one that errors — check
+for a hang, not for a message.
+
+1. Install silently from an administrator prompt:
+   `"Infoflex Setup.exe" /S`
+   - Expected: it completes with no window at all and no visible dialog. Time it; record how long.
+2. Uninstall silently via `"%PROGRAMFILES%\Infoflex\Uninstall Infoflex.exe" /S`.
+   - Expected: completes without a dialog, and keeps your data (silent means no question, and the safe default is "keep").
+3. **The upgrade test, which is the one that matters.** Install the previous build, complete first-run setup and add a
+   product. Then install the new build over it, interactively.
+   - Expected: the installer does **not** ask "Keep your shop data?" — the old uninstaller runs silently underneath it,
+     and a question there would be about data the upgrade must keep.
+   - Expected after the upgrade: your products are still there and the app opens without first-run setup.
+   - Record what happens if you answer **No** at such a prompt, if you see one. That delete is unrecoverable, and seeing
+     it at all means the `--updated` guard is not working.
+4. Repeat step 3 but start the new installer from a command line with `/S`.
+   - Expected: same outcome, no dialog, data intact.
+5. Cancel an upgrade by running the new installer and answering "No" to "are you sure you want to cancel?" if offered.
+   - Expected: the old version is still installed and working. An upgrade that removes the old version before it has
+     installed the new one leaves the machine with neither.
+
 ### Gate 1 record
 
 | Check | Result | Notes / exact message |
@@ -124,6 +148,10 @@ Do this on a machine you can throw away, after a full install with mobile access
 | Uninstall removes `install-config.json` from ProgramData | ☐ pass ☐ fail | |
 | "Remove everything" really removes `%APPDATA%\Infoflex` | ☐ pass ☐ fail | |
 | Uninstall as a different admin still removes machine-wide items | ☐ pass ☐ fail | |
+| Silent install `/S` completes with no dialog | ☐ pass ☐ fail | |
+| Silent uninstall `/S` completes with no dialog, keeps data | ☐ pass ☐ fail | |
+| Upgrade does NOT ask the keep-data question | ☐ pass ☐ fail | |
+| Upgrade preserves products and skips first-run setup | ☐ pass ☐ fail | |
 
 ---
 

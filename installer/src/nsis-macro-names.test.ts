@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs'
  *     `installer:check`; a typo in the *allowlist* is caught here.
  *  2. The names that were wrong are named explicitly, so nobody re-adds them from memory a second time.
  *
- * `npm run installer:compile` is the real proof: it compiles both builds with a real makensis. This test is the fast
+ * `npm run installer:compile` is the real proof: it compiles all four builds with a real makensis. This test is the fast
  * guard that runs in the ordinary suite, where makensis is not available.
  */
 
