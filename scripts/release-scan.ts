@@ -35,7 +35,11 @@ const SKIP = new Set(['node_modules', '.git', '.cache', '.local', 'coverage'])
 
 /** Where to look: the source tree, the builds, the packaging output. */
 const ROOTS = ['src', 'installer', 'buildstudio', 'cloud', 'mobile', 'scripts', 'docs', 'buildstudio/out',
-  'dist/cloud', 'release', 'tools', 'cloud-package', 'electron.vite.config.ts', 'package.json', 'README.md']
+  'dist/cloud', 'release', 'tools', 'cloud-package', 'electron.vite.config.ts', 'package.json', 'README.md',
+  // The compiled application bundle. This is what actually ships inside the installer, so it is the single most
+  // important place to look -- and it was missing from this list until the scan was reviewed against the brief, which
+  // asks specifically for the unpacked builds. A secret in the bundle is a secret in every customer's installation.
+  'out', 'dist']
 
 /**
  * Whether a file is text, decided by looking at it rather than by trusting its extension.

@@ -503,7 +503,10 @@ things it had been missing:
 | `npm run check:phase11` | All of the above in sequence, including the cloud and PHP suites. |
 | `npm run check:phase12` | All of the above in sequence (current phase bundle). |
 | `npm run check:phase13` | All of the above, plus generating the installer includes and running `installer:check`. |
-| `npm run check:phase14` | Typecheck, the whole suite, and bundling the Build Studio window (current phase bundle). |
+| `npm run check:phase14` | Typecheck, the whole suite, and bundling the Build Studio window. |
+| `npm run check:phase15` | Everything, plus the secret scan and assembling `/release`, `/tools` and `/cloud-package` (current phase bundle). |
+| `npm run release:scan` | Searches source, builds, cloud package and installer sources for the master password (plain, base64, hex, punctuation-stripped) and for private-key material. **Plants both first and refuses to report unless it finds them**, so a clean result means something. |
+| `npm run release:assemble` | Copies the deliverables into `release/`, `tools/` and `cloud-package/`, writes `release/SHA256SUMS.txt`, and names every missing artefact with its reason in the release manifest. |
 | `npm run studio` | Bundles and starts Build Studio. **Needs a display and an Electron runtime that can open a window.** |
 | `npm run dist:studio` | Packages Build Studio for Windows. **Needs Windows; fails in this environment.** |
 | `npm run cloud:package` | Writes `dist/cloud/infoflex-vendor-cloud.zip` — the cloud source, docs and PHP build, with no `.env` or key inside. |
@@ -761,3 +764,27 @@ the test rather than the Output screen.
 - **No prerequisite was downloaded or installed for real**, and no Authenticode check ran against a real file.
 - **The seven screens have never been looked at.** Layout, contrast, tab order and control sizes are unjudged by
   human eyes; `docs/RELEASE-CHECKLIST.md` Gate 6 is the script for that.
+
+## Phase 15 — packaging, documentation and the release
+
+- **Three installers defects were found and none by a test.** Both electron-builder configs were schema-invalid (a
+  `//` comment key, and `defines`, which is not an NSIS option), so **neither installer could ever have been built**.
+  And `installer.nsi` was never wired in as `nsis.include`: electron-builder would have compiled its own stock wizard,
+  and the standalone script created shortcuts and a firewall rule without installing the application. `installer:check`
+  passed before and after all three. The config side now has its own test and the checker has a rule against
+  `Section "Install"`.
+- **No `.exe` exists.** electron-builder cannot fetch the Windows Electron runtime (TLS interception;
+  `objects.githubusercontent.com` unreachable), `makensis` cannot be installed without root, and there is no Wine. The
+  release folders and the manifest record exactly what is missing and why, and carry the NSIS sources and the Build
+  Studio bundle so a Windows machine can rebuild the three executables.
+- **Nothing ran on Windows, on a phone, or on a printer.** The Phase 15 end-to-end walk-through was not performed: its
+  first step needs an installer that cannot be produced here. `docs/RELEASE-CHECKLIST.md` is the script for whoever can
+  run it.
+- **The silent `/CURRENCY` check covered 9 of 54 currencies.** Fixed by generating it from the catalogue, with a test
+  per currency.
+- **The secret scanner was wrong in four ways, each looking like a clean pass.** It now proves itself by planting both
+  secrets before every run; ten tests pin each leak form and each false positive. `npm run release:scan` reports
+  **clean across 756 files**.
+- **Three documentation claims were wrong and were corrected against the code:** the vendor guide said an unknown
+  `/CURRENCY` falls back to the default (it aborts with exit code 2); the backup retention and the licence grace period
+  were checked rather than assumed.
