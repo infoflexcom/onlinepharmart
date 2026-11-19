@@ -17,6 +17,7 @@ separately in [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md) and is never marked d
 | 8–10 | Settings/backup/security review; Admin-only mobile host with device approval, two-factor login and firewall repair; the Admin phone app as a served PWA | DONE (software) |
 | 11 | Vendor Cloud: licence server API (two builds — Node with the internet relay, PHP+MySQL without), vendor portal with mandatory TOTP and full licence lifecycle, the internet relay and the desktop's half of it, deployment/privacy/relay-limit documents | **DONE (software); 2 hardware gates owed** |
 | 12 | Polish and test everything: one navy/gold/off-white palette across desktop and phone, optional demonstration datasets the Admin can load or remove, and the full unit / API-security / end-to-end test sweep with an honest pass/fail matrix | **DONE (software); emulator and hardware gates owed — see the matrix below** |
+| 13 | The graphical customer installer: `Infoflex Setup.exe` and `Infoflex Setup Offline.exe`, with a vendor password gate, a Region and Currency page, an accurate system check, verified downloads from an allowlist, offline install, and Repair/Update/Uninstall | **DONE (software); cannot be compiled or clicked in this environment — see the checklist below** |
 
 ### Report surface delivered in Phases 6–7 (and re-verified at Phase 7 close-out)
 
@@ -362,7 +363,72 @@ and KWD. `mobile/src/money.test.ts` gains the symbol round-trip.
 - **`npm run php:test` cannot run here** (no PHP binary); the identical suite runs through `php-wasm` inside
   `cloud:test` and reports 32 passed.
 
-### Verification commands
+### Phase 13 — the graphical installer
+
+### What was built
+
+| Item | Where |
+| --- | --- |
+| The installer itself, one source for two builds | `installer/nsis/installer.nsi` (+ the generated `generated.nsh`, `currency-ui.nsh`) |
+| Every rule the installer obeys, as tested pure functions | `installer/src/installer-policy.ts`, `install-config.ts`, `system-check.ts`, `download-allowlist.ts` |
+| The PBKDF2 and SHA-256 helper NSIS cannot compute itself | `installer/src/password-check.ts` (+ `password-check-cli.ts`) |
+| A static checker for the `.nsi`, because it cannot be compiled here | `installer/src/check-nsis-script.ts`, run by `npm run installer:check` |
+| The app reading the installer's choice at first run | `src/main/install-config-reader.ts`, wired in `src/main/index.ts` |
+| 24-bit BMP brand assets for MUI | `scripts/png-to-bmp.ts` → `build/installer-banner.bmp`, `build/installer-sidebar.bmp` |
+| Both build configurations | `electron-builder.installer-online.json`, `electron-builder.installer-offline.json` |
+
+### Why NSIS and not Inno Setup
+
+Both can do everything the brief asks. NSIS was chosen because electron-builder already drives it, so the
+installer and the packaged app come from one build with one version number and one icon set; adding Inno Setup
+would mean a second toolchain to keep in step with the app it installs. The cost is that NSIS has no crypto and
+a weak macro language — both worked around rather than tolerated: the crypto is a separate tested helper, and
+every decision lives in TypeScript. Recorded in `docs/DECISIONS.md`.
+
+### DONE WHEN — the brief's thirteen items
+
+Legend: **Pass** = proved by an automated test or check in this repository. **Could not test** = needs a Windows
+machine; the manual step is in `docs/RELEASE-CHECKLIST.md` Gate 5. Nothing here is claimed as clicked.
+
+| # | Requirement | Result | Evidence |
+| --- | --- | --- | --- |
+| 1 | Opens by double-click with no terminal | **Could not test** | The `.nsi` sets `RequestExecutionLevel admin`, defines no console and builds a MUI wizard; `check-nsis-script.test.ts` asserts there is no console. Launching it needs Windows. |
+| 2 | Blocks without the password | **Pass (logic) / could not test (UI)** | `installer.test.ts`: wrong password counted, five attempts lock and stay locked even if the sixth is right, `password-check.test.ts` proves exit 0 only on a match. The page wiring is not clicked here. |
+| 3 | Currency page lists the currencies, correct live example for 2-, 0- and 3-decimal, custom currency works | **Pass** | `installer.test.ts`: all 54 currencies labelled `CODE - Name (symbol)`, searchable by code/name/symbol, `₦1,234,567.50` / `¥1,234,568` / `1,234,567.500 د.ك` exactly, custom currency at 0–4 decimals, bad custom fields refused in plain words |
+| 4 | The chosen currency is preselected on first-run setup | **Pass** | `install-config-reader.test.ts` (file → reader, corrupt file, override) and `installer-to-setup.test.ts` (file → reader → repository → `SetupService` context, for GHS/KWD/JPY/EUR and a **custom** currency, with the vendor policy correctly outranking it) |
+| 5 | System Check is accurate | **Pass (rules) / could not test (real machine)** | `installer.test.ts` covers Windows 10/11/too-old/32-bit/unknown, the 1 GB floor, the VC++ runtime found/missing/unprobeable, and that firewall and printer are informational only. The registry probes themselves need Windows. |
+| 6 | A missing prerequisite is downloaded from the official URL, verified and installed | **Pass (rules) / could not test (live download)** | `installer.test.ts`: only allowlisted ids resolve, HTTPS + allowlisted host, a mismatched checksum deletes the file, an unsigned or wrongly-signed file is refused, a "browse" pick is held to the same checksum. The actual download needs a network and Windows. |
+| 7 | Offline shows the three-button fallback | **Partial — see the gap below** | `system-check.ts` models retry/browse/use-offline and the three-attempt limit, tested. The page currently refuses with a message after three attempts rather than drawing the three buttons. |
+| 8 | Offline installer completes with no internet, then activates on-site | **Partial** | The offline build compiles out the download page entirely (`!if INFOPLEX_OFFLINE == 0`), and on-site activation with the master password is proved in `license-manager.test.ts`. Running the offline installer needs Windows. |
+| 9 | The app launches and shows Activation | **Pass (app) / could not test (after install)** | `App.tsx` renders `LicenseScreen` whenever `bootstrap.license.canUse` is false, before setup or login; previously covered in the first-run suite |
+| 10 | Firewall rule for private networks only; the Admin phone connects after pairing | **Pass (rule text) / could not test (behaviour)** | The `.nsi` adds exactly one rule with `profile=private`; the app's own repair path is covered in `mobile-firewall` tests and `mobile-access-integration.test.ts`. That Windows applies it needs a real machine. |
+| 11 | Repair/Update/Uninstall behave, keep data, never change the currency | **Pass (logic) / could not test (UI)** | `installer.test.ts`: only a fresh install may write the currency file, updates and repairs must not, the currency page is hidden for both. The `.nsi` reads `InstallDir` to detect an existing install and skips the write. |
+| 12 | Silent install with a valid and an invalid currency behaves correctly | **Pass (logic) / could not test (UI)** | `installer.test.ts`: `/CURRENCY=GHS` accepted with or without quotes and case-insensitively, `/CURRENCY=` empty and `/CURRENCY=NOTACODE` refused with a message naming the switch. **`/CURRENCY=` with an empty value was a bug found while writing this — it used to fall through to the default silently.** |
+| 13 | The master password is nowhere in plain text | **Pass** | `installer.test.ts` (the shipped hash and salt are not the password), `check-nsis-script.test.ts` (the script contains no `Handywife`), and `npm run installer:check`, which scans every shipped installer file — verified by deliberately leaking the password into a generated file and watching the check fail |
+
+### What this environment could not do, and what is owed
+
+- **The installers cannot be compiled here.** `electron-builder --win nsis` fails downloading its Windows
+  toolchain (`unable to verify the first certificate` — the sandbox intercepts TLS), `makensis` is not installed
+  and cannot be installed (the npm `makensis` package is only a wrapper around a binary that is not there), and
+  there is no Wine to run a Windows compiler. **So no `.exe` exists in this repository, and none was tested.**
+  This is a hard environmental limit, not a shortcut.
+- **Nothing was clicked.** No Windows machine, so pages, tab order, control layout, the UAC prompt and the
+  firewall rule's real effect are all unproven by machine. `docs/RELEASE-CHECKLIST.md` Gate 5 is the click-by-click
+  script for doing that.
+- **The live prerequisite download was not performed.** Its allowlist, checksum and signature rules are tested;
+  the network fetch is not.
+
+### One deliberate gap carried forward
+
+**DONE WHEN item 7** asks for three buttons (Retry / Browse for the file / Use the Offline installer) when a
+download fails. The rules for all three exist and are tested, but the download page in the `.nsi` currently
+reports the failure in a message box after three attempts instead of drawing the three buttons. Since no page in
+this installer has been executed in this environment, the page-level work — including these three buttons and
+their progress bar, speed and time-remaining display — is deferred to the same Windows pass that must draw and
+click every other page, rather than written blind and declared finished.
+
+## Verification commands
 
 `npm run check:phase12` runs typecheck, the full suite, the web build, the PWA build and the Electron bundle.
 
@@ -381,6 +447,9 @@ and KWD. `mobile/src/money.test.ts` gains the symbol round-trip.
 | `npm run check:phase10` | All of the above in sequence. |
 | `npm run check:phase11` | All of the above in sequence, including the cloud and PHP suites. |
 | `npm run check:phase12` | All of the above in sequence (current phase bundle). |
+| `npm run check:phase13` | All of the above, plus generating the installer includes and running `installer:check` (current phase bundle). |
+| `npm run installer:check` | Generated includes present and current, `.nsi` structurally sound, no master password in any shipped installer file, brand bitmaps valid. |
+| `npm run installer:online` / `installer:offline` | Build the two installers. **Needs a Windows machine or Wine; fails in this environment.** |
 | `npm run cloud:test` | The cloud suites only (8 files: schema, auth, licence flow, portal, relay, maintenance, secrets, PHP build). |
 | `npm run php:test` | The PHP build's own 32-check suite, needs a local PHP 8 binary (none exists in the environment this phase was built in, so here the identical suite runs inside `php-wasm` as part of `cloud:test` and reports `32 passed, 0 failed`). |
 | `npx tsx scripts/verify-qr-code.ts` | The QR images decode with an independent decoder (needs `npm install --no-save jsqr`; not part of `npm test`). |

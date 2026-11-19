@@ -243,11 +243,29 @@ export class SQLiteShopRepository implements ShopRepository {
     return row.currency_locked_by_vendor === 1
   }
 
-  setInstallerCurrencyCode(code: string): void {
-    if (typeof code !== 'string') throw new Error('Installer currency must be a supported built-in currency.')
-    const currency = getCurrency(code.trim().toUpperCase())
-    if (!currency) throw new Error('Installer currency must be a supported built-in currency.')
-    this.database.prepare('UPDATE settings SET installer_currency_code = ? WHERE id = 1').run(currency.code)
+  /**
+   * Records the currency the installer's Region and Currency page wrote.
+   *
+   * A built-in ISO currency is stored by code. A **custom** currency cannot be: it exists only in the installer's
+   * file, so it must be registered in the currency table here or the setup screen would have no definition to
+   * show and a shop that chose its own money would silently fall back to the default. That was a real gap — the
+   * installer offers "Custom currency..." and the app used to drop it at first run.
+   */
+  setInstallerCurrencyCode(code: string, custom?: CurrencyDefinition | null): void {
+    if (typeof code !== 'string') throw new Error('Installer currency must be a supported currency.')
+    const trimmed = code.trim().toUpperCase()
+    const builtIn = getCurrency(trimmed)
+    if (builtIn) {
+      this.database.prepare('UPDATE settings SET installer_currency_code = ? WHERE id = 1').run(builtIn.code)
+      return
+    }
+    if (custom && custom.code.trim().toUpperCase() === trimmed) {
+      // `ensureCurrency` validates the definition with the same rules the setup screen uses, then registers it.
+      this.ensureCurrency(custom)
+      this.database.prepare('UPDATE settings SET installer_currency_code = ? WHERE id = 1').run(trimmed)
+      return
+    }
+    throw new Error('Installer currency must be a supported built-in currency or a complete custom currency.')
   }
 
   getCurrencyDefinition(code: string): CurrencyDefinition | null {

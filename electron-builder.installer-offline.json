@@ -1,0 +1,28 @@
+{
+  "extends": null,
+  "appId": "com.infoflex.pharmart",
+  "productName": "Infoflex",
+  "npmRebuild": false,
+  "asarUnpack": ["**/*.node"],
+  "files": ["out/**/*", "package.json", "installer/nsis/generated.nsh", "installer/nsis/currency-ui.nsh"],
+  "directories": { "buildResources": "build", "output": "dist/offline" },
+  "win": {
+    "icon": "build/icon.ico",
+    "target": [{ "target": "nsis", "arch": ["x64"] }]
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": true,
+    "allowElevation": true,
+    "include": "installer/nsis/installer.nsi",
+    "installerIcon": "build/icon.ico",
+    "installerHeader": "build/installer-banner.bmp",
+    "installerSidebar": "build/installer-sidebar.bmp",
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Infoflex",
+    "artifactName": "Infoflex Setup Offline.${ext}",
+    "defines": { "INFOPLEX_OFFLINE": "1" }
+  }
+}

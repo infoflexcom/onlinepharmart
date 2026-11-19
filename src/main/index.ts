@@ -30,6 +30,7 @@ import { createWindowsFirewallProbe } from './mobile-firewall'
 import { KeepRunningController } from './keep-running'
 import { verifyPassword } from './password-verifier'
 import { friendlyHostName } from '../shared/mobile/host-name'
+import { resolveInstallerCurrency } from './install-config-reader'
 
 const DEFAULT_APP_NAME = 'Infoflex'
 app.setName(DEFAULT_APP_NAME)
@@ -146,12 +147,19 @@ app.whenReady().then(async () => {
   databasePath = join(app.getPath('userData'), 'infoflex.sqlite')
   const database = openShopDatabase(databasePath)
   repository = new SQLiteShopRepository(database, false)
-  const installerCurrencyCode = process.env.INFOFLEX_INSTALLER_CURRENCY?.trim()
-  if (installerCurrencyCode) {
+  // The installer's Region and Currency page wrote its answer to ProgramData; this is where the app picks it up
+  // so the setup screen arrives with the customer's own currency already selected. An explicit environment
+  // variable still wins, for vendor testing and for a support call that has to pin a currency.
+  const installerChoice = resolveInstallerCurrency({
+    environmentOverride: process.env.INFOFLEX_INSTALLER_CURRENCY ?? null,
+    programData: process.env.ProgramData ?? process.env.PROGRAMDATA ?? null,
+  })
+  if (installerChoice.problem) console.warn(installerChoice.problem)
+  if (installerChoice.code) {
     try {
-      repository.setInstallerCurrencyCode(installerCurrencyCode)
+      repository.setInstallerCurrencyCode(installerChoice.code, installerChoice.customCurrency)
     } catch {
-      console.warn('Ignoring unsupported INFOFLEX_INSTALLER_CURRENCY preselection.')
+      console.warn(`Ignoring unsupported installer currency preselecton "${installerChoice.code}".`)
     }
   }
   const userRepository = new SQLiteUserRepository(database)

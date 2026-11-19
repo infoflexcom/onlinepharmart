@@ -463,3 +463,39 @@ rather than "done".
 - [ ] Run the PWA in a Playwright iPhone 14 profile and an Android Pixel 7 profile against a real listener; pair, sign in, read a report, adjust stock, approve a request, and confirm the layout does not scroll sideways and the touch targets are at least 44 px.
 - [ ] On a physical iPhone and a physical Android phone, install the PWA from the browser prompt, confirm the splash, use the camera to scan a barcode, and print a receipt through the share sheet.
 - [ ] These overlap with Gates 1–4 above; do not close a gate twice or claim one from a desktop-only check.
+
+## Phase 13 — the installer on a clean Windows machine (Gate 5)
+
+`npm run check:phase13` proves the installer's rules, its generated data, its structure and that no master
+password is compiled into it. It cannot produce a `.exe`: the Windows toolchain cannot be downloaded in the build
+environment (TLS interception), `makensis` is not installed, and there is no Wine. **So no installer binary has
+been built or run.** The items below are that missing half, in the order a person would meet them.
+
+### Build, once, on a Windows build machine
+- [ ] On Windows with Node 20+, run `npm run installer:online` and `npm run installer:offline`. Both must finish and leave `dist/online/Infoflex Setup.exe` and `dist/offline/Infoflex Setup Offline.exe`.
+- [ ] Pin the prerequisite checksum first: replace the all-zero `sha256` in `installer/src/download-allowlist.ts` with the digest of the exact VC++ redistributable being shipped, and rebuild. (**With the zeros in place the download verification fails by design** — that is the safe direction, and the offline build does not care because it carries the file.)
+- [ ] Optional: code-sign both executables. The build must also work unsigned.
+
+### On a clean Windows 10 VM, then a clean Windows 11 VM
+- [ ] Double-click `Infoflex Setup.exe`. It must open a wizard window with the Infoflex banner and sidebar, show a UAC prompt, and **never** open a console window. (DONE WHEN 1)
+- [ ] Click Next. The password page must refuse an empty and a wrong password, count down the remaining attempts, and close the installer on the fifth wrong attempt. Enter the vendor password: Next must enable. (DONE WHEN 2)
+- [ ] On the currency page, confirm the list shows every built-in currency as "NGN - Nigerian naira (₦)", that it defaults to Naira, that typing searches by code, name and symbol, and that the example line reads `₦1,234,567.50`. Select **JPY** and confirm `¥1,234,568`; select **KWD** and confirm `1,234,567.500 د.ك`. (DONE WHEN 3)
+- [ ] Open **Custom currency...**, enter a code, name, symbol and 3 decimals, and confirm the example updates and the wizard accepts it. Try to leave the page with an empty name and confirm it refuses with a plain sentence. (DONE WHEN 3)
+- [ ] On the system check, compare every row against the machine: Windows version, free space, the VC++ runtime (uninstall it first to see the orange arrow), firewall and printer as information only. A 32-bit VM must be refused outright. (DONE WHEN 5)
+- [ ] With the VC++ runtime uninstalled and the network **on**, complete the download page: progress, then a verified file, then the runtime installed. Then do it again with the network **off** and confirm the failure is explained in plain words and the file is deleted. (DONE WHEN 6, 7)
+- [ ] Install. On the finish page confirm the currency summary, the launch checkbox and the log link. Confirm a Start Menu entry, a desktop shortcut and an entry in **Apps & features**. (DONE WHEN 1)
+- [ ] Launch the app. It must open on **Activation** with the store name blank, and the first-run setup screen must arrive with the installer's currency already selected — including for the **custom** currency. (DONE WHEN 4, 9)
+- [ ] In `%ProgramData%\Infoflex\install-config.json`, confirm it holds the currency and no secret of any kind.
+- [ ] With the firewall rule ticked, open Windows Firewall → Inbound Rules and confirm exactly one `Infoflex Mobile Access` rule, **Private** profile only, TCP, and that the Admin's phone can reach the PC after pairing. Switch the network to Public and confirm the phone is blocked. (DONE WHEN 10)
+- [ ] Run the installer again over the installed copy: it must offer Repair/Update, skip the currency page, and **leave the currency and the database untouched**. Confirm `install-config.json`'s timestamp has not changed. Then Uninstall, answer "Keep my data" with Yes, and confirm the app data survives and reinstalling finds it. (DONE WHEN 11)
+- [ ] Reinstall and uninstall answering No, and confirm the data is removed.
+- [ ] From an elevated prompt — for this vendor test only — run `"Infoflex Setup.exe" /S /CURRENCY=GHS` on a clean VM and confirm the app opens with Ghana cedi preselected. Then run it with `/S /CURRENCY=NOTACODE` and confirm the install **fails with a message naming the switch** rather than installing Naira. (DONE WHEN 12)
+
+### The offline installer, on a machine with no internet at all
+- [ ] Disable the network adapter. Run `Infoflex Setup Offline.exe`. It must never attempt a connection, must not show the download page, must install the VC++ runtime from its own payload if it is missing, and must complete to the finish page. (DONE WHEN 8)
+- [ ] Launch the app, activate **on-site** with the vendor master password, confirm the licence is created with no internet, and confirm the currency chosen at install is still the one in use. (DONE WHEN 8)
+- [ ] Unplug the network again and confirm the app keeps working for local sales.
+
+### Two things this checklist is watching for
+- [ ] **The three-button download fallback.** Pull the network during the download, exhaust the three retries, and record what the wizard shows. The brief asks for Retry / Browse for the file / Use the Offline installer; the current page explains the failure in a message box instead. If the buttons are not there, that is the known gap recorded in `docs/PHASES.md`, not a surprise.
+- [ ] **Anything that needs the mouse.** The rules are tested; the layout, tab order and control sizes have never been looked at by a person in this project. Record anything awkward.

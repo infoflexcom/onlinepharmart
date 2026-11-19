@@ -26,12 +26,18 @@
     "check:phase9": "npm run typecheck && npm test && npm run build:web && npm run build:mobile && npm run build",
     "check:phase10": "npm run typecheck && npm test && npm run build:web && npm run build:mobile && npm run build",
     "check:phase11": "npm run typecheck && npm test && npm run build:web && npm run build:mobile && npm run build",
-  "check:phase12": "npm run typecheck && npm test && npm run build:web && npm run build:mobile && npm run build",
+    "check:phase12": "npm run typecheck && npm test && npm run build:web && npm run build:mobile && npm run build",
     "cloud:dev": "tsx cloud/src/server.ts",
     "cloud:test": "vitest run --config vitest.config.ts cloud/tests",
     "php:test": "php cloud/php/tests/run.php",
     "cloud:mock": "tsx cloud/mock/server.ts",
-    "dist:win": "npm run build:mobile && electron-vite build && electron-builder --win nsis"
+    "dist:win": "npm run build:mobile && electron-vite build && electron-builder --win nsis",
+    "installer:script": "tsx scripts/installer-script.ts",
+    "installer:assets": "tsx scripts/png-to-bmp.ts",
+    "installer:check": "tsx scripts/check-installer.ts",
+    "installer:online": "npm run installer:script && npm run installer:assets && electron-builder --win nsis --config electron-builder.installer-online.json",
+    "installer:offline": "npm run installer:script && npm run installer:assets && electron-builder --win nsis --config electron-builder.installer-offline.json",
+    "check:phase13": "npm run typecheck && npm test && npm run installer:script && npm run installer:check && npm run build:web && npm run build:mobile && npm run build"
   },
   "dependencies": {
     "@fastify/websocket": "^11.3.7",
@@ -102,13 +108,22 @@
     },
     "nsis": {
       "oneClick": false,
-      "installerHeader": "build/installer-banner.png",
-      "installerSidebar": "build/installer-sidebar.png",
-      "uninstallerSidebar": "build/installer-sidebar.png",
+      "perMachine": true,
+      "allowElevation": true,
+      "include": "installer/nsis/installer.nsi",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "installerHeader": "build/installer-banner.bmp",
+      "installerSidebar": "build/installer-sidebar.bmp",
+      "uninstallerSidebar": "build/installer-sidebar.bmp",
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Infoflex"
+      "shortcutName": "Infoflex",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "artifactName": "Infoflex Setup.${ext}"
     }
   }
 }
