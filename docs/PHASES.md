@@ -625,6 +625,26 @@ that button. The page is copied beside the window by `build:studio`. It opens in
 than an in-app view: the page handles the master password, and a local file with no preload and no Node is the safest
 place for that.
 
+### Documentation checked against the tree, because prose is not compiled
+
+The lost policy exporter and a wrong migration name in `docs/SCHEMA.md` were the same failure: a document describing
+something the code did not have, with nothing able to notice. So `docs/docs-accuracy.test.ts` (5) now checks the
+facts a reader acts on:
+
+- **every file path in the docs** exists in the tree, or is a file a build/tool produces at runtime (`install-config.json`,
+  `build-studio-settings.json` and friends, listed explicitly so the exemption is a decision rather than a hole);
+- **every `npm run <x>` in the docs** exists in `package.json` (32 referenced, and the test asserts the list is not
+  empty so it cannot pass vacuously);
+- **every migration file** is named in `docs/SCHEMA.md`'s table, with a row numbered to match, **and the table names
+  no migration that is not on disk**;
+- Build Studio is **not called "planned"** in the README, while the README must still say it has never been launched.
+
+Verified to fail: reinstating the phantom migration, deleting a documented path, and restoring the word "planned" each
+breaks exactly the intended assertion. Two real defects were fixed by writing it — migration 14 is `014_mobile_login.ts`
+(the table had named a file that never existed) and does far more than the table said: it rebuilds `devices` so an unapproved device
+can hold no token, and adds the keep-running/sleep/start-with-Windows preferences and the cloud relay pair. And the
+README still described Build Studio as planned.
+
 ### Two build steps that called scripts which did not exist
 
 Found while checking the plan against the manifest rather than against intent: *Build Vendor Cloud package* ran

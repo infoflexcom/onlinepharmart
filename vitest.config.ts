@@ -19,6 +19,8 @@ export default defineConfig({
       'buildstudio/src/**/*.test.ts',
       // The window itself: the HTML is loaded into a real DOM and driven through the preload bridge's stub.
       'buildstudio/*.test.ts',
+      // The documents are checked against the tree: paths, npm scripts and the migration table.
+      'docs/*.test.ts',
     ],
     clearMocks: true,
     // Host integration suites hash bcrypt passwords and run real SQLite/TLS work; several take 4-6s

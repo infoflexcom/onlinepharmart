@@ -33,4 +33,4 @@ These are source-repository commands for contributors, not customer or vendor ac
 
 Phase status is tracked in [docs/PHASES.md](docs/PHASES.md); the hardware checks that a customer release still requires are in [docs/RELEASE-CHECKLIST.md](docs/RELEASE-CHECKLIST.md).
 
-A Windows release must ultimately be prepared through the planned graphical Build Studio workflow; customers must never be asked to run terminal commands.
+A Windows release is prepared through the graphical [Build Studio](buildstudio/README.md) — prerequisites, build, artefacts, signing keys and the licence policy file, all from buttons. Customers must never be asked to run terminal commands. Build Studio has been built and tested here but never launched in Electron on Windows; see `docs/PHASES.md` phase 14 and Gate 6 of `docs/RELEASE-CHECKLIST.md`.

@@ -24,7 +24,7 @@
 | 11 | `011_accounting_reports.ts` | Adds business-date cash-close snapshots, shift settlement links, and historical supermarket report dimensions/indexes. |
 | 12 | `012_mobile_sessions.ts` | Adds per-device access-token expiry and binds refresh-token hashes to paired devices, with lookup indexes. |
 | 13 | `013_operational_settings.ts` | Adds receipt layout, optional VAT, discount ceiling, printer, accepted payment methods, expiry-alert, loyalty-rate, supervisor-PIN and scale settings; the sale-time "Powered by Infoflex" snapshot; and the `backup_log` journal. |
-| 14 | `014_admin_two_factor.ts` | Adds the Admin's TOTP secret, confirmation timestamp and recovery-code hashes for internet sign-in. |
+| 14 | `014_mobile_login.ts` | Adds the Admin's TOTP secret and confirmation state for internet sign-in; rebuilds `devices` so an unapproved device can have no token while approved pairs keep theirs; and adds the keep-running, prevent-sleep and start-with-Windows preferences plus the cloud relay URL and shared secret. |
 | 15 | `015_demo_data_removal.ts` | Re-creates the delete guard on `stock_movements` so rows written by the optional demonstration dataset (`reference_type = 'DEMO_SEED'`) can be withdrawn, while every real movement stays immutable. |
 
 ## Tables
