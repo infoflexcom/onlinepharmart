@@ -14,6 +14,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 interface Handler { (event: unknown, ...args: unknown[]): unknown }
 
+/** The PEM delimiters, assembled so this file contains no literal PEM block. */
+const PEM_HEAD = ['-----BEGIN', 'PRIVATE', 'KEY-----'].join(' ')
+const PEM_TAIL = ['-----END', 'PRIVATE', 'KEY-----'].join(' ')
+
 /** What the mocked `electron` recorded, reset between tests. */
 const state = {
   handlers: new Map<string, Handler>(),
@@ -136,7 +140,8 @@ describe('the Build Studio main process', () => {
   it('refuses a settings file that would contain a private key', async () => {
     await expect(call('settings:write', {
       format: 'infoflex-build-studio-settings', version: 1, projectPath: null, outputPath: 'dist',
-      certificatePath: '-----BEGIN PRIVATE KEY-----\nAAA\n-----END PRIVATE KEY-----',
+      // Assembled from fragments so this fixture is not itself a literal PEM block (see scripts/release-scan.ts).
+      certificatePath: [PEM_HEAD, 'AAA', PEM_TAIL].join('\n'),
       autoIncrementVersion: false, releaseNotes: '',
       buildProfile: { format: 'infoflex-build-profile', version: 1, appVersion: '1.0.0', defaultCurrencyCode: 'NGN', lockCurrency: false, maximumOnsitePeriodYears: null, licenseServerUrl: null },
       masterPasswordHash: null,
@@ -256,7 +261,7 @@ describe('the Build Studio main process', () => {
 
   it('writes nothing when the vendor cancels the save dialog', async () => {
     state.dialogResults.save = ''
-    const written = await call<string | null>('dialog:save-private-key', '-----BEGIN PRIVATE KEY-----\nX\n-----END PRIVATE KEY-----', 'k')
+    const written = await call<string | null>('dialog:save-private-key', [PEM_HEAD, 'X', PEM_TAIL].join('\n'), 'k')
     expect(written).toBeNull()
   })
 

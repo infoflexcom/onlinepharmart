@@ -300,8 +300,37 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
     }
   }
 
+  // ---- the installer must install the application
+  //
+  // This file is an electron-builder *include*: electron-builder's own template copies the payload, so the rule is
+  // that this script must not try to do it itself (a `File /r` of the payload would duplicate or misplace it), and
+  // must not define a Section whose name collides with electron-builder's own Install section. The defect that
+  // prompted this rule was the reverse: a standalone `Section "Install"` with no payload copy at all, which would
+  // have shipped a wizard that created shortcuts to an application it never installed.
+  if (/^\s*Section\s+"Install"/mu.test(text)) {
+    problems.push({
+      line: lineOf(text, /^\s*Section\s+"Install"/mu),
+      message: 'Defines its own Section "Install", which collides with electron-builder\'s. Use !macro customInstall.',
+    })
+  }
+  const hookingInstall = /!macro\s+customInstall/mu.test(text)
+  if (hookingInstall && !/!include\s+"installer\.nsi"/mu.test(text) && !/electron-builder/iu.test(text.slice(0, 2000))) {
+    // Only a file that is neither the include nor its wrapper should be defining these macros.
+    problems.push({
+      line: lineOf(text, /!macro\s+customInstall/mu),
+      message: 'Defines customInstall but is not the installer include electron-builder loads.',
+    })
+  }
+
   // ---- a ${If} inside a function must reach an ${EndIf} before FunctionEnd; covered by the stack above.
   return problems
+}
+
+/** The 1-based line number of the first match, for reporting. */
+function lineOf(text: string, pattern: RegExp): number {
+  const match = pattern.exec(text)
+  if (!match) return 1
+  return text.slice(0, match.index).split('\n').length
 }
 
 export function checkNsisFile(path: string): ScriptProblem[] {

@@ -21,6 +21,7 @@ export default defineConfig({
       'buildstudio/*.test.ts',
       // The documents are checked against the tree: paths, npm scripts and the migration table.
       'docs/*.test.ts',
+    'scripts/*.test.ts',
     ],
     clearMocks: true,
     // Host integration suites hash bcrypt passwords and run real SQLite/TLS work; several take 4-6s

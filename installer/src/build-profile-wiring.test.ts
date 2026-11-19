@@ -63,8 +63,13 @@ describe('a build profile reaches the installer', () => {
   it('asks electron-builder to pack the profile the generator just wrote, in both builds', () => {
     // One file, one path: the app's `readBuildProfile` looks for `resources/build-profile.json`, and the generator
     // writes exactly the file electron-builder is told to copy there.
+    // Parsed rather than string-matched: the configs are formatted JSON, and an assertion on exact whitespace fails
+    // the moment anyone reformats a file without changing what it means.
     for (const config of [ONLINE, OFFLINE]) {
-      expect(config).toContain('"extraResources": ["installer/nsis/build-profile.json"]')
+      const parsed = JSON.parse(config) as { extraResources?: string[] }
+      expect(parsed.extraResources, "the app cannot read the vendor's build profile").toContain(
+        'installer/nsis/build-profile.json',
+      )
     }
   })
 

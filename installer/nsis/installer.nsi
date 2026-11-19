@@ -1,5 +1,16 @@
 ; ==========================================================================================
-; Infoflex Setup — the customer installer.
+; Infoflex Setup — the customer installer's pages and rules.
+;
+; **This file is an electron-builder `include`, not a standalone script.**
+;
+; electron-builder compiles its own installer.nsi, which already knows how to copy the application payload into
+; $INSTDIR, write the registry entries, create the shortcuts and build the uninstaller. That work is not ours to
+; reimplement — an installer that forgets it creates shortcuts to an application it never installed, which is
+; exactly the defect this comment replaced. electron-builder pulls this file in through its `include` option and
+; calls the `custom*` macros defined below at the right moments.
+;
+; What this file adds, in order: the vendor password gate, the Region and Currency page, the system check, the
+; components page, the verified download page, and the config write that carries the chosen currency into the app.
 ;
 ; ONE source file, TWO builds:
 ;   online   — downloads what is missing from an allowlisted Microsoft address, verifies it, runs it.
@@ -14,10 +25,13 @@
 
 Unicode true
 
-!include "MUI2.nsh"
-!include "LogicLib.nsh"
-!include "nsDialogs.nsh"
-!include "WinVer.nsh"
+; electron-builder's template already includes MUI2, LogicLib, nsDialogs, WinVer and the MUI macros. MUI2 included
+; twice is a hard error in NSIS, so it is NOT re-included here.
+;
+; FileFunc is different: it is a macro library with no MUI or dialog definitions, and it provides ${GetParameters},
+; ${GetOptions}, ${GetRoot} and ${DriveSpace}, all of which this file uses. It is included plainly — the static
+; checker in `installer/src/check-nsis-script.ts` verifies that every stdlib macro used here is backed by its header,
+; so an include that quietly disappeared would fail the build rather than fail on a vendor's machine.
 !include "FileFunc.nsh"
 
 !include "json-escaping.nsh"
@@ -25,49 +39,41 @@ Unicode true
 !include "currency-ui.nsh"
 
 ; ------------------------------------------------------------------ compile-time configuration
+;
+; electron-builder's template defines PRODUCT_NAME, APP_VERSION, PRODUCT_FILENAME and the icon bitmaps before
+; including this file. Only the two values it cannot know are set here.
+
 !ifndef INFOPLEX_OFFLINE
   !define INFOPLEX_OFFLINE 0
 !endif
-!ifndef APP_VERSION
-  !define APP_VERSION "0.1.0"
-!endif
-!ifndef PRODUCT_NAME
-  !define PRODUCT_NAME "Infoflex"
-!endif
-!ifndef INSTALLER_ICON
-  !error "INSTALLER_ICON must be defined (build/brand.ico)."
-!endif
-!ifndef INSTALLER_BANNER
-  !error "INSTALLER_BANNER must be defined (build/banner.bmp)."
-!endif
-!ifndef INSTALLER_SIDEBAR
-  !error "INSTALLER_SIDEBAR must be defined (build/sidebar.bmp)."
-!endif
+
+; The PBKDF2 helper, compiled for this build. It is the ONLY place the password hash is compared, and it is
+; `installer/src/password-check-cli.ts`. Referenced by the password page with File /oname.
 !ifndef INSTALLER_PASSWORD_CHECKER
-  !error "INSTALLER_PASSWORD_CHECKER must be defined (the PBKDF2 helper)."
+  !define INSTALLER_PASSWORD_CHECKER "${BUILD_RESOURCES_DIR}\password-check.exe"
 !endif
 
-Name "${PRODUCT_NAME} Setup"
-OutFile "Infoflex Setup.exe"
-InstallDir "$PROGRAMFILES64\${PRODUCT_NAME}"
-InstallDirRegKey HKLM "Software\Infoflex" "InstallDir"
-RequestExecutionLevel admin
-SetCompressor /SOLID lzma
-ShowInstDetails show
-ShowUninstDetails show
+; Names electron-builder does not supply. PRODUCT_NAME and APP_VERSION come from the electron-builder config.
+!ifndef INSTALLER_PRODUCT_NAME
+  !define INSTALLER_PRODUCT_NAME "${PRODUCT_NAME}"
+!endif
 
-VIProductVersion "${APP_VERSION}.0"
-VIAddVersionKey "ProductName" "${PRODUCT_NAME} Setup"
-VIAddVersionKey "CompanyName" "Infoflex"
-VIAddVersionKey "FileDescription" "${PRODUCT_NAME} installer"
-VIAddVersionKey "FileVersion" "${APP_VERSION}"
-VIAddVersionKey "LegalCopyright" "Infoflex"
+; Brand bitmaps. electron-builder sets MUI_ICON and the headerimage from its own options; our sidebar must be set
+; here because electron-builder has no option for the welcome-page bitmap.
+!ifndef INSTALLER_SIDEBAR
+  !define INSTALLER_SIDEBAR "${BUILD_RESOURCES_DIR}\installer-sidebar.bmp"
+!endif
+
+; Name, OutFile, InstallDir, RequestExecutionLevel, the compression and the version resource all belong to
+; electron-builder's template when this file is used as an include — setting them here as well is a duplicate
+; definition error. See electron-builder.installer-online.json.
 
 !define MUI_ABORTWARNING
-!define MUI_ICON "${INSTALLER_ICON}"
-!define MUI_UNICON "${INSTALLER_ICON}"
-!define MUI_HEADERIMAGE
-!define MUI_HEADERIMAGE_BITMAP "${INSTALLER_BANNER}"
+; The wizard icon and the header image come from electron-builder's `installerIcon` and `installerHeader` options;
+; only the welcome-page sidebar has no option, so it is defined here.
+!ifndef MUI_HEADERIMAGE
+  !define MUI_HEADERIMAGE
+!endif
 !define MUI_WELCOMEFINISHPAGE_BITMAP "${INSTALLER_SIDEBAR}"
 !define MUI_UNWELCOMEFINISHPAGE_BITMAP "${INSTALLER_SIDEBAR}"
 !define MUI_FINISHPAGE_NOAUTOCLOSE
@@ -734,12 +740,17 @@ Function DownloadPageLeave
 FunctionEnd
 
 ; ===================================================================================== page 7: install
-Section "Install"
-  Call InstallPrerequisites
+;
+; `customInstall` is inserted by electron-builder *after* it has copied the application payload into $INSTDIR, written
+; the registry entries, created the shortcuts and written the uninstaller. That is why this is a macro and not a
+; Section: as a Section it would either conflict with electron-builder's own "Install" section or, standing alone,
+; install a wizard that creates shortcuts to an application it never copied.
+!macro customInstall
   Call InstallApplication
+  Call InstallPrerequisites
   Call ConfigureFirewall
   Call ConfigureStartup
-SectionEnd
+!macroend
 
 Function InstallPrerequisites
   ${If} $NeedsVcRuntime != "1"
@@ -763,11 +774,12 @@ Function InstallPrerequisites
   ${EndIf}
 FunctionEnd
 
+; The parts electron-builder does not do. The application files, the uninstaller and the shortcut targets are its
+; job (and it does them before this macro runs).
 Function InstallApplication
   WriteRegStr HKLM "Software\Infoflex" "InstallDir" "$INSTDIR"
   WriteRegStr HKLM "Software\Infoflex" "CurrencyCode" "$CurrencyCodeOut"
   WriteRegStr HKLM "Software\Infoflex" "KeepInTray" "$TrayWanted"
-  WriteUninstaller "$INSTDIR\Uninstall ${PRODUCT_NAME}.exe"
 
   ; The install-config the app reads at first run. ONLY on a fresh install: an update or a repair must never
   ; rewrite a working shop's currency.
@@ -857,16 +869,13 @@ Function un.onInit
   KeepData:
 FunctionEnd
 
-Section "Uninstall"
-  Delete "$SMPROGRAMS\${PRODUCT_NAME}.lnk"
-  Delete "$DESKTOP\${PRODUCT_NAME}.lnk"
+; electron-builder removes the files, the shortcuts and the registry entries it made. These are ours: the firewall
+; rule, the autostart value, our own key, and the deliberate decision NOT to touch install-config.json.
+!macro customUnInstall
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Infoflex Mobile Access"'
   DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_NAME}"
   DeleteRegKey HKLM "Software\Infoflex"
-  ; install-config.json is left in place on purpose: reinstalling must not silently re-choose the money if the
-  ; data folder was kept.
-  RMDir /r "$INSTDIR"
-SectionEnd
+!macroend
 
 ; ================================================================================== tracing
 Function .onInstFailed

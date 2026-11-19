@@ -3,14 +3,32 @@
   "appId": "com.infoflex.pharmart",
   "productName": "Infoflex",
   "npmRebuild": false,
-  "asarUnpack": ["**/*.node"],
-  "files": ["out/**/*", "package.json", "installer/nsis/generated.nsh", "installer/nsis/currency-ui.nsh"],
-  "//": "The build profile is packed beside the app so first-run setup reads the same currency the installer compiled in. It is written by npm run installer:script, which both installer builds run first.",
-  "extraResources": ["installer/nsis/build-profile.json"],
-  "directories": { "buildResources": "build", "output": "dist/online" },
+  "asarUnpack": [
+    "**/*.node"
+  ],
+  "files": [
+    "out/**/*",
+    "package.json",
+    "installer/nsis/generated.nsh",
+    "installer/nsis/currency-ui.nsh"
+  ],
+  "extraResources": [
+    "installer/nsis/build-profile.json"
+  ],
+  "directories": {
+    "buildResources": "build",
+    "output": "dist/online"
+  },
   "win": {
     "icon": "build/icon.ico",
-    "target": [{ "target": "nsis", "arch": ["x64"] }]
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ]
   },
   "nsis": {
     "oneClick": false,
@@ -24,7 +42,6 @@
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
     "shortcutName": "Infoflex",
-    "artifactName": "Infoflex Setup.${ext}",
-    "defines": { "INFOPLEX_OFFLINE": "0" }
+    "artifactName": "Infoflex Setup.${ext}"
   }
 }

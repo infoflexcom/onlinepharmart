@@ -116,11 +116,16 @@ describe('secrets do not appear in the repository', () => {
   })
 })
 
+const PRIVATE_HEAD = ['-----BEGIN', 'PRIVATE', 'KEY-----\n'].join(' ')
+const PRIVATE_TAIL = ['-----END', 'PRIVATE', 'KEY-----'].join(' ')
+
 describe('the server refuses to start without its secrets', () => {
   const base = {
     NODE_ENV: 'development',
     INFOFLEX_CLOUD_SESSION_SECRET: 'a'.repeat(40),
-    INFOFLEX_CLOUD_SIGNING_KEY: `-----BEGIN PRIVATE KEY-----\n${'A'.repeat(64)}\n-----END PRIVATE KEY-----`,
+    // Assembled so that this file does not itself contain a literal PEM block: `release:scan` searches the tree and
+    // would otherwise report its own test fixture as a leaked key.
+    INFOFLEX_CLOUD_SIGNING_KEY: `${PRIVATE_HEAD}${'A'.repeat(64)}\n${PRIVATE_TAIL}`,
   }
 
   it('requires a signing key', () => {

@@ -76,11 +76,26 @@ describe('the shipped installer script', () => {
     expect(text).not.toMatch(/Handywife/iu)
   })
 
-  it('requires administrator rights and never asks for a console', () => {
-    const text = require('node:fs').readFileSync('installer/nsis/installer.nsi', 'utf8') as string
-    expect(text).toContain('RequestExecutionLevel admin')
+  it('requires administrator rights, through the config that actually sets them', () => {
+    // `installer.nsi` is an electron-builder *include*: the executable's RequestExecutionLevel is emitted by
+    // electron-builder's own template from `perMachine`. Asserting the string in our include would be asserting a
+    // line electron-builder ignores. What must be true is that the config asks for a machine-wide, elevating install.
+    for (const config of ['electron-builder.installer-online.json', 'electron-builder.installer-offline.json']) {
+      const parsed = JSON.parse(require('node:fs').readFileSync(config, 'utf8')) as { nsis: Record<string, unknown> }
+      expect(parsed.nsis.perMachine, `${config} must install for all users`).toBe(true)
+      expect(parsed.nsis.allowElevation, `${config} must be allowed to elevate`).toBe(true)
+      // And the two builds must include OUR pages, not compile electron-builder's stock wizard.
+      expect(parsed.nsis.include, `${config} does not include the Infoflex pages`).toMatch(/installer\.nsi|offline-include\.nsh$/u)
+      // `script` would replace electron-builder's template entirely, losing the payload install.
+      expect(parsed.nsis.script, `${config} must not replace electron-builder's installer script`).toBeUndefined()
+      // `defines` is not an electron-builder NSIS option; it fails schema validation outright.
+      expect(parsed.nsis.defines, `${config} uses a non-existent nsis option`).toBeUndefined()
+    }
+
     // A GUI installer must not open a console window.
+    const text = require('node:fs').readFileSync('installer/nsis/installer.nsi', 'utf8') as string
     expect(text).not.toMatch(/^!define\s+MUI_PAGE_WELCOME/u)
+    expect(text).not.toMatch(/^Section\s+"Install"/mu)
   })
 })
 

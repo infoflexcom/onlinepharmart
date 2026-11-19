@@ -43,7 +43,10 @@
     "dist:studio": "npm run build:studio && electron-builder --win nsis --config electron-builder.buildstudio.json",
     "check:phase14": "npm run typecheck && npm test && npm run build:studio",
     "cloud:package": "tsx scripts/cloud-package.ts",
-    "artefacts:verify": "tsx scripts/verify-artefacts.ts"
+    "artefacts:verify": "tsx scripts/verify-artefacts.ts",
+    "release:assemble": "tsx scripts/assemble-release.ts",
+    "release:scan": "tsx scripts/release-scan.ts",
+    "check:phase15": "npm run typecheck && npm test && npm run installer:script && npm run installer:check && npm run build:studio && npm run cloud:package && npm run release:scan && npm run release:assemble && npm run build:web && npm run build:mobile && npm run build"
   },
   "dependencies": {
     "@fastify/websocket": "^11.3.7",
