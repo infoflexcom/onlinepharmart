@@ -919,8 +919,20 @@ Function InstallApplication
     ${EndIf}
   ${EndIf}
 
-  CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}.lnk" "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
-  CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
+  ; NO CreateShortCut HERE, deliberately.
+  ;
+  ; electron-builder's install section creates both shortcuts *before* it inserts this hook (installSection.nsh:
+  ; addStartMenuLink, addDesktopLink, then customInstall), at "$SMPROGRAMS\${SHORTCUT_NAME}.lnk" and
+  ; "$DESKTOP\${SHORTCUT_NAME}.lnk". SHORTCUT_NAME defaults to the sanitised product name -- "Infoflex", the same
+  ; value as ${PRODUCT_NAME} -- so the two lines that used to sit here wrote to exactly the same paths, just after
+  ; electron-builder's WinShell::SetLnkAUMI had stamped its AppUserModelID onto them. CreateShortCut replaces the .lnk
+  ; wholesale, so the AppUserModelID was gone, and Windows grouping, the taskbar jump list and its pinning behaviour
+  ; all depend on it matching app.setAppUserModelId('com.infoflex.pharmart') in src/main/index.ts.
+  ;
+  ; It was also unreachable-by-accident: this hook only runs on a fresh install, so a *repair* kept
+  ; electron-builder's correct link and only a fresh install lost it. That is the signature of two owners for one
+  ; file, and the fix is to leave the file to its owner. The Components page never offered a shortcut option, so there
+  ; was nothing here for electron-builder's flags to defer to.
 FunctionEnd
 
 Function ConfigureFirewall

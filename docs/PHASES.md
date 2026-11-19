@@ -840,9 +840,9 @@ the test rather than the Output screen.
   NSIS's own `Source/exehead`, using **Zig** — published to PyPI as a plain wheel, and a complete clang+lld
   cross-compiler — behind `i686-w64-mingw32-*` shims so NSIS's SConstruct builds unmodified. Twelve stubs, three
   compressions by four variants.
-- **`npm run installer:compile` now produces a real `.exe` for every build:** 111,177 bytes online, 110,947 bytes
-  offline, 110,947 bytes for the offline wrapper and 110,846 bytes for the uninstaller pass, each a verified i386 PE with
-  the Windows GUI subsystem. (Sizes move with every script change; the ones recorded earlier in this file are history,
+- **`npm run installer:compile` now produces a real `.exe` for every build:** roughly 111 KB online and 110.9 KB for
+  each of the offline, offline-wrapper and uninstaller-pass builds, each a verified i386 PE with the Windows GUI
+  subsystem. (Sizes move with every script change; the ones recorded earlier in this file are history,
   not a contract.)
 - **The check inspects the artefact instead of trusting the log.** `installer/src/pe-artifact.ts` validates the DOS
   magic, the PE signature, the machine, the optional-header size, the section count and the subsystem, with 11 tests.
@@ -884,6 +884,13 @@ the test rather than the Output screen.
   `"${PRODUCT_FILENAME}.exe"`, and a product name containing `:` or `/` makes those two different files. Correct today
   only because "Infoflex" happens to need no sanitising. All four now use `APP_EXECUTABLE_FILENAME`, and tests forbid
   rebuilding the path from the product name.
+- **Two shortcuts were created twice, and ours won.** `customInstall` created `"$SMPROGRAMS\${PRODUCT_NAME}.lnk"` and
+  `"$DESKTOP\${PRODUCT_NAME}.lnk"`; electron-builder's install section creates the same two files from `${SHORTCUT_NAME}`
+  (default: the sanitised product name, i.e. the same `Infoflex`) *before* inserting the hook, and stamps each with
+  `WinShell::SetLnkAUMI` immediately afterwards. `CreateShortCut` replaces the `.lnk` wholesale, so a fresh install ended
+  up with shortcuts carrying no AppUserModelID — the thing Windows grouping, the taskbar jump list and pinning depend
+  on — while a repair kept electron-builder's good ones. The two calls are removed; the file now has one owner, and a
+  test forbids one coming back.
 - **Still not proven:** the real `npm run build` cannot run here (electron-builder downloads its NSIS from GitHub and
   needs plugin DLLs this sandbox lacks), so the template is read rather than executed. And the `.exe` has never been executed. There is no Windows and no Wine here. The shippable
   installer still comes from `npm run build` on a Windows machine with the NSIS target, and the manual checklist in

@@ -122,10 +122,22 @@ describe('shortcuts point at the executable electron-builder actually wrote', ()
 
   it('uses electron-builder’s APP_EXECUTABLE_FILENAME for every executable it points at', () => {
     const script = readFileSync('installer/nsis/installer.nsi', 'utf8')
-    expect(script).toContain('CreateShortCut "$SMPROGRAMS\\${PRODUCT_NAME}.lnk" "$INSTDIR\\${APP_EXECUTABLE_FILENAME}"')
-    expect(script).toContain('CreateShortCut "$DESKTOP\\${PRODUCT_NAME}.lnk" "$INSTDIR\\${APP_EXECUTABLE_FILENAME}"')
     expect(script).toContain('MUI_FINISHPAGE_RUN "$INSTDIR\\${APP_EXECUTABLE_FILENAME}"')
     expect(script).toMatch(/CurrentVersion\\Run" "\$\{PRODUCT_NAME\}" '"\$INSTDIR\\\$\{APP_EXECUTABLE_FILENAME\}" --hidden'/u)
+  })
+
+  it('leaves shortcut creation to electron-builder, which already sets the AppUserModelID', () => {
+    // This script used to create both shortcuts itself. electron-builder's install section creates them BEFORE it
+    // inserts customInstall, at the same paths -- SHORTCUT_NAME defaults to the sanitised product name, which is the
+    // ${PRODUCT_NAME} used here -- and stamps each with WinShell::SetLnkAUMI immediately after. CreateShortCut replaces
+    // the .lnk wholesale, so ours wrote identical files minus the AppUserModelID that Windows grouping and the
+    // taskbar jump list rely on.
+    const script = readFileSync('installer/nsis/installer.nsi', 'utf8')
+    const code = script
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith(';'))
+      .join('\n')
+    expect(code).not.toMatch(/CreateShortCut/u)
   })
 
   it('falls back only when electron-builder has not supplied the name', () => {

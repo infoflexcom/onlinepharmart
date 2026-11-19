@@ -305,12 +305,21 @@ could not have been built at all had anyone run the build:
   autostart registry value all pointed at `"${PRODUCT_NAME}.exe"`. electron-builder writes the executable as
   `"${PRODUCT_FILENAME}.exe"`, and those two differ whenever the product name contains a character Windows forbids in a
   file name: `productName: "Infoflex:Pharmart"` yields `InfoflexPharmart.exe`. The installer would then report success
-  while creating a desktop shortcut, a Start menu shortcut, a finish-page Run target and an autostart entry that all
-  pointed at nothing. It is correct today only because the product name happens to have no such character, which is
-  exactly the sort of assumption that survives until somebody renames the product. All four sites now use
-  electron-builder's own `APP_EXECUTABLE_FILENAME`, with a `!ifndef` fallback for a standalone compile; verified by
-  compiling the fallback in both configurations and reading back `InfoflexPharmart.exe` and `Infoflex.exe`. Three tests
-  forbid rebuilding an executable path from `${PRODUCT_NAME}`.
+  while creating a finish-page Run target and an autostart entry that both pointed at nothing. It is correct today only
+  because the product name happens to have no such character, which is exactly the sort of assumption that survives
+  until somebody renames the product. Both surviving sites now use electron-builder's own `APP_EXECUTABLE_FILENAME`, with
+  a `!ifndef` fallback for a standalone compile; verified by compiling the fallback in both configurations and reading
+  back `InfoflexPharmart.exe` and `Infoflex.exe`. Tests forbid rebuilding an executable path from `${PRODUCT_NAME}`.
+- **Fixing that made two shortcuts correct when they should not have existed.** The two `CreateShortCut` calls were
+  writing `"$SMPROGRAMS\${PRODUCT_NAME}.lnk"` and `"$DESKTOP\${PRODUCT_NAME}.lnk"` from inside `customInstall`. But
+  electron-builder's install section creates both shortcuts *before* it inserts `customInstall`, at
+  `"$SMPROGRAMS\${SHORTCUT_NAME}.lnk"` and `"$DESKTOP\${SHORTCUT_NAME}.lnk"` — and `SHORTCUT_NAME` defaults to the
+  sanitised product name, which is the same `"Infoflex"`. So the two pairs were the same two files. electron-builder
+  stamps each with `WinShell::SetLnkAUMI` right after creating it; `CreateShortCut` replaces a `.lnk` wholesale, so our
+  call wrote an identical shortcut minus the AppUserModelID that Windows grouping, the taskbar jump list and pinning
+  depend on. It was also inconsistent in a way that hid the cause: `customInstall` only runs on a fresh install, so a
+  *repair* kept electron-builder's correct link and only a fresh install lost it. Both calls are gone — the file has one
+  owner — and a test forbids `CreateShortCut` returning to this script.
 - **The static checker called a correct `!ifdef`/`!else` pair a redefinition.** Its duplicate-`!define` rule compared
   every definition in the file without noticing that only one arm of a conditional is ever compiled, so the guarded
   fallback this phase added was reported as an error. The rule now tracks the branch path — every enclosing conditional
