@@ -185,6 +185,48 @@ describe('host license manager', () => {
     expect(fixture.manager.getSnapshot().status).toBe('unactivated')
   })
 
+  // DONE WHEN, as one test: "a build made with a 3-year on-site limit refuses a 5-year on-site licence while a
+  // 'No limit' build accepts it". The two halves existed separately — a cap is enforced, and 1/3/5 years all work
+  // uncapped — but neither is the brief's statement, which is a *contrast*. Written apart, a bug that made every
+  // build behave like a capped one would still pass both.
+  it('refuses a 5-year licence in a 3-year build and accepts the identical licence in a No-limit build', async () => {
+    const password = createRandomVendorPassword()
+    const fiveYears = addYearsToDateInput('2026-11-17', 5)
+
+    const capped = createFixture()
+    await importVendorPolicy(capped.manager, password, 3)
+    await expect(capped.manager.activateOnsite(onsiteInput(password, { endsOn: fiveYears })))
+      .rejects.toThrow(/maximum on-site period is 3 years/i)
+    // A refused licence must not leave a half-valid one behind.
+    expect(capped.manager.getSnapshot().status).toBe('unactivated')
+
+    const uncapped = createFixture()
+    await importVendorPolicy(uncapped.manager, password, null)
+    const summary = await uncapped.manager.activateOnsite(onsiteInput(password, { endsOn: fiveYears }))
+    expect(summary).toMatchObject({ status: 'active', source: 'onsite', canUse: true })
+    expect(summary.endsAt).toBe(`${fiveYears}T00:00:00.000Z`)
+  })
+
+  it('accepts every term inside the configured limit and refuses every term beyond it', async () => {
+    // No limit, 1, 2, 3, 5 and 10 are exactly the choices Build Studio's Settings screen offers.
+    const cases: Array<[number | null, number, boolean]> = [
+      [null, 10, true], [1, 1, true], [1, 2, false], [2, 3, false], [3, 3, true], [3, 5, false],
+      [5, 10, false], [10, 10, true], [10, 11, false],
+    ]
+    for (const [limit, requestedYears, accepted] of cases) {
+      const fixture = createFixture()
+      const password = createRandomVendorPassword()
+      await importVendorPolicy(fixture.manager, password, limit)
+      const endsOn = addYearsToDateInput('2026-11-17', requestedYears)
+      const attempt = fixture.manager.activateOnsite(onsiteInput(password, { endsOn }))
+      if (accepted) {
+        await expect(attempt, `${limit}/${requestedYears}`).resolves.toMatchObject({ status: 'active' })
+      } else {
+        await expect(attempt, `${limit}/${requestedYears}`).rejects.toThrow(/maximum on-site period/i)
+      }
+    }
+  })
+
   it('preselects and locks the license default currency, then preserves currency after a transaction', async () => {
     const fixture = createFixture()
     const password = createRandomVendorPassword()

@@ -501,10 +501,134 @@ things it had been missing:
 | `npm run check:phase10` | All of the above in sequence. |
 | `npm run check:phase11` | All of the above in sequence, including the cloud and PHP suites. |
 | `npm run check:phase12` | All of the above in sequence (current phase bundle). |
-| `npm run check:phase13` | All of the above, plus generating the installer includes and running `installer:check` (current phase bundle). |
+| `npm run check:phase13` | All of the above, plus generating the installer includes and running `installer:check`. |
+| `npm run check:phase14` | Typecheck, the whole suite, and bundling the Build Studio window (current phase bundle). |
+| `npm run studio` | Bundles and starts Build Studio. **Needs a display and an Electron runtime that can open a window.** |
+| `npm run dist:studio` | Packages Build Studio for Windows. **Needs Windows; fails in this environment.** |
+| `npm run cloud:package` | Writes `dist/cloud/infoflex-vendor-cloud.zip` — the cloud source, docs and PHP build, with no `.env` or key inside. |
+| `npm run artefacts:verify` | Lists every artefact the build promised with its SHA-256, writes `dist/artefacts.json`, and **exits non-zero if one is missing**. |
 | `npm run installer:check` | Generated includes present and current, `.nsi` structurally sound, no master password in any shipped installer file, brand bitmaps valid. |
 | `npm run installer:online` / `installer:offline` | Build the two installers. **Needs a Windows machine or Wine; fails in this environment.** |
 | `npm run cloud:test` | The cloud suites only (8 files: schema, auth, licence flow, portal, relay, maintenance, secrets, PHP build). |
 | `npm run php:test` | The PHP build's own 32-check suite, needs a local PHP 8 binary (none exists in the environment this phase was built in, so here the identical suite runs inside `php-wasm` as part of `cloud:test` and reports `32 passed, 0 failed`). |
 | `npx tsx scripts/verify-qr-code.ts` | The QR images decode with an independent decoder (needs `npm install --no-save jsqr`; not part of `npm test`). |
 | `npm run dist:win` | Windows NSIS packaging entry point; run on Windows and complete the release checklist. |
+
+---
+
+## Phase 14 — Infoflex Build Studio
+
+The vendor's own tool: it takes the project folder and produces the customer's installers on a Windows machine,
+with no terminal at any point.
+
+### What was built
+
+| Item | Where |
+| --- | --- |
+| The window: seven screens, brand palette, no framework | `buildstudio/index.html`, `buildstudio/ui.ts` |
+| The Electron shell: window, dialogs, hidden processes, IPC | `buildstudio/main.ts`, `buildstudio/preload.ts` |
+| The rules, as pure functions with tests that run anywhere | `buildstudio/src/`: `build-steps.ts`, `prerequisites.ts`, `runner.ts`, `system-check.ts`, `settings-store.ts`, `artefacts.ts`, `licence-keys.ts` |
+| The per-build settings three programs share | `installer/src/build-profile.ts`, read by the installer generator and by the app at first run |
+| One command to produce and start the tool | `scripts/build-studio.ts`, `npm run studio` |
+| The Windows packaging config | `electron-builder.buildstudio.json`, `npm run dist:studio` |
+
+### DONE WHEN — the brief's three items
+
+Legend as before: **Pass** = proved by an automated check in this repository. **Could not test** = needs Windows or a
+display; the manual step is in `docs/RELEASE-CHECKLIST.md` Gate 6. The tool's window has never been opened in
+Electron, and no Build Studio installer has been produced.
+
+| # | Requirement | Result | Evidence |
+| --- | --- | --- | --- |
+| 1 | One click builds everything | **Pass (logic and window) / could not test (Electron)** | `buildstudio.test.ts`: the eight-step plan resolves and every step names a real npm script; `build-steps.test.ts` covers grouping, weights and `explainFailure`. `ui.test.ts` presses *Build everything* in a real DOM and asserts the group runs and the window lands on Output. The Electron shell itself is unrun here. |
+| 2 | The on-site licence cap is enforced | **Pass** | `license-manager.test.ts`: a 3-year build refuses an `endsOn` five years out with `/maximum on-site period is 3 years/i` and **leaves the licence unactivated**, while a `null`-limit build accepts the identical input. A second test walks nine term/limit combinations so the boundary is checked in both directions, not at one point. |
+| 3 | The build's default currency is preselected, and locked when the vendor locked it | **Pass (all three programs) / could not test (window)** | `build-profile-wiring.test.ts` (6): a Ghana-locked profile reaches `generated.nsh` as `INSTALLER_DEFAULT_CURRENCY "GHS"`, `INSTALLER_CURRENCY_LOCKED 1`, and the row `INSTALLER_DEFAULT_INDEX` points at is *verified to be the cedi*; the same file is what `extraResources` packs for the app. `settings-store.test.ts` round-trips the saved profile through the shared parser. `install-config-reader` / `installer-to-setup` tests carry it into first-run setup. |
+
+### The three-way contract, and the two holes found in it
+
+The build profile is written by Build Studio, compiled into the installer by `npm run installer:script`, and read by
+the app at first run. Three programs that never run together. Until this phase nothing connected them end to end,
+and two links were missing:
+
+1. **The generator never received the profile.** `writeInstallerHeader()` always generated the *default* profile, so
+   a vendor could set Ghana cedis in the window and the installer would still ship Naira. Fixed by threading the
+   profile through `writeGeneratedIncludes`, with `scripts/installer-script.ts` reading `build-profile.json` (or
+   `INFOFLEX_BUILD_PROFILE_FILE`) and **failing loudly** on a malformed one instead of silently building defaults.
+2. **The app never received it either.** Neither electron-builder config packed the profile, so the app's own
+   `readBuildProfile` would have found nothing and first-run setup would not have known the currency was locked.
+   Both configs now pack `installer/nsis/build-profile.json`, which the generator rewrites on every run so a build
+   cannot inherit a stale one.
+
+Both are the same class of defect as Phase 13's unparseable `install-config.json`: a file written by one program and
+assumed, rather than tested, to be readable by another. Both now have tests that read the real files.
+
+### The window itself is tested, without Electron
+
+`buildstudio/ui.test.ts` (13 tests) loads the real `index.html` into jsdom, bundles `ui.ts` with esbuild the same way
+the build does, and drives every interaction against a stub of the preload bridge. It asserts the things that would
+otherwise only be found by a person clicking:
+
+- every button has an id, a build group or a tab, so none is dead;
+- the one-click build runs `do-everything` and lands on Output;
+- each smaller button sends its own group name;
+- the three check states render as tick / orange arrow / red cross, blocked first;
+- **only required, self-installable tools are offered for installation** — the optional Git row is left alone;
+- with no project chosen, *Build everything* sends the vendor to the Project screen with a sentence they can act on
+  (this was wrong until the test found it: it reported the problem onto the Build screen, which the vendor was not
+  looking at);
+- the vendor unlock clears the password box whether the attempt succeeded or failed;
+- **the private key never appears in the page** — the public key and fingerprint do, and the private half goes only
+  to the save dialog;
+- settings validation refuses a bad version and a plain-`http` cloud address, and *No limit* is saved as `null`;
+- the USB copy sends the chosen drive path.
+
+The renderer runs in plain Node with its own jsdom instance rather than vitest's jsdom environment: that environment
+replaces `TextEncoder` with one from another realm, and esbuild refuses to run in that state. Noted here because the
+failure message ("your JavaScript environment is broken") points at the wrong culprit.
+
+### The rules the tool is built around
+
+- **No terminal, ever.** Every child process is `windowsHide: true` and `shell: false`; output is streamed into the
+  window. Cancel uses `taskkill /T /F`, because a polite signal does not stop a Windows build tree — proved by a
+  real-process test that takes under ten seconds.
+- **The window has no power of its own.** `contextIsolation` on, `nodeIntegration` off, one `contextBridge` object.
+  Output from npm and installers is rendered with `textContent`, never `innerHTML`, so a log line cannot become script.
+- **The master password is never stored or shown.** Only the PBKDF2 hash is compared; the box is cleared either way;
+  `writeSettings` throws rather than write a file containing `PRIVATE KEY`.
+- **Downloads are allowlisted, hashed and Authenticode-checked before anything runs.** The signature is read with a
+  hidden `Get-AuthenticodeSignature`; an unverified file is not executed.
+- **Artefacts are listed from the disk, never from intent.** A step that reports success but wrote nothing shows as
+  *missing*.
+
+### Two build steps that called scripts which did not exist
+
+Found while checking the plan against the manifest rather than against intent: *Build Vendor Cloud package* ran
+`npm run cloud:package` and *Checking the result* ran `npm run artefacts:verify`, and **neither script existed**. On
+a vendor's machine the first would have failed after the prerequisite check had already said everything was fine;
+the second would have meant the build never verified its own output.
+
+Both are now real:
+
+- **`scripts/cloud-package.ts`** writes `dist/cloud/infoflex-vendor-cloud.zip` — a zip built by hand from `zlib`,
+  because the format for stored and deflated entries is small enough to be certain about and adding a packaging
+  dependency to a build tool is not. It **refuses `.env`, databases, logs and anything matching `PRIVATE KEY`**.
+  `cloud/tests/cloud-package.test.ts` reads it back with an *independent* reader (central directory walked by hand,
+  every CRC checked, every entry inflated, the Dockerfile compared byte-for-byte with its source), and also opens it
+  with Python's `zipfile` during development.
+- **`scripts/verify-artefacts.ts`** walks the disk for every artefact the plan promises, prints size and SHA-256,
+  writes `dist/artefacts.json`, and **exits non-zero when one is missing** — verified here by running it, where it
+  correctly reports both installers as not produced because no Windows toolchain exists.
+
+`build-steps.test.ts` now reads the real `package.json` and fails if any step names a script that is not there, so
+this class of defect cannot come back silently. The same test pins the cloud zip's path, so moving the writer breaks
+the test rather than the Output screen.
+
+### What this environment could not do, and what is owed
+
+- **The window has never been opened in Electron.** No display, no Windows. The renderer is tested in jsdom; the
+  Electron shell (`main.ts`, `preload.ts`) is type-checked and bundled, and that is all.
+- **No Build Studio installer exists.** `electron-builder --win nsis` cannot fetch its toolchain here (TLS
+  interception; no Wine, no `makensis`).
+- **No prerequisite was downloaded or installed for real**, and no Authenticode check ran against a real file.
+- **The eight screens have never been looked at.** Layout, contrast, tab order and control sizes are unjudged by
+  human eyes; `docs/RELEASE-CHECKLIST.md` Gate 6 is the script for that.

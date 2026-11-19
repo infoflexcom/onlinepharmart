@@ -500,3 +500,41 @@ been built or run.** The items below are that missing half, in the order a perso
 - [ ] **The three-button download fallback.** Pull the network during the download. After the first failure the page must show **Try the download again**, **Browse for the file myself** and **Use the Offline installer instead**, and must stay on the page instead of showing a message box. After the third failure, Retry must be greyed out and the text must stop suggesting it. Then restore the network, click Retry on a fresh run, and confirm the install continues. Click Browse, choose an unrelated `.exe`, and confirm it is refused with "not the one Infoflex expects" and nothing is run. Choose the correct file and confirm the install proceeds.
 - [ ] **A tampered download is not retried.** Record what the page shows when the checksum does not match: it must say the file was deleted and not run, and must not offer another attempt.
 - [ ] **Anything that needs the mouse.** The rules are tested; the layout, tab order and control sizes have never been looked at by a person in this project. Record anything awkward.
+
+---
+
+## Phase 14 — Build Studio on a Windows vendor machine (Gate 6)
+
+`npm run check:phase14` proves the rules, the window's wiring and that it bundles. It cannot open the window in
+Electron or build a Windows installer, so **the screens have never been seen and no Build Studio `.exe` exists.**
+These are the missing steps.
+
+### First run
+- [ ] On a Windows 10 and a Windows 11 machine, `npm ci`, then `npm run studio`. Confirm a window opens with no console window behind it and no menu bar. (DONE WHEN, item 1)
+- [ ] **Welcome** shows one button. Press *Check computer*: every row must load, sorted blocked → orange → green, with a one-sentence verdict. Compare each row against the machine, uninstalling a tool to see the orange arrow.
+- [ ] Press *Install the missing tools*. Confirm the installers run hidden (no console flash, no UAC-less silent install of something unexpected), then the check re-runs by itself and the rows turn green. Confirm a red-cross row is **not** offered for automatic install.
+- [ ] On a machine with no Node, confirm the window still opens and says plainly what is missing rather than failing to start.
+
+### The build
+- [ ] **Project** → choose the project folder. A folder that is not the project must be refused; the real one must be accepted and shown with its version.
+- [ ] Press *Build everything*. Confirm the steps are named in the Build screen, output streams in line by line, the elapsed time runs, and *Cancel* during the npm install really stops it (`tasklist` shows no orphaned node processes) and says nothing was copied.
+- [ ] Let it finish. Confirm **Output** lists both installers with a size and a SHA-256, that the hashes match `certutil -hashfile <file> SHA256`, and that a file deleted by hand shows as *missing* on *Refresh*.
+- [ ] Press *Copy to a USB drive*, choose the plugged-in stick, and confirm the files are there and the message names the folder.
+- [ ] Run each smaller button (*Install project files*, *Run tests*, *Test-run the app*, *Build Admin mobile app*, *Build installers*, *Build Vendor Cloud package*) once and confirm each does what it says.
+- [ ] Break the build on purpose (rename `node_modules`). Confirm the failure is explained in plain words with a next step, not raw npm output, and that *Copy error details* puts the log on the clipboard.
+
+### The build profile reaching the customer (DONE WHEN, item 3)
+- [ ] **Settings**: set version `2.3.4`, default currency **GHS**, *Lock the currency* on, on-site limit **3 years**, cloud address `https://...`. Save. Confirm a bad version and a plain `http://` address are both refused with a sentence.
+- [ ] Build the installers. Confirm `installer/nsis/generated.nsh` contains `INSTALLER_DEFAULT_CURRENCY "GHS"`, `INSTALLER_CURRENCY_LOCKED 1` and `INSTALLER_APP_VERSION "2.3.4"`, and that `installer/nsis/build-profile.json` holds the same values.
+- [ ] Run the resulting installer on a clean VM: the currency page must open on **Ghana cedi, read-only**, and the app's first-run setup must show the cedi locked too. (DONE WHEN, item 3)
+- [ ] Repeat with the lock **off**: the page must open on the cedi and stay editable.
+- [ ] Repeat with *No limit*: confirm the saved profile has `"maximumOnsitePeriodYears": null` and that on-site activation still accepts a five-year term. With a 3-year limit, confirm it refuses one. (DONE WHEN, item 2)
+
+### Vendor tools — the two things that must never happen
+- [ ] Wrong master password: refuse, and **confirm the password box is emptied** either way. Right password: the tools unlock. Close and reopen the window: it must be locked again.
+- [ ] Generate a key pair. Confirm the **public** key and fingerprint are shown, and that the private key is **not on screen, not in `build-studio-settings.json`, and not in `build-studio.log`** (`findstr /i "PRIVATE" %APPDATA%\Infoflex Build Studio\build-studio.log`).
+- [ ] Press *Save the private key*, choose a path, and confirm the file exists with the contents intact and that the log names only the path. Upload it to the Vendor Cloud and confirm a licence issued from it validates in the app.
+- [ ] `findstr /i "Handywife" /s buildstudio\out\*` must find nothing.
+
+### Packaging
+- [ ] `npm run dist:studio` on Windows produces `Infoflex Build Studio Setup.exe`; install it on a clean machine and confirm it opens without the project's `node_modules`.

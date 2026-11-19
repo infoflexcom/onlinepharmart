@@ -1,7 +1,10 @@
 import { CURRENCIES } from '../../src/currency/catalog'
 import {
-  currencyExample, INSTALLER_DEFAULT_CURRENCY_CODE, INSTALLER_MAX_PASSWORD_ATTEMPTS, INSTALLER_PASSWORD_HASH,
+  currencyExample, INSTALLER_MAX_PASSWORD_ATTEMPTS, INSTALLER_PASSWORD_HASH,
 } from './installer-policy'
+import {
+  buildDefaultCurrency, defaultBuildProfile, installerDefaultCurrencyIndex, validateBuildProfile, type BuildProfile,
+} from './build-profile'
 import { ALLOWED_DOWNLOAD_HOSTS, ALLOWLISTED_COMPONENTS } from './download-allowlist'
 import { INSTALL_CONFIG_DIRECTORY, INSTALL_CONFIG_FILENAME } from './install-config'
 
@@ -45,8 +48,16 @@ export function currencyTableBlock(): string {
   return CURRENCIES.map((currency) => currencyFields(currency).slice(0, 7).map(([, value]) => value).concat(currencyExample(currency)).join('\t')).join('\n')
 }
 
-export function generateInstallerHeader(): string {
+/**
+ * @param profile The vendor's build settings. Defaulted so every existing caller and test keeps working, and so a
+ * plain `npm run` build behaves exactly as before: Naira, unlocked, no cap. Build Studio passes the real profile.
+ */
+export function generateInstallerHeader(profile: BuildProfile = defaultBuildProfile()): string {
   const [component] = ALLOWLISTED_COMPONENTS
+  // A profile that cannot be built must fail here rather than compile something half-valid into an installer.
+  validateBuildProfile(profile)
+  const defaultCurrency = profile.defaultCurrencyCode.toUpperCase()
+  const defaultCurrencyDefinition = buildDefaultCurrency(profile)
   const defines = CURRENCIES
     .map((currency, index) => currencyFields(currency).map(([key, value]) => `!define CUR_${index}_${key} ${nsisString(value)}`).join('\n'))
     .join('\n')
@@ -61,7 +72,13 @@ export function generateInstallerHeader(): string {
 !define INSTALLER_PASSWORD_SALT ${nsisString(INSTALLER_PASSWORD_HASH.salt)}
 !define INSTALLER_PASSWORD_HASH ${nsisString(INSTALLER_PASSWORD_HASH.hash)}
 !define INSTALLER_MAX_ATTEMPTS ${INSTALLER_MAX_PASSWORD_ATTEMPTS}
-!define INSTALLER_DEFAULT_CURRENCY ${nsisString(INSTALLER_DEFAULT_CURRENCY_CODE)}
+!define INSTALLER_DEFAULT_CURRENCY ${nsisString(defaultCurrency)}
+; A locked build shows one currency, read-only; the installer's currency page branches on this.
+!define INSTALLER_CURRENCY_LOCKED ${profile.lockCurrency ? 1 : 0}
+!define INSTALLER_APP_VERSION ${nsisString(profile.appVersion)}
+; The row the dropdown opens on, and the example the locked page shows, both from the same table the app uses.
+!define INSTALLER_DEFAULT_INDEX ${installerDefaultCurrencyIndex(profile, CURRENCIES)}
+!define CUR_DEFAULT_EXAMPLE ${nsisString(currencyExample(defaultCurrencyDefinition))}
 !define INSTALLER_CONFIG_DIR ${nsisString(INSTALL_CONFIG_DIRECTORY)}
 !define INSTALLER_CONFIG_FILE ${nsisString(INSTALL_CONFIG_FILENAME)}
 !define MOBILE_PORT 43110
@@ -88,7 +105,9 @@ ${defines}
  * the install-config needs. Resolving by *index* rather than by parsing the visible label means a translated or
  * re-formatted label cannot change which currency gets installed.
  */
-export function generateCurrencyUiInclude(): string {
+export function generateCurrencyUiInclude(profile: BuildProfile = defaultBuildProfile()): string {
+  validateBuildProfile(profile)
+  const defaultCurrency = profile.defaultCurrencyCode.toUpperCase()
   const adds = CURRENCIES.map((currency) => `  \${NSD_LB_AddString} $CurrencyList ${nsisString(`${currency.code} - ${currency.name} (${currency.symbol})`)}`).join('\n')
   const chain = CURRENCIES.map((currency, index) => {
     const guard = index === 0 ? '  ${If} $R0 == "0"' : `  \${ElseIf} $R0 == "${index}"`
@@ -115,7 +134,7 @@ ${adds}
 ${chain}
   \${EndIf}
   \${If} $CurrencyCodeOut == ""
-    StrCpy $CurrencyCodeOut "${INSTALLER_DEFAULT_CURRENCY_CODE}"
+    StrCpy $CurrencyCodeOut "${defaultCurrency}"
   \${EndIf}
 !macroend
 `

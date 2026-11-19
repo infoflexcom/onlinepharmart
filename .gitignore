@@ -13,3 +13,5 @@ coverage/
 !.env.example
 .DS_Store
 Thumbs.db
+buildstudio/out/
+installer/nsis/build-profile.json

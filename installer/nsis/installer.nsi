@@ -300,25 +300,50 @@ Function CurrencyPageCreate
     Abort
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 0 100% 20u "Every amount in ${PRODUCT_NAME} is kept in this currency. You can change it only until your first sale."
-  Pop $0
-  ${NSD_CreateLabel} 0 26u 100% 12u "Which currency will this store use?"
-  Pop $0
-  ${NSD_CreateListBox} 0 40u 100% 74u ""
-  Pop $CurrencyList
-  !insertmacro FillCurrencyList
-  ${NSD_LB_SetCurSel} $CurrencyList 0
-  Call RefreshCurrencyExample
-  ${NSD_CreateLabel} 0 118u 100% 12u ""
-  Pop $CurrencyExample
-  Call RefreshCurrencyExample
-  ${NSD_CreateLabel} 0 136u 100% 28u "You can change this only until your first sale. If your vendor set a currency on your licence, it is already chosen and cannot be changed."
-  Pop $0
-  ${NSD_CreateLink} 0 166u 60% 12u "Custom currency..."
-  Pop $0
-  ${NSD_OnClick} $0 CurrencyCustomClicked
+  ; A build whose vendor locked the currency shows it and nothing else: no list, no "Custom currency" link, no
+  ; way to leave the page with a different currency. This branch is compiled from the build profile, so a locked
+  ; build genuinely cannot offer the choice rather than merely discouraging it.
+  !if ${INSTALLER_CURRENCY_LOCKED} == 1
+    StrCpy $CurrencyCodeOut "${INSTALLER_DEFAULT_CURRENCY}"
+    Call LoadDefaultCurrencyFields
+    ${NSD_CreateLabel} 0 0 100% 30u "Your vendor has set the currency for this installation. Every amount is kept in it."
+    Pop $0
+    ${NSD_CreateLabel} 0 36u 100% 16u "$CurrencyCodeOut - $CurrencyNameOut ($CurrencySymbolOut)"
+    Pop $0
+    ${NSD_CreateLabel} 0 56u 100% 16u "Example: ${CUR_DEFAULT_EXAMPLE}"
+    Pop $0
+    ${NSD_CreateLabel} 0 84u 100% 40u "This currency cannot be changed. If it is wrong for your store, contact your vendor."
+    Pop $0
+  !else
+    ${NSD_CreateLabel} 0 0 100% 20u "Every amount in ${PRODUCT_NAME} is kept in this currency. You can change it only until your first sale."
+    Pop $0
+    ${NSD_CreateLabel} 0 26u 100% 12u "Which currency will this store use?"
+    Pop $0
+    ${NSD_CreateListBox} 0 40u 100% 74u ""
+    Pop $CurrencyList
+    !insertmacro FillCurrencyList
+    ; Open on the build's currency, not on row 0 — a build made for Ghana must show Cedis first.
+    ${NSD_LB_SetCurSel} $CurrencyList ${INSTALLER_DEFAULT_INDEX}
+    Call RefreshCurrencyExample
+    ${NSD_CreateLabel} 0 118u 100% 12u ""
+    Pop $CurrencyExample
+    Call RefreshCurrencyExample
+    ${NSD_CreateLabel} 0 136u 100% 28u "You can change this only until your first sale. If your vendor set a currency on your licence, it is already chosen and cannot be changed."
+    Pop $0
+    ${NSD_CreateLink} 0 166u 60% 12u "Custom currency..."
+    Pop $0
+    ${NSD_OnClick} $0 CurrencyCustomClicked
+  !endif
 
   nsDialogs::Show
+FunctionEnd
+
+; Copies the build's currency into the seven live variables for the locked page, using the same generated
+; row-to-fields mapping the dropdown uses. $R0 is that mapping's input, so the locked page and the list agree by
+; construction rather than by two hand-maintained copies.
+Function LoadDefaultCurrencyFields
+  StrCpy $R0 "${INSTALLER_DEFAULT_INDEX}"
+  !insertmacro SetCurrencyFromIndex
 FunctionEnd
 
 Function RefreshCurrencyExample
@@ -389,6 +414,11 @@ Function CurrencyPageLeave
   ${If} $WasInstalled == "1"
     Return
   ${EndIf}
+  !if ${INSTALLER_CURRENCY_LOCKED} == 1
+    ; Nothing on the page can be edited, so there is nothing to validate. Returning here also means the custom
+    ; currency branch below can never be reached in a locked build.
+    Return
+  !endif
   ${If} $CurrencyIsCustom == "1"
     ${If} $CurrencyCodeOut == ""
       MessageBox MB_ICONEXCLAMATION|MB_OK "Enter a code for your custom currency, for example WBC."

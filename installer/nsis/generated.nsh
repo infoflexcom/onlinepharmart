@@ -9,6 +9,12 @@
 !define INSTALLER_PASSWORD_HASH "2k57WIeMSvplpVuEKvMwzBLxTygz9M_s0T-cpHp3ijE"
 !define INSTALLER_MAX_ATTEMPTS 5
 !define INSTALLER_DEFAULT_CURRENCY "NGN"
+; A locked build shows one currency, read-only; the installer's currency page branches on this.
+!define INSTALLER_CURRENCY_LOCKED 0
+!define INSTALLER_APP_VERSION "0.1.0"
+; The row the dropdown opens on, and the example the locked page shows, both from the same table the app uses.
+!define INSTALLER_DEFAULT_INDEX 0
+!define CUR_DEFAULT_EXAMPLE "₦1,234,567.50"
 !define INSTALLER_CONFIG_DIR "Infoflex"
 !define INSTALLER_CONFIG_FILE "install-config.json"
 !define MOBILE_PORT 43110

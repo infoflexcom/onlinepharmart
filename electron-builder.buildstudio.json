@@ -1,0 +1,25 @@
+{
+  "extends": null,
+  "appId": "com.infoflex.buildstudio",
+  "productName": "Infoflex Build Studio",
+  "npmRebuild": false,
+  "//": "Build Studio is a vendor-only tool: it ships its own bundled main/preload/ui and no app code, so the settings and the vendor master password hash stay on the vendor's machine.",
+  "files": ["buildstudio/out/**/*"],
+  "extraMetadata": {
+    "main": "buildstudio/out/main.js"
+  },
+  "directories": { "buildResources": "build", "output": "dist/buildstudio" },
+  "win": {
+    "icon": "build/icon.ico",
+    "target": [{ "target": "nsis", "arch": ["x64"] }]
+  },
+  "nsis": {
+    "oneClick": true,
+    "perMachine": true,
+    "allowElevation": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Infoflex Build Studio",
+    "artifactName": "Infoflex Build Studio Setup.${ext}"
+  }
+}

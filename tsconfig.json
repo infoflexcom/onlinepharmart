@@ -23,5 +23,5 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["vite/client", "vitest/globals", "node"]
   },
-  "include": ["src", "mobile/src/**/*.ts", "mobile/vite.config.ts", "cloud/**/*.ts", "cloud/php/**/*.d.ts", "installer/**/*.ts", "electron.vite.config.ts", "vite.config.ts"]
+  "include": ["src", "mobile/src/**/*.ts", "mobile/vite.config.ts", "cloud/**/*.ts", "cloud/php/**/*.d.ts", "installer/**/*.ts", "buildstudio/**/*.ts", "electron.vite.config.ts", "vite.config.ts"]
 }

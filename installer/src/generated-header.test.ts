@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { CURRENCIES } from '../../src/currency/catalog'
-import { generateInstallerHeader } from './generate-installer-script'
+import { CURRENCIES, getCurrency } from '../../src/currency/catalog'
+import { generateCurrencyUiInclude, generateInstallerHeader } from './generate-installer-script'
+import { defaultBuildProfile } from './build-profile'
+import { currencyExample } from './installer-policy'
 import { INSTALLER_PASSWORD_HASH, INSTALLER_MAX_PASSWORD_ATTEMPTS } from './installer-policy'
 import {
   ALLOWED_DOWNLOAD_HOSTS, ALLOWLISTED_COMPONENTS, hostOf, resolveDownload, type AllowlistedComponent,
@@ -97,6 +99,48 @@ describe('generated.nsh', () => {
     // The release step that pins it is written in installer/README.md. If this test starts failing, somebody
     // pinned it — good — and this test should be updated to assert the pinned digest instead.
     expect(defineText('VCREDIST_SHA256')).toBe('0'.repeat(64))
+  })
+
+  it('compiles in the default build profile when no profile is passed', () => {
+    expect(defineText('INSTALLER_DEFAULT_CURRENCY')).toBe('NGN')
+    expect(defineText('INSTALLER_CURRENCY_LOCKED')).toBe('0')
+    expect(defineText('INSTALLER_APP_VERSION')).toBe('0.1.0')
+    expect(defineText('INSTALLER_DEFAULT_INDEX')).toBe('0')
+    expect(defineText('CUR_DEFAULT_EXAMPLE')).toBe(currencyExample(getCurrency('NGN')!))
+  })
+
+  it('compiles in a GHS build so the installer opens on Ghana Cedis', () => {
+    // DONE WHEN: "a build with default currency GHS preselects Ghana Cedi in the installer".
+    const header = generateInstallerHeader({ ...defaultBuildProfile(), defaultCurrencyCode: 'GHS' })
+    const text = (name: string): string | null => {
+      const match = new RegExp(`^!define ${name} (.*)$`, 'mu').exec(header)
+      return match ? match[1]!.trim().replace(/^"|"$/gu, '').replace(/\$\$/gu, '$') : null
+    }
+    expect(text('INSTALLER_DEFAULT_CURRENCY')).toBe('GHS')
+    expect(text('CUR_DEFAULT_EXAMPLE')).toBe('GH₵ 1,234,567.50')
+    const index = Number(text('INSTALLER_DEFAULT_INDEX'))
+    expect(CURRENCIES[index]!.code).toBe('GHS')
+    // And the include's no-selection fallback follows the build too, not the Naira constant.
+    expect(generateCurrencyUiInclude({ ...defaultBuildProfile(), defaultCurrencyCode: 'GHS' }))
+      .toContain('StrCpy $CurrencyCodeOut "GHS"')
+    // Unlocked, so the page still offers the list.
+    expect(text('INSTALLER_CURRENCY_LOCKED')).toBe('0')
+  })
+
+  it('compiles a locked build so the currency page cannot be edited', () => {
+    // DONE WHEN: "a build with the currency locked shows it read-only".
+    const header = generateInstallerHeader({ ...defaultBuildProfile(), defaultCurrencyCode: 'KES', lockCurrency: true })
+    expect(/^!define INSTALLER_CURRENCY_LOCKED 1$/mu.test(header)).toBe(true)
+    expect(/^!define INSTALLER_DEFAULT_CURRENCY "KES"$/mu.test(header)).toBe(true)
+    // The .nsi branches on that define; here we prove the value it branches on is really compiled in.
+    expect(header).toMatch(/^!define INSTALLER_CURRENCY_LOCKED 1$/mu)
+  })
+
+  it('refuses to generate from an impossible profile rather than compiling nonsense', () => {
+    expect(() => generateInstallerHeader({ ...defaultBuildProfile(), defaultCurrencyCode: 'ZZZ' }))
+      .toThrow(/not a currency/iu)
+    expect(() => generateCurrencyUiInclude({ ...defaultBuildProfile(), appVersion: 'bad' }))
+      .toThrow(/version must look like/iu)
   })
 
   it('keeps the installer config path in step with the app', () => {

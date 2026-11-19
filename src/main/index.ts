@@ -12,6 +12,7 @@ import { SQLiteUserRepository } from '../db/sqlite-user-repository'
 import { AuthService } from '../services/auth-service'
 import { ShopService } from '../services/shop-service'
 import { SetupService } from '../services/setup-service'
+import { readBuildProfile, resolveResourcesPath } from './install-config-reader'
 import { UserService } from '../services/user-service'
 import { ProductInventoryService } from '../services/product-inventory-service'
 import { PointOfSaleService } from '../services/point-of-sale-service'
@@ -172,7 +173,19 @@ app.whenReady().then(async () => {
     secretStore: new ElectronLicenseSecretStore(join(app.getPath('userData'), 'license-authenticator.dpapi'), safeStorage),
     allowLocalMockTrust: !app.isPackaged,
   })
-  const setupService = new SetupService(repository, userRepository, repository, licenseManager)
+  // The vendor's build settings, embedded by Build Studio beside the packaged app. Absent for a `npm run` build
+  // and for any build made before Build Studio existed, which must keep behaving exactly as it always has.
+  const buildProfile = readBuildProfile({
+    resourcesPath: resolveResourcesPath({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      projectRoot: app.getAppPath(),
+    }),
+  })
+  if (buildProfile) {
+    console.info(`Build profile: currency ${buildProfile.defaultCurrencyCode}${buildProfile.lockCurrency ? ' (locked)' : ''}, version ${buildProfile.appVersion}`)
+  }
+  const setupService = new SetupService(repository, userRepository, repository, licenseManager, undefined, undefined, buildProfile)
   const authService = new AuthService(userRepository, repository, auditContext)
   const userService = new UserService(userRepository, repository)
   const inventoryService = new ProductInventoryService(database, repository, { deviceName: hostname() })

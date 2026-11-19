@@ -37,7 +37,13 @@
     "installer:check": "tsx scripts/check-installer.ts",
     "installer:online": "npm run installer:script && npm run installer:assets && electron-builder --win nsis --config electron-builder.installer-online.json",
     "installer:offline": "npm run installer:script && npm run installer:assets && electron-builder --win nsis --config electron-builder.installer-offline.json",
-    "check:phase13": "npm run typecheck && npm test && npm run installer:script && npm run installer:check && npm run build:web && npm run build:mobile && npm run build"
+    "check:phase13": "npm run typecheck && npm test && npm run installer:script && npm run installer:check && npm run build:web && npm run build:mobile && npm run build",
+    "build:studio": "tsx scripts/build-studio.ts",
+    "studio": "npm run build:studio && electron buildstudio/out/main.js",
+    "dist:studio": "npm run build:studio && electron-builder --win nsis --config electron-builder.buildstudio.json",
+    "check:phase14": "npm run typecheck && npm test && npm run build:studio",
+    "cloud:package": "tsx scripts/cloud-package.ts",
+    "artefacts:verify": "tsx scripts/verify-artefacts.ts"
   },
   "dependencies": {
     "@fastify/websocket": "^11.3.7",
@@ -58,6 +64,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^24.9.0",
     "@types/pdfkit": "^0.17.7",
     "@types/react": "^19.2.0",
@@ -68,6 +75,7 @@
     "electron-builder": "^26.0.12",
     "electron-vite": "^4.0.1",
     "fake-indexeddb": "^6.2.8",
+    "jsdom": "^31.0.1",
     "php-wasm": "^0.2.0",
     "php-wasm-openssl": "^0.2.0",
     "php-wasm-sqlite": "^0.2.0",

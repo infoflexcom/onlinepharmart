@@ -9,6 +9,7 @@ import type { ShopRepository } from './contracts/shop-repository'
 import type { SetupPreferencesRepository } from './contracts/setup-repository'
 import type { UserRepository } from './contracts/user-repository'
 import { normalizeShopProfile, validateMoneyDisplay } from './shop-service'
+import type { BuildProfile } from '../../installer/src/build-profile'
 
 const BCRYPT_ROUNDS = 12
 const ADMIN_PERMISSIONS = defaultPermissions('ADMIN')
@@ -26,6 +27,14 @@ export class SetupService {
     private readonly licensePolicy: LicensePolicyProvider,
     private readonly now: () => Date = () => new Date(),
     private readonly newId: () => string = randomUUID,
+    /**
+     * The vendor's build settings, when this build carries them.
+     *
+     * A build locked to one country must stay locked on this screen too. The installer already refuses to let the
+     * customer change the currency, but a shop that reinstalls the app, or that was handed the app without the
+     * installer, would otherwise get a free choice here — which would make the vendor's lock meaningless.
+     */
+    private readonly buildProfile: BuildProfile | null = null,
   ) {}
 
   async getSetupContext(): Promise<SetupContext> {
@@ -33,18 +42,30 @@ export class SetupService {
     const settings = this.shopRepository.readSettings()
     const installerCurrencyCode = this.setupPreferences.getInstallerCurrencyCode()
     const currentCurrencyIsLocked = settings.currencyLocked
-    const vendorCurrencyLocked = Boolean(policy?.lockCurrency || this.setupPreferences.isCurrencyLockedByVendor())
+    const buildCurrencyLocked = this.buildProfile?.lockCurrency === true
+    const vendorCurrencyLocked = Boolean(policy?.lockCurrency || buildCurrencyLocked || this.setupPreferences.isCurrencyLockedByVendor())
     const lockByVendor = vendorCurrencyLocked
+    // Precedence, most specific first: what this shop already has, what its licence was sold with, what the
+    // customer chose in the installer on this machine, what the build was made for, and finally the default.
+    //
+    // The installer ranks above the build on purpose. A locked build names its currency, so the two agree; an
+    // *unlocked* build's currency is only the vendor's suggestion for shops that have no opinion, and a customer
+    // who explicitly chose something in the installer has one.
     const suggestedCode = currentCurrencyIsLocked
       ? settings.currency.code
-      : policy?.defaultCurrencyCode ?? installerCurrencyCode ?? (settings.setupComplete ? settings.currency.code : DEFAULT_CURRENCY_CODE)
+      : policy?.defaultCurrencyCode
+        ?? installerCurrencyCode
+        ?? this.buildProfile?.defaultCurrencyCode
+        ?? (settings.setupComplete ? settings.currency.code : DEFAULT_CURRENCY_CODE)
 
     const initialCurrency = this.setupPreferences.getCurrencyDefinition(suggestedCode)
       ?? getCurrency(suggestedCode)
     if (!initialCurrency) {
       throw new Error('The configured setup currency is unavailable. Choose a valid currency or contact your vendor.')
     }
-    if (lockByVendor && !policy?.defaultCurrencyCode) {
+    // A build lock always names its currency, so the "lock with nothing to lock to" failure can only come from a
+    // licence. Checking it against the right source keeps the message honest.
+    if (lockByVendor && !policy?.defaultCurrencyCode && !buildCurrencyLocked) {
       throw new Error('The vendor currency lock has no configured default currency.')
     }
 
