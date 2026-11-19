@@ -1230,3 +1230,25 @@ reader can succeed with an incomplete answer. A dropped field, a skipped copy, a
 a digest compared without the file, a linear scan that finds the key in the wrong structure. The code ran, the answer
 looked plausible, and plausible is what stops anybody looking. The tests added this phase are mostly assertions that a
 check *fails* when it should — which is the only way to tell a working check from a decorative one.
+
+## Phase 15 (continued) — the static checker could not see the file that decides whether the runtime ships
+
+`npm run installer:check` reads a hand-kept list of includes and reports "Installer sources are consistent". The new
+`prerequisite.nsh` was not on that list. With the file deleted, the checker still printed "consistent" and exited 0 —
+because a file it does not read cannot be missing as far as it is concerned. The include it never read is the one
+carrying `PREREQUISITE_INCLUDE`, which is the whole difference between an offline installer that bundles its runtime and
+one that carries nothing and refuses at install time.
+
+Fixed by adding it, and pinned two ways:
+
+- one test asserts the specific file is in the list;
+- one derives the list from `installer.nsi` itself — every `!include` that is not an NSIS vendor header must appear in
+  `scripts/check-installer.ts`. The next include added to the script either goes in the checker or fails a test, so the
+  list cannot silently go stale in the same way again.
+
+Observed both directions: with the file deleted the checker now prints `FAIL installer/nsis/prerequisite.nsh could not
+be read` and reports two problems; with it restored the check passes. Reverting the checker's list fails both tests.
+
+**This is the fourth defect in this phase of the same family** — a check that runs, succeeds, and is not looking at the
+thing that matters. The pattern is now explicit in `docs/DECISIONS.md`: every guard added here has a test that disables
+the guard or removes the input and asserts the failure. A checker that has never been seen to fail is not evidence.

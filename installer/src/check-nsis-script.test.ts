@@ -700,3 +700,31 @@ describe('every bare !include in installer.nsi resolves beside it', () => {
     }
   })
 })
+
+describe('the static checker reads every include the script depends on', () => {
+  it('lists prerequisite.nsh, not only the three that came before it', () => {
+    // A static checker that cannot see an include cannot check anything the include defines. `prerequisite.nsh` carries
+    // PREREQUISITE_INCLUDE, which is the difference between an offline installer that bundles its runtime and one that
+    // silently carries nothing -- and `npm run installer:check` reported "consistent" with it absent, because its list
+    // of includes was hand-kept and had not grown.
+    const checker = require('node:fs').readFileSync('scripts/check-installer.ts', 'utf8') as string
+    const listAt = checker.indexOf('const includeFiles = [')
+    const list = checker.slice(listAt, checker.indexOf(']', listAt))
+    expect(list).toContain('prerequisite.nsh')
+  })
+
+  it('covers every project-owned include in installer.nsi, so the list cannot go stale again', () => {
+    // Derived from the script rather than compared with a second hand-kept list: the next include added to
+    // installer.nsi must either be in the checker or be a vendor header shipped with NSIS.
+    const script = require('node:fs').readFileSync('installer/nsis/installer.nsi', 'utf8') as string
+    const checker = require('node:fs').readFileSync('scripts/check-installer.ts', 'utf8') as string
+    const ours = [...script.matchAll(/^!include\s+"([^"]+)"/gmu)]
+      .map((match) => match[1]!)
+      .filter((name) => !/^(FileFunc|StrContains|x64|LogicLib|WinVer|MUI2|nsDialogs|StdUtils)\.nsh$/u.test(name))
+    expect(ours.length).toBeGreaterThan(3)
+    for (const name of ours) {
+      expect(checker, `scripts/check-installer.ts does not read ${name}, so it cannot check what ${name} defines`)
+        .toContain(`installer/nsis/${name}`)
+    }
+  })
+})

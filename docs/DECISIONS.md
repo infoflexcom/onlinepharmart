@@ -1026,3 +1026,22 @@ will copy. One line naming `npm run release:prerequisite` is enough.
 **The rule behind it:** a migration that drops data is worse than one that refuses, and far worse than one that
 proceeds. Dropping is invisible — the profile still parses, still looks pinned, and describes a different build from the
 one the reader believes they have.
+
+
+## A checker that has never been seen to fail is not a checker
+
+**Decided:** every guard in the installer and release pipeline gets at least one test that removes its input or disables
+its logic and asserts the failure — and where the input is a list of files the tooling keeps by hand, the list is
+*derived from the thing it describes* rather than compared with a second hand-kept copy.
+
+**Why.** This phase produced four defects of one shape: the static checker's include list did not grow when
+`prerequisite.nsh` was added, so it reported "consistent" with the file deleted; `release/installer-sources/` skipped a
+missing generated header; the address allowlist was checked before the redirect rather than after it; and
+`parseBuildProfile` did not read the pin field it was supposed to preserve. In each case the code ran, produced a
+plausible answer, and the plausible answer is what stopped anybody looking.
+
+**Concretely:** the include list is now checked against `installer.nsi`'s own `!include` lines; the signature and digest
+comparisons were each disabled in turn and the tests that caught them are named in the commit; the redirect predicate
+was run against six addresses including a lookalike host. Where a check genuinely cannot be exercised on this machine —
+the copy into `release/installer-sources/`, because the signature gate stops the assembly first and is right to — the
+test injects the predicate and the documentation says that is what it does, rather than implying the copy ran.
