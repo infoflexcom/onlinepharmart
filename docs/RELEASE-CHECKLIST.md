@@ -138,8 +138,9 @@ for a hang, not for a message.
    - Expected: the runtime IS installed afterwards, the same as an interactive install would do. It used to be skipped
      silently, because the detection lived only on a page that `/S` never draws.
    - Also confirm the app starts, which is the thing the runtime is for.
-4. **The offline installer must refuse an incomplete build.** If you can produce one deliberately (build with
-   `-DPREREQUISITE_VCREDIST` pointing at a missing file), run it on a machine with no internet.
+4. **The offline installer must refuse an incomplete build.** If you can produce one deliberately (generate the
+   installer data from a profile with no `prerequisite` pin, so `prerequisite.nsh` leaves `PREREQUISITE_INCLUDE`
+   undefined, then run `npm run installer:offline`), run it on a machine with no internet.
    - Expected: it refuses and says the installer is incomplete. It used to install anyway while the components page
      promised "every prerequisite is included".
    - If you cannot produce one, record that rather than ticking it.
@@ -576,24 +577,37 @@ proves nothing about behaviour. The items below are that missing half, in the or
 
 ### Build, once, on a Windows build machine
 - [ ] On Windows with Node 20+, run `npm run installer:online` and `npm run installer:offline`. Both must finish and leave `dist/online/Infoflex Setup.exe` and `dist/offline/Infoflex Setup Offline.exe`.
-- [ ] Pin the prerequisite checksum first: replace the all-zero `sha256` in `installer/src/download-allowlist.ts` with the digest of the exact VC++ redistributable being shipped, and rebuild. (**With the zeros in place every verification fails by design.**) That now includes the execution path: until this phase, `InstallPrerequisites` ran the file without checking it, so the zeros blocked the download page while the unverified path still installed the binary.
-- [ ] **Supply the redistributable the offline build carries — a decision, not just a task.** This is the one open
-  question that needs a person to choose, so the options are laid out rather than assumed:
+- [ ] Pin the prerequisite checksum: run `npm run release:prerequisite`, which downloads the official file, verifies the signature and publisher and writes the digest into `installer/nsis/build-profile.json`. Do not hand-edit `installer/src/download-allowlist.ts` — its all-zero digest is the development placeholder that fails closed on purpose. (**With the zeros in place every verification fails by design**, and `npm run release:assemble` refuses to finish.) That includes the execution path: until an earlier phase, `InstallPrerequisites` ran the file without checking it, so the zeros blocked the download page while the unverified path still installed the binary.
+- [ ] **The redistributable is fetched and verified, never committed — this is now a build step, not a decision.**
+  The choice made: the release job downloads it, checks Microsoft signed it, records the SHA-256, and bundles it into
+  the offline installer. The binary is **not** in the repository; the digest is.
 
-  | Option | What it costs | What goes wrong |
+  ```
+  npm run release:prerequisite     # fetch, verify the Authenticode signature + publisher, pin the SHA-256
+  npm run release:prerequisite -- --check    # exits non-zero while the digest is still all zeros
+  ```
+
+  - Expected on success: five lines naming the file, the **SHA-256**, the **Microsoft version**, the size, and
+    `Signed by: CN=Microsoft Corporation, ...`. The digest is written into `installer/nsis/build-profile.json`.
+  - Expected on a failure (no network, a bad signature, a file signed by somebody else): the step stops with a
+    plain-English sentence and **writes nothing**. It never falls back to the all-zeros digest.
+  - `npm run release:assemble` refuses to finish while the digest is zeros — it prints `RELEASE STOPPED` and exits
+    non-zero. A development build may keep the zeros (it fails closed, on purpose); a release may not.
+
+  **Record these two values here, and compare them on a real PC:**
+
+  | What | Value from the build | Matches the file on the PC? |
   | --- | --- | --- |
-  | Commit `vc_redist.x64.exe` to the repository | ~25 MB in every clone, forever, for a binary Microsoft publishes | Git history grows; the file must be re-fetched and re-verified each time Microsoft revises it; it is a stale copy of a security-relevant binary |
-  | Fetch it in the release job | a download step in CI, pinned by the digest already recorded | the release job needs network access to `aka.ms`, which the build agent here does not have; a fetch failure blocks a release |
-  | Ship without it, on purpose | nothing | the offline installer stops being offline for its one prerequisite: a machine with no internet cannot complete the install, which is the case the offline build exists to serve |
+  | SHA-256 of `vc_redist.x64.exe` | ................................................ | [ ] |
+  | Microsoft version (File version) | ................................................ | [ ] |
 
-  Whichever is chosen, the offline build must then define `-DPREREQUISITE_VCREDIST=<path>`, and the digest in
-  `installer/nsis/generated.nsh` must be the real SHA-256 of the supplied file rather than the all-zero placeholder —
-  an all-zero digest makes every verification path refuse the file. Note that as of this phase the offline arm
-  **refuses to install** when the payload is missing (see below), so "ship without it" is now a loud failure rather
-  than a quiet one. That is deliberate: before this phase the offline build installed anyway while its components page
-  promised the prerequisite was included.
+  - On the PC: `certutil -hashfile vc_redist.x64.exe SHA256` must print the digest above, and
+    right-click → Properties → Details → **File version** must print the version above.
+  - The same two values are written to `release/PREREQUISITE.txt` beside the installers, so they travel with the build.
+  - If the offline installer is built without running `release:prerequisite`, it carries **no** runtime at all (the
+    `PREREQUISITE_INCLUDE` define is absent) and its own install fails with the "offline installer is incomplete"
+    refusal. That is the loud failure, and it is deliberate.
 
-- [ ] **Supply the redistributable the offline build carries.** `installer.nsi` includes it with `File` only when `PREREQUISITE_VCREDIST` is defined, and no configuration defines it yet — so today the offline build produces an installer that carries no runtime and will ask for it on first use. Put `vc_redist.x64.exe` somewhere in the repo (it is ~25 MB, so decide deliberately whether to commit it or fetch it in the release job) and add `-DPREREQUISITE_VCREDIST=<path>` to the offline build so the "every prerequisite bundled" promise is actually kept. **This was a build-stopping error before the guard was added:** the offline installer would not compile at all, and the compile check could not show it because the harness defined the variable itself.
 - [ ] Optional: code-sign both executables. The build must also work unsigned.
 
 ### On a clean Windows 10 VM, then a clean Windows 11 VM

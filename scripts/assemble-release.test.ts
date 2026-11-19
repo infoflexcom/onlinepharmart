@@ -71,3 +71,47 @@ describe('the reasons are data, not prose in a function nobody can check', () =>
     expect(SOURCE).toMatch(/import\.meta\.url === `file:\/\/\$\{process\.argv\[1\]\}`/u)
   })
 })
+
+/**
+ * The prerequisite gate.
+ *
+ * These read the script's source rather than running it, because running it writes a release folder. That is a weaker
+ * kind of test and it is labelled as such: the *behaviour* of the gate was verified by running
+ * `npm run release:assemble` (it prints RELEASE STOPPED and exits 1) and `-- --allow-unpinned` (it assembles and warns).
+ * What these pin is that neither route can be quietly removed, and that the unpinned route cannot be reached by accident.
+ */
+describe('the release refuses to finish without a verified prerequisite', () => {
+  it('calls the gate that rejects the all-zeros digest', () => {
+    expect(SOURCE).toContain('assertReleasePin(pin.sha256)')
+  })
+
+  it('stops the process rather than warning', () => {
+    // A warning leaves the folder on disk looking finished. The exit code is the only thing that stops a person
+    // copying it to a USB stick.
+    expect(SOURCE).toMatch(/console\.error\(`\\nRELEASE STOPPED:[\s\S]{0,400}process\.exit\(1\)/u)
+  })
+
+  it('refuses a profile with no pin, not only one with zeros in it', () => {
+    expect(SOURCE).toContain('The build profile carries no prerequisite pin')
+  })
+
+  it('only assembles unpinned when asked by an explicit flag', () => {
+    expect(SOURCE).toContain("process.argv.includes('--allow-unpinned')")
+    // And the flag cannot be reached by the shippable script: the npm alias that passes it has its own name.
+    const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> }
+    expect(pkg.scripts['release:assemble']).not.toContain('--allow-unpinned')
+    expect(pkg.scripts['release:assemble:dev']).toContain('--allow-unpinned')
+  })
+
+  it('says the unpinned folder is not for distribution', () => {
+    expect(SOURCE).toContain('Not for distribution')
+    // And records it in the manifest it writes, so the folder carries the fact rather than the terminal scrollback.
+    expect(SOURCE).toContain('pinned: false')
+  })
+
+  it('records the digest and the Microsoft version in the release folder', () => {
+    expect(SOURCE).toContain('PREREQUISITE.txt')
+    expect(SOURCE).toContain('Microsoft version:')
+    expect(SOURCE).toContain('certutil -hashfile vc_redist.x64.exe SHA256')
+  })
+})

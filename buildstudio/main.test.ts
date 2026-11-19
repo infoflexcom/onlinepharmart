@@ -102,8 +102,9 @@ describe('the Build Studio main process', () => {
     const info = await call<{ version: string; tools: Array<{ id: string }>; steps: Array<{ id: string }> }>('app:info')
     expect(info.version).toBe('9.9.9')
     expect(info.tools.length).toBeGreaterThan(3)
-    // Eleven steps: the plan the one-click build runs end to end.
-    expect(info.steps.length).toBe(11)
+    // Twelve steps: the plan the one-click build runs end to end. It grew by one when the Microsoft prerequisite
+    // became a fetched-and-verified step rather than something the installer assumed was there.
+    expect(info.steps.length).toBe(12)
   })
 
   it('offers every currency in the catalogue, so the window cannot invent one', async () => {

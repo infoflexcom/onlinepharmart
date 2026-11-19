@@ -553,7 +553,7 @@ clicking, the OS behaviour or the packaged run is not — the step is named, and
 
 | # | DONE WHEN | Verified by tests | Needs manual check on real hardware |
 | --- | --- | --- | --- |
-| 1 | One click builds everything | The eleven-step plan resolves and **every step names an npm script that exists** (`build-steps.test.ts` reads `package.json`); grouping, weights and failure explanations are covered; `ui.test.ts` presses *Build everything* in a real DOM and asserts the group runs and the window lands on Output; `main.test.ts` runs the handler that orchestrates it. | That the Electron window opens at all; that a **clean Windows PC with no Node, Git, Python or build tools** can be brought to two finished installers by pressing one button, with no terminal. Gate 6 → *The one-click build on a PC with no developer tools*. |
+| 1 | One click builds everything | The twelve-step plan resolves and **every step names an npm script that exists** (`build-steps.test.ts` reads `package.json`); grouping, weights and failure explanations are covered; `ui.test.ts` presses *Build everything* in a real DOM and asserts the group runs and the window lands on Output; `main.test.ts` runs the handler that orchestrates it. | That the Electron window opens at all; that a **clean Windows PC with no Node, Git, Python or build tools** can be brought to two finished installers by pressing one button, with no terminal. Gate 6 → *The one-click build on a PC with no developer tools*. |
 | 2 | The on-site licence cap is enforced | `license-manager.test.ts`: a 3-year build **refuses** an `endsOn` five years out with `/maximum on-site period is 3 years/i` and leaves the licence **unactivated**, while a `null`-limit build **accepts the identical input**; a second test walks nine term/limit combinations so the boundary is checked in both directions. | That the cap survives into a *packaged, installed* build and that the on-site screen behaves on a real machine — the 3-year-versus-no-limit comparison on one PC. Gate 6 → *The build profile reaching the customer*. |
 | 3 | The build's default currency is preselected, and locked when the vendor locked it | `build-profile-wiring.test.ts` (6): a Ghana-locked profile reaches `generated.nsh` as `INSTALLER_DEFAULT_CURRENCY "GHS"`, `INSTALLER_CURRENCY_LOCKED 1`, and the row `INSTALLER_DEFAULT_INDEX` points at is **verified to be the cedi**; the same file is what `extraResources` packs for the app. `settings-store.test.ts` round-trips it through the shared parser; `install-config-reader` / `installer-to-setup` carry it into first-run setup. | That the **compiled installer** opens on the cedi and that the field is genuinely read-only on a clean VM, and that first-run setup shows it locked too. Gate 6 → *The build profile reaching the customer*. |
 | — | The private signing key and the master password never reach the interface, the logs or a build | `ui.test.ts` asserts the rendered page and `document.body` contain no `PRIVATE KEY`; `main.test.ts` reads the **real log file** back and proves neither the right nor the wrong password is in it, that the key's contents are not logged, that the key is written only to the dialog's path with mode `0600`, and that a settings file containing `PRIVATE KEY` is **refused**; `npm run installer:check` scans 18 shipped installer files, verified to fail when the password is deliberately leaked into one. | Nothing. This one is entirely provable in software, and is proved. |
@@ -994,3 +994,52 @@ the test rather than the Output screen.
   only unread.
 - **New checker rule for dead generated defines**, fed its names by reading the generator rather than a hand-kept list.
   Two genuinely dead defines removed (`CURRENCY_COUNT`, `VCREDIST_SIZE`).
+
+## Phase 15 (continued) — the prerequisite is fetched and verified, and never committed
+
+The offline installer has claimed since it was written that every prerequisite is included, and the online one refuses
+to download a file it cannot verify. Both promises rested on a digest that was still all zeros. This phase makes the
+digest real, at release time, without putting a Microsoft binary in the repository.
+
+**What runs now.** `npm run release:prerequisite` downloads `https://aka.ms/vs/17/release/vc_redist.x64.exe` — the only
+URL the allowlist permits for this component, not a URL a caller passes in — reads its Authenticode signature and
+publisher, computes the SHA-256, and writes the pin into `installer/nsis/build-profile.json`. The binary stays in
+`installer/cache/`, which is gitignored. What is committed is a digest, a size, a version and a timestamp, none of which
+is Microsoft's bytes. `npm run release:assemble` calls the same gate and refuses to finish while the digest is zeros;
+Build Studio's "Build installers" now runs the fetch as its own step, before the installer data is generated.
+
+**What the installer does with it.** `generate-installer-script.ts` prefers the profile's pin over the allowlist
+placeholder when writing `VCREDIST_SHA256`, and writes a generated `prerequisite.nsh` that defines
+`PREREQUISITE_INCLUDE` only when the pin is real. `installer.nsi` guards its offline `File` on that define, so an
+unpinned development build compiles and carries no runtime — and then fails loudly at install time, which is the
+behaviour the previous phase gave it — while a pinned release bundles the file.
+
+**Three defects found while building it, none of them the one I set out to fix.**
+
+- **The pin silently vanished between the release step and the header.** `parseBuildProfile` reads only the fields it
+  knows, so the new `prerequisite` key was dropped on the way in and the header went on emitting the zeros. The first
+  end-to-end pin test therefore "passed" as a no-op. Serialising had the same gap. A round-trip test now pins both
+  directions, and it is the test that would have caught it.
+- **A relative `File` path compiles in the harness and fails in the real build.** `makensis` resolves `File` against its
+  own working directory, which electron-builder sets to its templates folder. `prerequisite.nsh` now emits an absolute
+  path, computed at generation time. This is the third harness-versus-build divergence in this project, all of the
+  same shape: the harness passes include directories the real build supplies differently.
+- **`git checkout` on a file holding uncommitted work.** Reverting a deliberate mutation with `git checkout` discarded
+  the phase's own edits to the generator along with it. Recovered by re-applying, but the lesson is that a mutation must
+  be reverted from a saved copy (`cp` before mutating), not from the index.
+
+**What is proven, and what is not.** Proven by execution on this machine: all four harness builds produce installers
+with the fixture pinned, and the fixture's bytes are literally present in the built offline executable — a random
+2,000-byte marker with a known SHA-256 was found inside the output, so the file really is embedded rather than
+referenced. Also proven: with the cached file removed and the pin left in place, the build fails with
+`File: "…" -> no files found` rather than shipping an installer with no runtime. And both refusal paths were run:
+`release:assemble` prints `RELEASE STOPPED` and exits 1 for a profile with no pin and again for the zeros.
+
+Not proven, and recorded here rather than glossed: **the real Microsoft download was never performed.** This sandbox
+has no access to `aka.ms`, and has no Windows machine to run `signtool` on. So the curl invocation, the
+`--authenticode` interpretation of a real signed Microsoft binary, and `fileVersionFromWindowsResource` have all been
+exercised only against **synthetic inputs** — a stand-in payload and a stubbed signer. The signature-failure tests inject
+a downloader and a signer rather than producing a genuinely mis-signed file. The first real run of
+`npm run release:prerequisite` on a networked machine is the first time that path meets Microsoft's actual bytes;
+`docs/RELEASE-CHECKLIST.md` now asks for the digest and version to be written in by hand and compared against
+`certutil` output on a real PC, so that first run is verified by a person, not assumed.

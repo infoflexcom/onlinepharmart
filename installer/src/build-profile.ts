@@ -44,10 +44,35 @@ export interface BuildProfile {
   maximumOnsitePeriodYears: number | null
   /** The Vendor Cloud address embedded in the app; null for a build with no cloud. */
   licenseServerUrl: string | null
+  /**
+   * What the build can supply at release time, as distinct from what the vendor typed.
+   *
+   * Only the release tooling writes this, and only for a build that is meant to be shipped: the verified SHA-256 of
+   * the VC++ redistributable it fetched and checked, plus a note of where it came from. Absent (or the all-zero
+   * placeholder) means "a development build", which may exist but may never be released -- see
+   * `installer/src/prerequisite-release.ts` and the release script's `assertReleasePin`.
+   *
+   * It lives in the profile rather than in `download-allowlist.ts` so that pinning a release does not edit a source
+   * file: the digest travels with the build that used it, and two builds of different ages cannot disagree about which
+   * binary they carry.
+   */
+  prerequisite?: BuildPrerequisitePin
+}
+
+export interface BuildPrerequisitePin {
+  id: 'vcredist-x64'
+  sha256: string
+  sizeBytes: number
+  /** The Microsoft version string, as read from the file, for a person to compare on a real PC. */
+  microsoftVersion: string
+  /** The official URL it came from. */
+  url: string
+  /** ISO timestamp of the fetch, so a stale pin is visible rather than mysterious. */
+  fetchedAt: string
 }
 
 export interface BuildProfileProblem {
-  field: keyof BuildProfile | 'format' | 'version'
+  field: keyof BuildProfile | 'format' | 'version' | 'prerequisite'
   message: string
 }
 
@@ -80,6 +105,19 @@ export function buildProfileProblems(profile: BuildProfile): BuildProfileProblem
   }
   if (typeof profile.appVersion !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(profile.appVersion)) {
     problems.push({ field: 'appVersion', message: 'The version must look like 1.4.2 (numbers separated by dots).' })
+  }
+  if (profile.prerequisite !== undefined) {
+    const pin = profile.prerequisite
+    if (pin === null || typeof pin !== 'object') {
+      problems.push({ field: 'prerequisite', message: 'The release prerequisite record is not an object.' })
+    } else if (typeof pin.sha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(pin.sha256)) {
+      problems.push({
+        field: 'prerequisite',
+        message: 'The release prerequisite checksum must be 64 lowercase hexadecimal characters.',
+      })
+    } else if (pin.id !== 'vcredist-x64') {
+      problems.push({ field: 'prerequisite', message: `Unknown prerequisite "${String(pin.id)}".` })
+    }
   }
   const currency = getCurrency(profile.defaultCurrencyCode)
   if (!currency) {
@@ -155,6 +193,29 @@ export function parseBuildProfile(text: string): BuildProfile | null {
     maximumOnsitePeriodYears: typeof record.maximumOnsitePeriodYears === 'number' ? record.maximumOnsitePeriodYears : null,
     licenseServerUrl: typeof record.licenseServerUrl === 'string' && record.licenseServerUrl.trim() ? record.licenseServerUrl.trim() : null,
   }
+  // The release prerequisite pin, when the file carries one. Parsed explicitly rather than spread: a profile is a
+  // document a vendor can edit, so an unknown field must not become a value the release trusts.
+  const pin = record.prerequisite
+  if (pin && typeof pin === 'object' && !Array.isArray(pin)) {
+    const fields = pin as Record<string, unknown>
+    if (
+      fields.id === 'vcredist-x64' &&
+      typeof fields.sha256 === 'string' &&
+      typeof fields.sizeBytes === 'number' &&
+      typeof fields.microsoftVersion === 'string' &&
+      typeof fields.url === 'string' &&
+      typeof fields.fetchedAt === 'string'
+    ) {
+      profile.prerequisite = {
+        id: 'vcredist-x64',
+        sha256: fields.sha256,
+        sizeBytes: fields.sizeBytes,
+        microsoftVersion: fields.microsoftVersion,
+        url: fields.url,
+        fetchedAt: fields.fetchedAt,
+      }
+    }
+  }
   return buildProfileProblems(profile).length === 0 ? profile : null
 }
 
@@ -168,6 +229,10 @@ export function serializeBuildProfile(profile: BuildProfile): string {
     maximumOnsitePeriodYears: profile.maximumOnsitePeriodYears,
     licenseServerUrl: profile.licenseServerUrl,
   }
+  // Carried through when present. A profile written by Build Studio has no pin; the release step adds one, and
+  // `installer:script` re-serialises the profile into `installer/nsis/`, so dropping it here would lose the pin
+  // between generating the header and building the offline installer.
+  if (profile.prerequisite) ordered.prerequisite = profile.prerequisite
   return `${JSON.stringify(ordered, null, 2)}\n`
 }
 

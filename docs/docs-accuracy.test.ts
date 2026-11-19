@@ -50,7 +50,14 @@ const RUNTIME_FILES = new Set([
 ])
 
 /** Files produced by a build rather than committed; `build-studio.ts` copies or writes each of them. */
-const GENERATED = new Set(['preload.js', 'ui.js', 'main.js'])
+const GENERATED = new Set([
+  'preload.js', 'ui.js', 'main.js',
+  // Written by `npm run release:assemble`. Named in DECISIONS.md as where the release record lives.
+  'MANIFEST.json',
+  // Ships inside electron-builder, in node_modules. Named in DECISIONS.md as the file that settles whether a define can
+  // be passed through to makensis -- the answer that made the generated-include route necessary.
+  'nsisOptions.d.ts',
+])
 
 function documentedFiles(): Array<{ path: string; source: string }> {
   const found: Array<{ path: string; source: string }> = []

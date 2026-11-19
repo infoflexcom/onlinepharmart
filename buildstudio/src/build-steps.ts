@@ -17,6 +17,7 @@
 export type StepId =
   | 'check-tools'
   | 'install-dependencies'
+  | 'fetch-prerequisite'
   | 'generate-installer-data'
   | 'typecheck'
   | 'test'
@@ -62,6 +63,14 @@ export const BUILD_STEPS: readonly StepSpec[] = [
     title: 'Installing project files',
     detail: 'Copying in the libraries the application uses. This is the slow one the first time.',
     command: NPM, args: ['ci', '--no-audit', '--no-fund'], weight: 30, produces: [],
+  },
+  {
+    // Before the installer data is generated, because the digest it fetches is written into that data. Running it
+    // after would produce an installer pinned to the previous digest -- or to the all-zeros placeholder.
+    id: 'fetch-prerequisite',
+    title: 'Fetching the Microsoft component',
+    detail: 'Downloading the official Visual C++ runtime, checking Microsoft signed it, and recording its fingerprint.',
+    command: NPM, args: ['run', 'release:prerequisite'], weight: 4, produces: [],
   },
   {
     id: 'generate-installer-data',
@@ -128,7 +137,7 @@ export const STEP_GROUPS: Record<string, StepId[]> = {
   'run-tests': ['typecheck', 'test'],
   'test-run-app': ['build-desktop'],
   'build-mobile-app': ['generate-installer-data', 'build-mobile'],
-  'build-installers': ['generate-installer-data', 'build-desktop', 'build-mobile', 'build-installer-online', 'build-installer-offline', 'verify-artefacts'],
+  'build-installers': ['fetch-prerequisite', 'generate-installer-data', 'build-desktop', 'build-mobile', 'build-installer-online', 'build-installer-offline', 'verify-artefacts'],
   'build-cloud-package': ['build-cloud-package'],
   'do-everything': BUILD_STEPS.map((step) => step.id),
 }

@@ -916,3 +916,47 @@ That is the quiet sort of bug: the value exists, is validated, is carried into t
 written down. The install-config writer already takes `appVersion` as a parameter and the reader already parses it —
 nothing had ever compared them to what the vendor asked for. The script now writes `${INSTALLER_APP_VERSION}` and logs
 both, so the two can be told apart in a support call.
+
+## The prerequisite's digest is data, not source code
+
+**Decided:** the pinned SHA-256 of the VC++ redistributable lives in `build-profile.json`, a committed text file, and
+the binary lives in `installer/cache/`, which is gitignored. The release job writes the digest; nobody edits
+`download-allowlist.ts` to pin a release.
+
+**Why not put the digest in the allowlist.** The allowlist is the security boundary: it says *where* bytes may come from
+and *whose signature* is acceptable. A digest is a fact about one particular build of the file, and it changes whenever
+Microsoft ships a patch. Folding the two together would mean every release edits the file the security rules live in,
+which is exactly where a hurried edit goes unnoticed. Keeping them apart means the allowlist can be read and audited
+once, and the digest can be a value that is simply recorded.
+
+**Why not commit the binary.** It is roughly 25 MB of Microsoft's code, it appears in the repository history forever,
+and it is not ours to redistribute from a git remote. `download-allowlist.ts` already pinned the URL; the offline build
+needs the bytes at build time, not at clone time. A gitignored cache directory plus a recorded digest gives the offline
+installer what it needs and leaves the repository the size it should be.
+
+**The cost, stated plainly:** a fresh clone cannot build a shippable offline installer. It can build a development one,
+which carries no runtime and says so. That is a deliberate trade — an unbuildable-by-default shippable installer is
+better than a repository carrying a vendor binary whose provenance nobody re-checks.
+
+**And why the profile, not a `-D` define.** electron-builder's NSIS options expose `customNsisBinary` and
+`warningsAsErrors` and nothing that forwards defines to makensis (checked in `nsisOptions.d.ts`). The include route —
+a generated `.nsh` the script `!include`s — is how the currency table and the digest already travel, so it is the one
+path with no new mechanism.
+
+## A development build fails closed; a release refuses to finish
+
+**Decided:** the all-zeros digest is a legitimate state for a development build and a hard error for a release. The
+zeros mean "nobody has verified a file yet", and the installer treats them as an unsatisfiable checksum: every
+verification fails, by design. A release build cannot be in that state, so `assertReleasePin` throws and
+`release:assemble` exits non-zero before writing anything into `release/`.
+
+**Why not refuse to compile at all while the digest is zeros.** The installer must be buildable on a machine with no
+network and no Microsoft binary, or nobody can work on it. Making the development state impossible would push people
+to paste in a digest from somewhere, which is the failure this whole check exists to prevent.
+
+**Why not warn instead of stopping.** `release/` is what somebody copies to a USB stick and hands to a customer. A line
+in `MANIFEST.json` does not stop them. The stop has to be the exit code.
+
+**Not a substitute for the human check.** The gate proves the digest is not the placeholder. It cannot prove the file
+behind it is current, untouched Microsoft bytes — that is what `docs/RELEASE-CHECKLIST.md` asks a person to compare on a
+real PC with `certutil`, and what the signature check on the installing machine re-establishes at install time.

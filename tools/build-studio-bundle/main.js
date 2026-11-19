@@ -51,6 +51,17 @@ var BUILD_STEPS = [
     produces: []
   },
   {
+    // Before the installer data is generated, because the digest it fetches is written into that data. Running it
+    // after would produce an installer pinned to the previous digest -- or to the all-zeros placeholder.
+    id: "fetch-prerequisite",
+    title: "Fetching the Microsoft component",
+    detail: "Downloading the official Visual C++ runtime, checking Microsoft signed it, and recording its fingerprint.",
+    command: NPM,
+    args: ["run", "release:prerequisite"],
+    weight: 4,
+    produces: []
+  },
+  {
     id: "generate-installer-data",
     title: "Preparing the installer data",
     detail: "Writing the currency list and password hash the installer uses.",
@@ -137,7 +148,7 @@ var STEP_GROUPS = {
   "run-tests": ["typecheck", "test"],
   "test-run-app": ["build-desktop"],
   "build-mobile-app": ["generate-installer-data", "build-mobile"],
-  "build-installers": ["generate-installer-data", "build-desktop", "build-mobile", "build-installer-online", "build-installer-offline", "verify-artefacts"],
+  "build-installers": ["fetch-prerequisite", "generate-installer-data", "build-desktop", "build-mobile", "build-installer-online", "build-installer-offline", "verify-artefacts"],
   "build-cloud-package": ["build-cloud-package"],
   "do-everything": BUILD_STEPS.map((step) => step.id)
 };
@@ -764,6 +775,19 @@ function buildProfileProblems(profile) {
   if (typeof profile.appVersion !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(profile.appVersion)) {
     problems.push({ field: "appVersion", message: "The version must look like 1.4.2 (numbers separated by dots)." });
   }
+  if (profile.prerequisite !== void 0) {
+    const pin = profile.prerequisite;
+    if (pin === null || typeof pin !== "object") {
+      problems.push({ field: "prerequisite", message: "The release prerequisite record is not an object." });
+    } else if (typeof pin.sha256 !== "string" || !/^[0-9a-f]{64}$/u.test(pin.sha256)) {
+      problems.push({
+        field: "prerequisite",
+        message: "The release prerequisite checksum must be 64 lowercase hexadecimal characters."
+      });
+    } else if (pin.id !== "vcredist-x64") {
+      problems.push({ field: "prerequisite", message: `Unknown prerequisite "${String(pin.id)}".` });
+    }
+  }
   const currency = getCurrency(profile.defaultCurrencyCode);
   if (!currency) {
     problems.push({
@@ -813,6 +837,7 @@ function serializeBuildProfile(profile) {
     maximumOnsitePeriodYears: profile.maximumOnsitePeriodYears,
     licenseServerUrl: profile.licenseServerUrl
   };
+  if (profile.prerequisite) ordered.prerequisite = profile.prerequisite;
   return `${JSON.stringify(ordered, null, 2)}
 `;
 }

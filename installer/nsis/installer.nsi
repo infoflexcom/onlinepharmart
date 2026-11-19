@@ -51,6 +51,7 @@ Unicode true
 
 !include "json-escaping.nsh"
 !include "generated.nsh"
+!include "prerequisite.nsh"
 !include "currency-ui.nsh"
 
 ; ------------------------------------------------------------------ warnings that are deliberate
@@ -1170,16 +1171,25 @@ Function InstallPrerequisites
 
   ${If} ${INFOPLEX_OFFLINE} == 1
     ; The offline build carries the redistributable instead of downloading it, so the path to it must be supplied at
-    ; compile time. Nothing supplied it: ${PREREQUISITE_VCREDIST} was defined only by the harness, and the real offline
-    ; build failed with `File: "${PREREQUISITE_VCREDIST}" -> no files found`. The harness defines it too, which is
-    ; exactly why this was invisible -- the harness supplied a value the build never had.
+    ; compile time. Two ways in, and the order matters:
     ;
-    ; It is now a !ifdef, so a build that forgets to supply the file produces an installer that downloads the runtime
-    ; when it can rather than one that will not compile or one that silently ships without a prerequisite it promised.
-    ; electron-builder passes -DPREREQUISITE_VCREDIST=... (see electron-builder.installer-offline.json); the release
-    ; checklist pins the checksum and places the file.
-    !ifdef PREREQUISITE_VCREDIST
-      File /oname=$PLUGINSDIR\vc_redist.x64.exe "${PREREQUISITE_VCREDIST}"
+    ;   PREREQUISITE_INCLUDE  -- written into the generated prerequisite.nsh by generate-installer-script.ts from
+    ;                            build-profile.json. This is the release path: the file exists only because
+    ;                            `npm run release:prerequisite` fetched it and verified its signature, so a define here
+    ;                            means a verified file really is on disk.
+    ;   PREREQUISITE_VCREDIST -- a -D on the command line, for a support build or the compile check. Kept because it
+    ;                            is the documented escape hatch; it is NOT used by the release, which cannot pass -D
+    ;                            through electron-builder at all.
+    ;
+    ; The define is not the promise. A define in a header can name a file that was deleted, or a build can be made by
+    ; hand with the wrong one, so the digest check below still runs and still refuses. `File` is what puts the bytes in
+    ; the installer; the checks in InstallPrerequisites are what decide whether they may be used.
+    !ifdef PREREQUISITE_INCLUDE
+      File /oname=$PLUGINSDIR\vc_redist.x64.exe "${PREREQUISITE_INCLUDE}"
+    !else
+      !ifdef PREREQUISITE_VCREDIST
+        File /oname=$PLUGINSDIR\vc_redist.x64.exe "${PREREQUISITE_VCREDIST}"
+      !endif
     !endif
   ${EndIf}
   ${IfNot} ${FileExists} "$PLUGINSDIR\vc_redist.x64.exe"

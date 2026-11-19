@@ -15,6 +15,10 @@ coverage/
 Thumbs.db
 buildstudio/out/
 installer/nsis/build-profile.json
+# The fetched VC++ redistributable. ~25 MB, published by Microsoft, and it changes when they revise it -- so it is
+# fetched and verified by `npm run release:prerequisite` rather than committed. The digest travels in
+# build-profile.json, which IS in the tree, so a build can always be traced back to the exact binary it carries.
+installer/cache/
 
 # Compiled installer output. A build artefact, never a source file: it is produced by `npm run build` (or, for the
 # harness, by `npm run installer:compile`) and would go stale in the tree the moment the script changed.

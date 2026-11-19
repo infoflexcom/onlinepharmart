@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { assertReleasePin, isDigestPinned, UNPINNED_SHA256 } from '../installer/src/prerequisite-release'
+import { BUILD_PROFILE_FILENAME, parseBuildProfile } from '../installer/src/build-profile'
 
 /**
  * Assembles the release folders: `/release`, `/tools`, `/cloud-package`.
@@ -129,10 +131,49 @@ function main(): void {
     }
   }
 
+  // ---- the prerequisite gate, BEFORE anything is written
+  //
+  // A release may not ship an installer whose own verification refuses its own payload. The offline installer would
+  // carry no runtime (or, worse, a file whose pinned digest is the all-zeros placeholder that refuses everything), and
+  // the online installer would refuse every download. So the assembly stops here rather than producing a
+  // release/ folder that looks finished.
+  //
+  // Deliberately not a warning and not a note in MANIFEST.json: a release folder is what somebody copies to a USB
+  // stick, and a line in a JSON file does not stop them.
+  let prerequisite: { sha256: string; microsoftVersion: string; sizeBytes: number; url: string; fetchedAt: string } | null = null
+  try {
+    const profileText = readFileSync(join('installer', 'nsis', BUILD_PROFILE_FILENAME), 'utf8')
+    const profile = parseBuildProfile(profileText)
+    const pin = profile?.prerequisite
+    // An explicit opt-in for the development pipeline, which must be able to assemble a folder to test the assembly
+    // itself. It is a separate flag with its own name, not a lower bar: the release record then says
+    // `pinned: false` and the folder is marked as not for distribution, so a build that took this route cannot be
+    // mistaken for a shippable one.
+    if (!pin && process.argv.includes('--allow-unpinned')) {
+      console.log('\nWARNING: assembling an UNPINNED development release. Not for distribution.\n')
+    } else if (!pin) {
+      throw new Error(
+        'The build profile carries no prerequisite pin, so this build cannot be released. Run ' +
+          '`npm run release:prerequisite` on a machine with internet access first: it downloads the official ' +
+          'Microsoft file, verifies its signature and publisher, and records the SHA-256.',
+      )
+    }
+    // `pin` is undefined on the --allow-unpinned development route, so the rest is skipped rather than reached through
+    // an optional. Reading `pin.sha256` unconditionally here threw "Cannot read properties of undefined" and printed it
+    // as if it were the release refusing -- a crash dressed as a decision.
+    if (pin) {
+      assertReleasePin(pin.sha256)
+      prerequisite = { sha256: pin.sha256, microsoftVersion: pin.microsoftVersion, sizeBytes: pin.sizeBytes, url: pin.url, fetchedAt: pin.fetchedAt }
+    }
+  } catch (error) {
+    console.error(`\nRELEASE STOPPED: ${error instanceof Error ? error.message : String(error)}\n`)
+    process.exit(1)
+  }
+
   // The installer's own sources, so the .exe can be rebuilt on a Windows machine without the rest of the repository.
   mkdirSync(join(RELEASE, 'installer-sources'), { recursive: true })
   for (const from of ['installer/nsis/generated.nsh', 'installer/nsis/currency-ui.nsh', 'installer/nsis/installer.nsi',
-    'installer/nsis/json-escaping.nsh', 'installer/nsis/offline-include.nsh', 'installer/nsis/build-profile.json']) {
+    'installer/nsis/json-escaping.nsh', 'installer/nsis/offline-include.nsh', 'installer/nsis/prerequisite.nsh', 'installer/nsis/build-profile.json']) {
     if (!present(from)) continue
     const to = join(RELEASE, 'installer-sources', basename(from))
     copyFileSync(from, to)
@@ -149,12 +190,40 @@ function main(): void {
   const sums = collected.map((entry) => `${entry.sha256}  ${entry.file}`).join('\n')
   writeFileSync(join(RELEASE, 'SHA256SUMS.txt'), `${header}${sums}\n`, 'utf8')
 
+  // The pinned prerequisite, written where a person will look for it: a line in the manifest and a small text file
+  // beside the installers, so the digest can be compared on a real PC without opening JSON.
+  if (prerequisite) {
+    const recordPath = join(RELEASE, 'PREREQUISITE.txt')
+    writeFileSync(recordPath, [
+      'Bundled Microsoft Visual C++ 2015-2022 Redistributable (x64)',
+      '',
+      `SHA-256:          ${prerequisite.sha256}`,
+      `Microsoft version: ${prerequisite.microsoftVersion}`,
+      `Size:             ${prerequisite.sizeBytes} bytes`,
+      `Downloaded from:  ${prerequisite.url}`,
+      `Fetched at:       ${prerequisite.fetchedAt}`,
+      '',
+      'Verify the file you have:',
+      '  Windows:  certutil -hashfile vc_redist.x64.exe SHA256',
+      '  Linux:    sha256sum vc_redist.x64.exe',
+      '',
+      'The digest above must match. It is also compiled into the installer, which refuses the file if it does not.',
+      '',
+      'Microsoft version, to compare on a real PC: right-click vc_redist.x64.exe -> Properties -> Details -> File version.',
+      '',
+    ].join('\n'), 'utf8')
+    collected.push({ file: recordPath, bytes: statSync(recordPath).size, sha256: sha256(recordPath) })
+  }
+
   const manifest = {
     format: 'infoflex-release-manifest',
     version: 1,
     producedBy: `node ${process.version} on ${process.platform}`,
     producedAt: new Date().toISOString(),
     gitCommit: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+    // The prerequisite is part of what a release IS, not an extra: without a real pin the offline installer cannot
+    // keep its "every prerequisite is included" promise and the online one refuses every download.
+    prerequisite: prerequisite ?? { sha256: UNPINNED_SHA256, pinned: false },
     present: collected,
     missing,
     complete: missing.length === 0,

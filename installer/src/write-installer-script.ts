@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { defaultBuildProfile, type BuildProfile } from './build-profile'
-import { generateCurrencyUiInclude, generateInstallerHeader } from './generate-installer-script'
+import { generateCurrencyUiInclude, generateInstallerHeader, generatePrerequisiteInclude } from './generate-installer-script'
 
 /**
  * Writes the generated NSIS header to disk for the build.
@@ -31,5 +31,14 @@ export function writeGeneratedIncludes(
   const ui = generateCurrencyUiInclude(profile)
   mkdirSync(dirname(currency), { recursive: true })
   writeFileSync(currency, ui, 'utf8')
-  return [header, { path: currency, bytes: Buffer.byteLength(ui, 'utf8') }]
+  // The prerequisite path, for the same reason: electron-builder cannot pass a -D through to makensis, so the offline
+  // build learns where the verified file is from a header like everything else.
+  const prerequisite = `${directory}/prerequisite.nsh`
+  const prerequisiteText = generatePrerequisiteInclude(profile)
+  writeFileSync(prerequisite, prerequisiteText, 'utf8')
+  return [
+    header,
+    { path: currency, bytes: Buffer.byteLength(ui, 'utf8') },
+    { path: prerequisite, bytes: Buffer.byteLength(prerequisiteText, 'utf8') },
+  ]
 }
