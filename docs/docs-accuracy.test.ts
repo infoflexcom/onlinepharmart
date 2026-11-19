@@ -33,6 +33,8 @@ const knownBasenames = new Set(tracked.map((path) => basename(path)))
 const RUNTIME_FILES = new Set([
   'build-studio-settings.json', 'install-config.json', 'mobile-api-identity.json',
   'config.php', '.manifest.json', 'build-profile.json',
+  // Written into the project by a build, beside build-profile.json.
+  'buildprofile.generated.json',
 ])
 
 /** Files produced by a build rather than committed; `build-studio.ts` copies or writes each of them. */
@@ -54,6 +56,8 @@ describe('the documentation describes this repository', () => {
     const missing = documentedFiles().filter(({ path }) => {
       if (path.startsWith('http') || path.startsWith('~')) return false
       if (RUNTIME_FILES.has(basename(path)) || GENERATED.has(basename(path))) return false
+      // Named only to record that it does not exist; see the test below.
+      if (path === 'vendor-config.json') return false
       if (existsSync(path)) return false
       // A bare filename is fine when a file of that name exists somewhere tracked.
       return !knownBasenames.has(basename(path))
@@ -117,7 +121,55 @@ describe('the documentation describes this repository', () => {
     }
     const studio = readFileSync('buildstudio/README.md', 'utf8')
     expect(studio).toContain(`sees ${words[panels.size]!} screens`)
-    expect(readFileSync('docs/PHASES.md', 'utf8')).toContain(`the ${words[planLength]!}-step plan`)
+    // Case-insensitive: the phrase may start a table cell.
+    expect(readFileSync('docs/PHASES.md', 'utf8')).toMatch(new RegExp(`the ${words[planLength]!}-step plan`, 'iu'))
+  })
+
+  it('keeps the Windows gate covering every area that can only be checked by hand', () => {
+    // Phase 14's DONE WHEN items are proved in software and owed on hardware. The owed half is worthless if the
+    // checklist does not actually say what to click, so the five areas that can *only* be checked on a real machine
+    // are asserted to be present as titled sections. This is the guard against Gate 6 quietly shrinking.
+    const checklist = readFileSync('docs/RELEASE-CHECKLIST.md', 'utf8')
+    const gate = checklist.slice(checklist.indexOf('## Phase 14 — Build Studio on a Windows'))
+    expect(gate.length, 'the phase 14 gate section is missing').toBeGreaterThan(2000)
+
+    for (const heading of [
+      '### The system check, row by row',
+      '### Installing the missing tools',
+      '### The one-click build on a PC with no developer tools',
+      '### The licence key generator',
+      '### The build profile reaching the customer',
+    ]) {
+      expect(gate, `Gate 6 has no "${heading}" section`).toContain(heading)
+    }
+
+    // The 3-year / no-limit comparison must be a real comparison on one machine, naming both sides.
+    expect(gate).toMatch(/3-year versus no-limit/
+    )
+    expect(gate).toContain('**No limit**')
+    expect(gate).toContain('must be **refused**')
+    expect(gate).toContain('must be **accepted**')
+
+    // The clean-machine build must be described as clean: no Node, no makensis, launched from the Start Menu.
+    expect(gate).toMatch(/fresh Windows 11 VM[^\n]*no Node, no Git, no Python/)
+    expect(gate).toContain('from the Start Menu')
+
+    // Every step is a checkbox the person can tick, and there are enough of them to be a real script.
+    const steps = gate.match(/^- \[ \]/gmu) ?? []
+    expect(steps.length).toBeGreaterThan(40)
+  })
+
+  it('never documents a file that is stated not to exist', () => {
+    // PHASES.md records that a `vendor-config.json` was asked for and never existed. That sentence names a path, and
+    // the path check rightly flags it — so the exemption is made here, narrowly and by name, rather than by loosening
+    // the rule for everything. Any *other* mention of a file the docs call missing still fails.
+    const phases = readFileSync('docs/PHASES.md', 'utf8')
+    const denied = [...phases.matchAll(/\*\*There is no such file, and there never was\*\*/gu)]
+    expect(denied.length).toBe(1)
+    const introduced = /asks about a `([a-z-]+\.json)`/u.exec(phases)?.[1]
+    expect(introduced).toBe('vendor-config.json')
+    // And nothing in the tree may be named that, or the correction above would be the wrong way round.
+    expect(execFileSync('git', ['ls-files'], { encoding: 'utf8' })).not.toContain('vendor-config.json')
   })
 
   it('does not call Build Studio planned, now that it exists', () => {

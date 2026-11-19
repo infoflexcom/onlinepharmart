@@ -18,6 +18,7 @@ separately in [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md) and is never marked d
 | 11 | Vendor Cloud: licence server API (two builds — Node with the internet relay, PHP+MySQL without), vendor portal with mandatory TOTP and full licence lifecycle, the internet relay and the desktop's half of it, deployment/privacy/relay-limit documents | **DONE (software); 2 hardware gates owed** |
 | 12 | Polish and test everything: one navy/gold/off-white palette across desktop and phone, optional demonstration datasets the Admin can load or remove, and the full unit / API-security / end-to-end test sweep with an honest pass/fail matrix | **DONE (software); emulator and hardware gates owed — see the matrix below** |
 | 13 | The graphical customer installer: `Infoflex Setup.exe` and `Infoflex Setup Offline.exe`, with a vendor password gate, a Region and Currency page, an accurate system check, verified downloads from an allowlist, offline install, and Repair/Update/Uninstall | **DONE (software); cannot be compiled or clicked in this environment — see the checklist below** |
+| 14 | Build Studio, the vendor's graphical tool: prerequisites and one-click build with no terminal, artefacts with checksums, the licence key generator, the `.iflpolicy` policy page, and the per-build currency/limit settings that reach the installer and the app | **DONE (software); Windows gate 6 owed** |
 
 ### Report surface delivered in Phases 6–7 (and re-verified at Phase 7 close-out)
 
@@ -518,8 +519,12 @@ things it had been missing:
 
 ## Phase 14 — Infoflex Build Studio
 
+**Status: DONE (software); Windows gate 6 owed.**
+
 The vendor's own tool: it takes the project folder and produces the customer's installers on a Windows machine,
-with no terminal at any point.
+with no terminal at any point. "DONE (software)" is meant in the house sense defined at the top of this file: built,
+reviewed, and covered by the automated suite. It does not mean the window has been seen or the installers produced —
+neither has happened, and both are owed to Gate 6 of `docs/RELEASE-CHECKLIST.md`.
 
 ### What was built
 
@@ -538,11 +543,35 @@ Legend as before: **Pass** = proved by an automated check in this repository. **
 display; the manual step is in `docs/RELEASE-CHECKLIST.md` Gate 6. The tool's window has never been opened in
 Electron, and no Build Studio installer has been produced.
 
-| # | Requirement | Result | Evidence |
+Each item is tagged with what actually stands behind it. **Verified by tests** means an automated check in this
+repository proves the behaviour. **Needs manual check on real hardware** means the software half is proved and the
+clicking, the OS behaviour or the packaged run is not — the step is named, and lives in Gate 6.
+
+| # | DONE WHEN | Verified by tests | Needs manual check on real hardware |
 | --- | --- | --- | --- |
-| 1 | One click builds everything | **Pass (logic and window) / could not test (Electron)** | `buildstudio.test.ts`: the eleven-step plan resolves and every step names a real npm script; `build-steps.test.ts` covers grouping, weights and `explainFailure`. `ui.test.ts` presses *Build everything* in a real DOM and asserts the group runs and the window lands on Output. The Electron shell itself is unrun here. |
-| 2 | The on-site licence cap is enforced | **Pass** | `license-manager.test.ts`: a 3-year build refuses an `endsOn` five years out with `/maximum on-site period is 3 years/i` and **leaves the licence unactivated**, while a `null`-limit build accepts the identical input. A second test walks nine term/limit combinations so the boundary is checked in both directions, not at one point. |
-| 3 | The build's default currency is preselected, and locked when the vendor locked it | **Pass (all three programs) / could not test (window)** | `build-profile-wiring.test.ts` (6): a Ghana-locked profile reaches `generated.nsh` as `INSTALLER_DEFAULT_CURRENCY "GHS"`, `INSTALLER_CURRENCY_LOCKED 1`, and the row `INSTALLER_DEFAULT_INDEX` points at is *verified to be the cedi*; the same file is what `extraResources` packs for the app. `settings-store.test.ts` round-trips the saved profile through the shared parser. `install-config-reader` / `installer-to-setup` tests carry it into first-run setup. |
+| 1 | One click builds everything | The eleven-step plan resolves and **every step names an npm script that exists** (`build-steps.test.ts` reads `package.json`); grouping, weights and failure explanations are covered; `ui.test.ts` presses *Build everything* in a real DOM and asserts the group runs and the window lands on Output; `main.test.ts` runs the handler that orchestrates it. | That the Electron window opens at all; that a **clean Windows PC with no Node, Git, Python or build tools** can be brought to two finished installers by pressing one button, with no terminal. Gate 6 → *The one-click build on a PC with no developer tools*. |
+| 2 | The on-site licence cap is enforced | `license-manager.test.ts`: a 3-year build **refuses** an `endsOn` five years out with `/maximum on-site period is 3 years/i` and leaves the licence **unactivated**, while a `null`-limit build **accepts the identical input**; a second test walks nine term/limit combinations so the boundary is checked in both directions. | That the cap survives into a *packaged, installed* build and that the on-site screen behaves on a real machine — the 3-year-versus-no-limit comparison on one PC. Gate 6 → *The build profile reaching the customer*. |
+| 3 | The build's default currency is preselected, and locked when the vendor locked it | `build-profile-wiring.test.ts` (6): a Ghana-locked profile reaches `generated.nsh` as `INSTALLER_DEFAULT_CURRENCY "GHS"`, `INSTALLER_CURRENCY_LOCKED 1`, and the row `INSTALLER_DEFAULT_INDEX` points at is **verified to be the cedi**; the same file is what `extraResources` packs for the app. `settings-store.test.ts` round-trips it through the shared parser; `install-config-reader` / `installer-to-setup` carry it into first-run setup. | That the **compiled installer** opens on the cedi and that the field is genuinely read-only on a clean VM, and that first-run setup shows it locked too. Gate 6 → *The build profile reaching the customer*. |
+| — | The private signing key and the master password never reach the interface, the logs or a build | `ui.test.ts` asserts the rendered page and `document.body` contain no `PRIVATE KEY`; `main.test.ts` reads the **real log file** back and proves neither the right nor the wrong password is in it, that the key's contents are not logged, that the key is written only to the dialog's path with mode `0600`, and that a settings file containing `PRIVATE KEY` is **refused**; `npm run installer:check` scans 18 shipped installer files, verified to fail when the password is deliberately leaked into one. | Nothing. This one is entirely provable in software, and is proved. |
+
+### What Build Studio actually writes (and what it does not)
+
+The brief for this close-out asks about a `vendor-config.json`. **There is no such file, and there never was** — a
+search of the whole repository returns nothing. The four things it was meant to carry are all real, but they live in
+two files that already existed and are already tested:
+
+| What the vendor sets | Where it goes | Read by |
+| --- | --- | --- |
+| Licence key generator's public key | `trustedEd25519Keys` in the **policy file** (`policy.html` → `.iflpolicy`) | the desktop, on import under *On-site / offline* |
+| On-site period limit | `maximumOnsitePeriodYears` in the **policy file** *and* in `build-profile.json` | the desktop's on-site activation |
+| Default currency, and whether it is locked | `defaultCurrencyCode` / `lockCurrency` in **`build-profile.json`** → `installer/nsis/generated.nsh` | the installer's currency page and first-run setup |
+| Settings (version, cloud address) | `appVersion` / `licenseServerUrl` in **`build-profile.json`** | the installer and the app |
+
+Build Studio writes exactly three files: `build-profile.json` **and** `buildprofile.generated.json` into the project
+(the same content, the second because the installer generator and packaging look for different names), and its own
+`build-studio-settings.json` under `%APPDATA%`. The private key is a fourth, and only to a path the vendor picks in a
+dialog. Adding a `vendor-config.json` now would be a fourth name for data two existing files already carry, so it was
+not invented for this close-out — the capability is present, the name in the request is not.
 
 ### The three-way contract, and the two holes found in it
 

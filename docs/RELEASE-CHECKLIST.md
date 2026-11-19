@@ -512,8 +512,33 @@ These are the missing steps.
 ### First run
 - [ ] On a Windows 10 and a Windows 11 machine, `npm ci`, then `npm run studio`. Confirm a window opens with no console window behind it and no menu bar. (DONE WHEN, item 1)
 - [ ] **Welcome** shows one button. Press *Check computer*: every row must load, sorted blocked → orange → green, with a one-sentence verdict. Compare each row against the machine, uninstalling a tool to see the orange arrow.
-- [ ] Press *Install the missing tools*. Confirm the installers run hidden (no console flash, no UAC-less silent install of something unexpected), then the check re-runs by itself and the rows turn green. Confirm a red-cross row is **not** offered for automatic install.
-- [ ] On a machine with no Node, confirm the window still opens and says plainly what is missing rather than failing to start.
+
+### The system check, row by row
+- [ ] On a machine with everything installed, every required row is a green tick and the verdict says a build can run.
+- [ ] Uninstall one tool (Git is the safest). Re-check: that row turns to an **orange arrow** with a sentence saying Build Studio can install it, and the verdict still says a build cannot start yet.
+- [ ] Confirm a **red cross** row (one that can only be installed by hand — the C++ build tools before the redirect is accepted) is phrased as something the vendor must do, not as something Build Studio will fix.
+- [ ] Compare every row against the machine with `node --version`, `git --version` and **Apps & features**. A row that claims a tool is present when it is not is the failure that costs a vendor a day.
+- [ ] Unplug the network and re-check. The rows that need no network must still resolve; anything that cannot be checked must say so rather than showing a green tick it has not earned.
+
+### Installing the missing tools
+- [ ] With Git (or another orange-arrow tool) uninstalled, press *Install the missing tools*.
+- [ ] Watch for a **console window flashing**: there must be none, at any point, including during the download and the installer.
+- [ ] Confirm the download comes from the official host named in the row, that Windows shows a UAC prompt for the installer, and that a tampered download is refused rather than run (the log must say the publisher could not be verified).
+- [ ] Confirm the check **re-runs itself** afterwards and the row turns green with no second click.
+- [ ] Confirm the count on the button matches the number of orange required rows, and that an **optional** row (Git/Python where optional) is never installed without being asked.
+- [ ] Cancel a UAC prompt mid-install: the vendor must get a sentence, not a stack trace, and the row must stay orange rather than turning green.
+
+### The one-click build on a PC with no developer tools
+This is the whole promise of the tool and it cannot be proven anywhere but here: a clean Windows machine, nothing installed, and a vendor who is not a programmer.
+- [ ] Take a **fresh Windows 11 VM** with no Node, no Git, no Python, no Visual Studio Build Tools, no `makensis`. Confirm none are on `PATH`.
+- [ ] Install Build Studio with `npm run dist:studio`'s output. Launch it from the Start Menu — **not** from a terminal.
+- [ ] *Check computer* must report exactly what is missing, without failing to start or showing an unhandled error. The window must open even though Node is absent. (DONE WHEN, item 1)
+- [ ] Press *Install the missing tools* and let it finish. Accept the UAC prompts. Confirm no console window appears at any point.
+- [ ] *Project* → choose the project folder. Then press **Build everything**, once, and do nothing else.
+- [ ] It must complete without the vendor typing anything, and end on **Output** with both `Infoflex Setup.exe` and `Infoflex Setup Offline.exe` listed with a size and a SHA-256. (DONE WHEN, item 1)
+- [ ] Confirm the total wall time is recorded, and that the elapsed clock kept running during the long steps rather than freezing.
+- [ ] Press *Copy to a USB drive*, plug in a stick, and carry the two installers to a second clean machine — confirm they install there.
+- [ ] **Record anything the vendor would have had to know that the window did not tell them.** That is the measure of this screen.
 
 ### The build
 - [ ] **Project** → choose the project folder. A folder that is not the project must be refused; the real one must be accepted and shown with its version.
@@ -528,7 +553,9 @@ These are the missing steps.
 - [ ] Build the installers. Confirm `installer/nsis/generated.nsh` contains `INSTALLER_DEFAULT_CURRENCY "GHS"`, `INSTALLER_CURRENCY_LOCKED 1` and `INSTALLER_APP_VERSION "2.3.4"`, and that `installer/nsis/build-profile.json` holds the same values.
 - [ ] Run the resulting installer on a clean VM: the currency page must open on **Ghana cedi, read-only**, and the app's first-run setup must show the cedi locked too. (DONE WHEN, item 3)
 - [ ] Repeat with the lock **off**: the page must open on the cedi and stay editable.
-- [ ] Repeat with *No limit*: confirm the saved profile has `"maximumOnsitePeriodYears": null` and that on-site activation still accepts a five-year term. With a 3-year limit, confirm it refuses one. (DONE WHEN, item 2)
+- [ ] **The 3-year versus no-limit test, done on one machine so the only difference is the setting.** Build once with on-site limit **3 years**: at the shop, on-site activation with a 5-year term must be **refused** with a message naming the 3-year maximum, and no licence must be created (`SELECT`-free check: the licences screen still shows *not activated*). (DONE WHEN, item 2)
+- [ ] Build again with **No limit**. Confirm `installer/nsis/build-profile.json` holds `"maximumOnsitePeriodYears": null`, then on the same machine issue the **identical** 5-year term: it must be **accepted**, and the expiry shown must be five years out. (DONE WHEN, item 2)
+- [ ] With the 3-year build, confirm a **3-year** term is accepted — the boundary itself, not just outside it — and a 3-year-and-one-day term is refused.
 
 ### The licence policy page (restored in phase 14 — has never been looked at by a person)
 - [ ] Open `buildstudio/policy.html` **by double-clicking it**, with the network unplugged. It must work: no build
@@ -543,8 +570,10 @@ These are the missing steps.
   must be refused with a plain sentence. `http://localhost:4310` must be accepted.
 - [ ] After a successful export, confirm **both password boxes are empty**.
 
-### Vendor tools — the two things that must never happen
+### The licence key generator
 - [ ] Wrong master password: refuse, and **confirm the password box is emptied** either way. Right password: the tools unlock. Close and reopen the window: it must be locked again.
+- [ ] With the tools locked, confirm the key generator and *Save the private key* are not reachable at all.
+- [ ] Enter a key name, press *Generate key pair*, and confirm the **public key and its fingerprint** appear with a plain warning that the private half has not been saved yet.
 - [ ] Generate a key pair. Confirm the **public** key and fingerprint are shown, and that the private key is **not on screen, not in `build-studio-settings.json`, and not in `build-studio.log`** (`findstr /i "PRIVATE" %APPDATA%\Infoflex Build Studio\build-studio.log`).
 - [ ] Press *Save the private key*, choose a path, and confirm the file exists with the contents intact and that the log names only the path. Upload it to the Vendor Cloud and confirm a licence issued from it validates in the app.
 - [ ] `findstr /i "Handywife" /s buildstudio\out\*` must find nothing.
