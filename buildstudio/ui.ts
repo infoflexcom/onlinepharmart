@@ -31,6 +31,7 @@ interface Studio {
   app: {
     info: () => Promise<{ version: string; tools: Array<{ id: string; title: string; required: boolean }>; steps: Array<{ id: string; title: string; detail: string }> }>
     currencies: () => Promise<Array<{ code: string; name: string; symbol: string }>>
+    openPolicyPage: () => Promise<boolean>
   }
 }
 
@@ -539,6 +540,11 @@ $('unlock-vendor').addEventListener('click', async () => {
     showError('unlock-error', result.message ?? 'That password is not correct.')
   }
 })
+
+// The policy page is a separate local file so it works by double-clicking, with no Electron and no build step. It
+// is opened in the vendor's own browser rather than an in-app view, so nothing of Build Studio's window is exposed to
+// a page whose whole job is handling the master password.
+$('open-policy-page').addEventListener('click', () => { void window.studio.app.openPolicyPage() })
 
 $('generate-keys').addEventListener('click', async () => {
   const keyId = ($('key-id') as HTMLInputElement).value.trim()

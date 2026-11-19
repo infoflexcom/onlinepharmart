@@ -15,7 +15,7 @@
 
 ## Build Studio policy and on-site activation
 
-- [ ] Open `buildstudio/index.html` in a current browser. Generate a policy with a random vendor master password and a three-year cap. Confirm the downloaded `.iflpolicy` contains a salted PBKDF2 hash, not the password.
+- [ ] Open `buildstudio/policy.html` in a current browser. Generate a policy with a random vendor master password and a three-year cap. Confirm the downloaded `.iflpolicy` contains a salted PBKDF2 hash, not the password.
 - [ ] Generate a no-cap policy and confirm the blank cap remains `null`. Confirm the UI documents the 50-year sanity limit.
 - [ ] Confirm the page makes no network requests or browser-storage writes. Do not use a production master password during this check.
 - [ ] Import the policy through the desktop GUI. Enter a wrong master password and confirm activation is rejected with increasing delays; check local audit/history for the attempt and confirm neither password value appears.

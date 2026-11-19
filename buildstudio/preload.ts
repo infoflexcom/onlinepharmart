@@ -59,5 +59,6 @@ contextBridge.exposeInMainWorld('studio', {
   app: {
     info: () => ipcRenderer.invoke('app:info'),
     currencies: () => ipcRenderer.invoke('app:currencies'),
+    openPolicyPage: () => ipcRenderer.invoke('app:open-policy-page'),
   },
 })

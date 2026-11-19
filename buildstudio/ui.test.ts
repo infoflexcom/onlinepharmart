@@ -122,6 +122,7 @@ function openWindow(options: { projectPath?: string | null } = {}): { dom: JSDOM
         { code: 'NGN', name: 'Nigerian naira', symbol: '₦' },
         { code: 'GHS', name: 'Ghanaian cedi', symbol: 'GH₵' },
       ],
+      openPolicyPage: async () => { record('openPolicyPage', null); return true },
     },
   }
   ;(dom.window as unknown as { studio: unknown }).studio = bridge
@@ -292,6 +293,22 @@ describe('the Build Studio window', () => {
     expect(saved.buildProfile.maximumOnsitePeriodYears).toBeNull()
     expect(saved.buildProfile.defaultCurrencyCode).toBe('GHS')
     expect(saved.buildProfile.lockCurrency).toBe(true)
+  })
+
+  it('opens the licence policy page for the vendor, which is a separate local file', async () => {
+    const { dom, calls } = openWindow()
+    await settle()
+    // Unlock first: the button lives with the vendor tools, behind the master password.
+    ;(dom.window.document.getElementById('vendor-password') as HTMLInputElement).value = 'right'
+    dom.window.document.getElementById('unlock-vendor')?.dispatchEvent(new dom.window.Event('click'))
+    await settle()
+    const open = dom.window.document.getElementById('open-policy-page')
+    expect(open).not.toBeNull()
+    open?.dispatchEvent(new dom.window.Event('click'))
+    await settle()
+    expect(calls['openPolicyPage']).toHaveLength(1)
+    // The page is opened in the vendor's browser, so its file must ship beside the window's own files.
+    expect(readFileSync('buildstudio/policy.html', 'utf8')).toContain('.iflpolicy')
   })
 
   it('lists the removable drives and copies the built files to the chosen one', async () => {

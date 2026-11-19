@@ -420,6 +420,13 @@ ipcMain.handle('vendor:generate-keys', (_event, keyId: string) => {
   }
 })
 
+ipcMain.handle('app:open-policy-page', async () => {
+  // Deliberately in the vendor's browser, not in a Build Studio window: the page handles the master password, and a
+  // plain local HTML file with no preload and no Node is the safest possible place for that.
+  await shell.openPath(join(__dirname, 'policy.html'))
+  return true
+})
+
 ipcMain.handle('log:path', () => logPath)
 
 ipcMain.handle('log:open', async () => { await shell.openPath(logPath); return true })

@@ -4,7 +4,7 @@
 
 ## Vendor and customer workflows
 
-- `buildstudio/index.html` is a standalone graphical Build Studio policy exporter. It uses Web Crypto to derive a salted PBKDF2-SHA256 hash (310,000 iterations), writes an `.iflpolicy` file containing only that hash, an optional maximum on-site term, a service URL, and public Ed25519 keys, and clears the password inputs after export. The page makes no network calls and uses no browser storage.
+- `buildstudio/policy.html` is a standalone graphical Build Studio policy exporter. It uses Web Crypto to derive a salted PBKDF2-SHA256 hash (310,000 iterations), writes an `.iflpolicy` file containing only that hash, an optional maximum on-site term, a service URL, and public Ed25519 keys, and clears the password inputs after export. The page makes no network calls and uses no browser storage.
 - The Electron license screen imports that policy, activates with an online vendor key, imports a signed Ed25519 `.lic` file, or issues/renews an offline on-site HMAC license after verifying the vendor master password. Date pickers, 1/2/3/5-year shortcuts, optional default currency/lock, mobile features, Admin-phone limit, and custom end date are available in the on-site flow.
 - An optional Build Studio term cap is enforced by the host. Blank means no configured cap; 50 years is the documented implementation sanity limit. End dates are exclusive midnight UTC.
 - If the imported policy pins a license-service URL, the host blocks online activation against any other endpoint before sending the activation key. Redirects are rejected. If the policy leaves the URL blank, the first successful endpoint is saved for check-ins; secure endpoint migration is future work.

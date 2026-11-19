@@ -600,6 +600,31 @@ failure message ("your JavaScript environment is broken") points at the wrong cu
 - **Artefacts are listed from the disk, never from intent.** A step that reports success but wrote nothing shows as
   *missing*.
 
+### A capability I destroyed, and how it was found
+
+The Build Studio window replaced `buildstudio/index.html` — which was also, until then, **the licence policy
+exporter**: the page a vendor opens to produce the `.iflpolicy` a customer's desktop imports under *On-site /
+offline → Import vendor policy*. Nothing type-checks a standalone HTML file, nothing tested it, and no build step
+referenced it, so the whole capability disappeared without a single red test. It was found by reading
+`docs/DECISIONS.md` against the tree, not by running anything.
+
+It is restored as **`buildstudio/policy.html`**, its own URL, still standalone and still openable by double-click
+with no toolchain — and it now has the tests it never had:
+
+- **`buildstudio/policy.test.ts` (11).** The real page is run in a DOM with **Node's real Web Crypto**, a policy is
+  generated, and the result is parsed with the application's own `parseVendorPolicyFile`. That is the assertion that
+  matters: a page producing a file the app rejects is worse than no page, because the vendor discovers it at the
+  customer's shop. Also pinned: the password never appears in the file and two exports of the same password get
+  different salts; a blank term is `null`, not zero; the year menu is exactly 1..50 with no gaps; a short password, a
+  mismatch, a plain-`http` address off the local mock, and a URL carrying credentials/query/fragment are all refused;
+  a real Ed25519 key round-trips while a fake one is refused by the app; no `fetch`, no `XMLHttpRequest`, no storage
+  call, no external resource; both password fields are cleared afterwards.
+
+The window links to it (*Vendor tools → Open the policy page*), so it is no longer orphaned, and `ui.test.ts` presses
+that button. The page is copied beside the window by `build:studio`. It opens in the vendor's **own browser** rather
+than an in-app view: the page handles the master password, and a local file with no preload and no Node is the safest
+place for that.
+
 ### Two build steps that called scripts which did not exist
 
 Found while checking the plan against the manifest rather than against intent: *Build Vendor Cloud package* ran

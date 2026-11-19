@@ -12,10 +12,14 @@ The vendor sees eight screens and never a command prompt:
 | **Project** | Pick the project folder; it is confirmed by reading `package.json`, not by trusting the path. |
 | **Build** | The steps, streamed line by line, with Cancel that really kills the child process. |
 | **Output** | Every artefact read off the disk with its size and SHA-256, plus *Copy to a USB drive*. |
-| **Vendor tools** | The licence signing key pair. Unlocked by the vendor master password. |
+| **Vendor tools** | The licence signing key pair, and a link to the policy page. Unlocked by the vendor master password. |
 | **Settings** | The build profile: version, default currency, whether it is locked, the maximum on-site term, the Vendor Cloud address. |
 
 ## Running it
+
+`buildstudio/policy.html` is a separate, standalone page — the licence policy exporter (`.iflpolicy`). It opens in a
+plain browser with no build step and no Electron, because the file a vendor double-clicks has to work when nothing
+else does. Build Studio links to it; it is not part of the window.
 
 ```bash
 npm run studio        # builds buildstudio/out and starts the window
@@ -51,9 +55,10 @@ them. `buildstudio/out/` is generated and not committed.
 
 Tested here, on any machine:
 
-- `src/`. `build-steps.ts` (26), `runner.ts` (11, with real child processes), `system-check.ts` (17),
-  `settings-store.ts` (10), `artefacts.ts` (10).
-- **`ui.test.ts` (13).** The real `index.html` is loaded into a DOM, `ui.ts` is bundled and run against a stub of
+- `src/`. `build-steps.ts` (29), `runner.ts` (11, with real child processes), `system-check.ts` (17),
+  `settings-store.ts` (11), `artefacts.ts` (10), `buildstudio.test.ts` (26).
+- **`policy.test.ts` (11).** The policy page run with real Web Crypto, its output parsed by the app's own parser.
+- **`ui.test.ts` (14).** The real `index.html` is loaded into a DOM, `ui.ts` is bundled and run against a stub of
   the preload bridge, and every interaction is driven: the one-click build, the smaller build buttons, the three
   check states, the install-only-what-is-missing rule, the vendor unlock, key generation (asserting the private key
   never appears in the page), the settings validation, and the USB copy. This is what stops a shipped window with a

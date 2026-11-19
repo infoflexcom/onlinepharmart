@@ -35,6 +35,8 @@ async function main(): Promise<void> {
   })
 
   copyFileSync(join('buildstudio', 'index.html'), join(out, 'index.html'))
+  // The licence policy page is part of the tool but is opened in a browser, so it stays a plain standalone file.
+  copyFileSync(join('buildstudio', 'policy.html'), join(out, 'policy.html'))
   // The brand logo already lives with the other brand assets; copying it here is what puts it beside the window.
   copyFileSync(join('public', 'branding', 'logo-transparent.png'), join(out, 'logo.png'))
 

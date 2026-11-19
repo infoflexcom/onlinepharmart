@@ -530,6 +530,19 @@ These are the missing steps.
 - [ ] Repeat with the lock **off**: the page must open on the cedi and stay editable.
 - [ ] Repeat with *No limit*: confirm the saved profile has `"maximumOnsitePeriodYears": null` and that on-site activation still accepts a five-year term. With a 3-year limit, confirm it refuses one. (DONE WHEN, item 2)
 
+### The licence policy page (restored in phase 14 — has never been looked at by a person)
+- [ ] Open `buildstudio/policy.html` **by double-clicking it**, with the network unplugged. It must work: no build
+  step, no server, no console. Confirm the page makes no network request (browser dev tools, Network tab, stays empty).
+- [ ] Choose a 3-year cap, a `https://` address, and generate. Confirm the file downloads as
+  `infoflex-vendor-policy.iflpolicy` and contains a `PBKDF2-SHA256` hash with a salt — and that the password itself
+  appears nowhere in it (`findstr /i "<your password>"`).
+- [ ] Import that file into the desktop's **Activation → On-site / offline → Import vendor policy**, then issue an
+  on-site licence with the master password: it must accept a 3-year term and refuse a 5-year one.
+- [ ] Generate again with the same password and confirm the salt **differs** from the first export.
+- [ ] Try a 6-character password, a mismatched confirmation, `http://` to a real host, and a URL with `?x=1`: all
+  must be refused with a plain sentence. `http://localhost:4310` must be accepted.
+- [ ] After a successful export, confirm **both password boxes are empty**.
+
 ### Vendor tools — the two things that must never happen
 - [ ] Wrong master password: refuse, and **confirm the password box is emptied** either way. Right password: the tools unlock. Close and reopen the window: it must be locked again.
 - [ ] Generate a key pair. Confirm the **public** key and fingerprint are shown, and that the private key is **not on screen, not in `build-studio-settings.json`, and not in `build-studio.log`** (`findstr /i "PRIVATE" %APPDATA%\Infoflex Build Studio\build-studio.log`).
