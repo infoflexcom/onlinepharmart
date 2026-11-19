@@ -625,6 +625,29 @@ that button. The page is copied beside the window by `build:studio`. It opens in
 than an in-app view: the page handles the master password, and a local file with no preload and no Node is the safest
 place for that.
 
+### The Windows-only code, tested on Linux
+
+Every branch that only runs on Windows was unreachable here, and Windows is the only platform this tool ships to. So
+the decisions were pulled out of the `if (platform === 'win32')` and given parameters:
+
+- **`killTree` takes the platform and the spawn function.** `buildstudio/src/runner.test.ts` now proves Cancel sends
+  `taskkill /pid <n> /T /F` **hidden** and does not also SIGTERM the parent (which could race), that a machine with no
+  `taskkill` still falls back to SIGTERM, that SIGTERM is used off Windows, and that a process which never started is
+  left alone rather than killed by pid 0.
+- **`windowsDriveRoots` was extracted out of the IPC handler** and takes the platform and a look-up. The everyday case
+  it defends: an empty card reader still has a drive letter, and looking at it throws. That must not empty the list,
+  and the system drive must not be offered for "copy to USB". Both are now tested.
+- **`buildstudio/src/authenticode.ts` is new.** The PowerShell quoting was an untested string concatenation in a download path —
+  the one place a crafted path could matter. The path is now escaped by doubling the single quote, and tests prove a
+  path containing `'; Remove-Item ...` cannot end the string or add a command, while `$` and backtick stay literal
+  (which is why single quotes are used, not double). `interpretAuthenticode` fails closed on a non-zero exit, no exit,
+  empty output or multi-line output — an unsigned file prints nothing, and "nothing" must never mean "fine".
+
+Verified by weakening: removing the quote-doubling breaks exactly the two injection tests.
+
+Still Windows-only and still untested, honestly: whether Windows *honours* taskkill and Authenticode, and whether the
+PowerShell invocation behaves — those need the machine, and Gate 6 is where they are recorded.
+
 ### The Electron main process, executed for the first time
 
 `buildstudio/main.ts` holds everything in the tool that can write a file, spawn a process or read the machine, and it
@@ -645,6 +668,8 @@ window does. What it proves:
   direction is to refuse) — and the vendor is told they can install it themselves.
 - The project folder must really contain a `package.json`; the check answers rows the window can draw; an unknown build
   action is refused by name.
+- **Copy to a USB drive** copies the built files verbatim into `Infoflex Installers` on the chosen drive, and refuses
+  with "nothing built yet" — creating no folder — when the build produced nothing.
 
 It found two real defects:
 

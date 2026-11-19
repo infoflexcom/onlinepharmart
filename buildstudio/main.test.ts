@@ -52,6 +52,8 @@ vi.mock('electron', () => {
   return { app, BrowserWindow, dialog, ipcMain, shell, default: { app, BrowserWindow, dialog, ipcMain, shell } }
 })
 
+const mkdtempSync_ = (await import('node:fs')).mkdtempSync
+
 /** Invokes an IPC handler exactly as the preload bridge does. */
 async function call<T = unknown>(channel: string, ...args: unknown[]): Promise<T> {
   const handler = state.handlers.get(channel)
@@ -268,6 +270,52 @@ describe('the Build Studio main process', () => {
     const path = await call<string>('log:path')
     expect(path).toMatch(/build-studio\.log$/u)
     expect(typeof await call<string>('log:copy')).toBe('string')
+  })
+
+  it('copies the built files to the drive the vendor picked, and refuses when there is nothing to copy', async () => {
+    const { mkdirSync, writeFileSync, readdirSync, readFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const project = state.userData
+    const drive = mkdtempSync_(join(tmpdir(), 'usb-'))
+
+    await call('settings:write', {
+      format: 'infoflex-build-studio-settings', version: 1, projectPath: project, outputPath: 'dist',
+      certificatePath: null, autoIncrementVersion: false, releaseNotes: '',
+      buildProfile: { format: 'infoflex-build-profile', version: 1, appVersion: '1.0.0', defaultCurrencyCode: 'NGN', lockCurrency: false, maximumOnsitePeriodYears: null, licenseServerUrl: null },
+      masterPasswordHash: null,
+    })
+
+    // Nothing built yet: it must say so rather than create an empty folder on the vendor's stick.
+    const empty = await call<{ ok: boolean; message: string }>('artefacts:copy-to-drive', drive)
+    expect(empty).toMatchObject({ ok: false })
+    expect(empty.message).toMatch(/nothing built yet/iu)
+    expect(readdirSync(drive)).toEqual([])
+
+    // Build the cloud package for real, which is the one artefact this environment can produce.
+    mkdirSync(join(project, 'dist/cloud'), { recursive: true })
+    writeFileSync(join(project, 'dist/cloud/infoflex-vendor-cloud.zip'), 'pretend zip')
+
+    const copied = await call<{ ok: boolean; folder: string; message: string }>('artefacts:copy-to-drive', `${drive}/`)
+    expect(copied.ok).toBe(true)
+    const folder = join(drive, 'Infoflex Installers')
+    expect(copied.folder).toBe(folder)
+    expect(readdirSync(folder)).toContain('Vendor Cloud package')
+    // Copied verbatim, not re-encoded or renamed to something the vendor cannot find.
+    expect(readFileSync(join(folder, 'Vendor Cloud package'), 'utf8')).toBe('pretend zip')
+  })
+
+  it('opens the output folder in Explorer only when there is a project', async () => {
+    expect(await call<boolean>('artefacts:open-folder')).toBe(false)
+    const { join } = await import('node:path')
+    await call('settings:write', {
+      format: 'infoflex-build-studio-settings', version: 1, projectPath: state.userData, outputPath: 'out',
+      certificatePath: null, autoIncrementVersion: false, releaseNotes: '',
+      buildProfile: { format: 'infoflex-build-profile', version: 1, appVersion: '1.0.0', defaultCurrencyCode: 'NGN', lockCurrency: false, maximumOnsitePeriodYears: null, licenseServerUrl: null },
+      masterPasswordHash: null,
+    })
+    expect(await call<boolean>('artefacts:open-folder')).toBe(true)
+    expect(state.opened.at(-1)).toBe(join(state.userData, 'out'))
   })
 
   it('will not run a downloaded installer whose publisher cannot be verified', async () => {

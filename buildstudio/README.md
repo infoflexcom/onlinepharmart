@@ -55,8 +55,11 @@ them. `buildstudio/out/` is generated and not committed.
 
 Tested here, on any machine:
 
-- `src/`. `build-steps.ts` (29), `runner.ts` (11, with real child processes), `system-check.ts` (17),
-  `settings-store.ts` (11), `artefacts.ts` (10), `buildstudio.test.ts` (26).
+- `src/`. `build-steps.ts` (29), `runner.ts` (15, with real child processes and the Windows cancel path),
+  `system-check.ts` (17), `settings-store.ts` (11), `artefacts.ts` (14, including Windows drive letters),
+  `authenticode.ts` (9, including a quote-injection attempt), `buildstudio.test.ts` (26).
+- **`main.test.ts` (20).** `electron` mocked, the real main process imported, and every IPC handler called the way the
+  window calls it — including the private key going only to the vendor's chosen path, and the USB copy.
 - **`policy.test.ts` (11).** The policy page run with real Web Crypto, its output parsed by the app's own parser.
 - **`ui.test.ts` (14).** The real `index.html` is loaded into a DOM, `ui.ts` is bundled and run against a stub of
   the preload bridge, and every interaction is driven: the one-click build, the smaller build buttons, the three

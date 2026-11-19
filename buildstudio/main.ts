@@ -10,7 +10,8 @@ import { runCommand, type RunningCommand } from './src/runner'
 import {
   defaultSettings, incrementVersion, readSettings, writeSettings, type BuildStudioSettings,
 } from './src/settings-store'
-import { inspectAllArtefacts, removableDriveChoices } from './src/artefacts'
+import { inspectAllArtefacts, removableDriveChoices, windowsDriveRoots } from './src/artefacts'
+import { authenticodeScript, canCheckAuthenticode, interpretAuthenticode } from './src/authenticode'
 import { generateLicenceKeyPair } from './src/licence-keys'
 import { buildProfileProblems, serializeBuildProfile } from '../installer/src/build-profile'
 import { verifyMasterPassword } from '../src/license/vendor-policy'
@@ -268,9 +269,9 @@ async function downloadToFile(url: string, target: string, title: string): Promi
 }
 
 function authenticodePublisher(path: string): Promise<string | null> {
-  if (process.platform !== 'win32') return Promise.resolve(null)
+  if (!canCheckAuthenticode(process.platform)) return Promise.resolve(null)
   return new Promise((resolve) => {
-    const script = `(Get-AuthenticodeSignature -LiteralPath '${path.replace(/'/gu, "''")}').SignerCertificate.Subject`
+    const script = authenticodeScript(path)
     let child
     try {
       child = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
@@ -283,7 +284,7 @@ function authenticodePublisher(path: string): Promise<string | null> {
     let output = ''
     child.stdout?.setEncoding('utf8').on('data', (chunk: string) => { output += chunk })
     child.on('error', () => resolve(null))
-    child.on('close', (code) => resolve(code === 0 && output.trim() ? output.trim() : null))
+    child.on('close', (code) => resolve(interpretAuthenticode({ exitCode: code, stdout: output })))
     setTimeout(() => { try { child.kill() } catch { /* gone */ } resolve(null) }, 30_000).unref()
   })
 }
@@ -386,21 +387,12 @@ ipcMain.handle('artefacts:copy-to-drive', async (_event, drivePath: string) => {
   return { ok: true, message: `Copied ${built.length} files to ${folder}.`, folder }
 })
 
-ipcMain.handle('drives:list', () => {
+ipcMain.handle('drives:list', () =>
   // Electron has no cross-platform drive enumeration; on Windows the letters that exist are the useful answer.
-  const roots: string[] = []
-  if (process.platform === 'win32') {
-    for (let code = 65; code <= 90; code += 1) {
-      const root = `${String.fromCharCode(code)}:\\`
-      try {
-        if (existsSync(root) && statSync(root).isDirectory()) roots.push(root)
-      } catch {
-        // A drive with no media throws; skip it.
-      }
-    }
-  }
-  return removableDriveChoices(roots)
-})
+  removableDriveChoices(windowsDriveRoots(process.platform, (path) => {
+    const exists = existsSync(path)
+    return { exists, isDirectory: exists && statSync(path).isDirectory() }
+  })))
 
 ipcMain.handle('vendor:unlock', (_event, password: string) => {
   // The password is checked against the stored salted hash and then dropped. It is never held, never logged.

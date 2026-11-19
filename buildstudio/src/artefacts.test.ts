@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import { afterAll, describe, expect, it } from 'vitest'
 import {
   declaredArtefacts, formatBytes, inspectAllArtefacts, inspectArtefact, removableDriveChoices, sha256File,
+  windowsDriveRoots,
 } from './artefacts'
 
 const scratch = mkdtempSync(join(tmpdir(), 'bs-artefacts-'))
@@ -95,5 +96,41 @@ describe('choosing a USB drive', () => {
 
   it('returns the roots unchanged on a non-Windows machine', () => {
     expect(removableDriveChoices(['/media/usb'], 'linux')).toEqual([{ path: '/media/usb', label: '/media/usb' }])
+  })
+})
+
+describe('finding the drives on a Windows machine', () => {
+  /**
+   * This code only runs on the machine the tool ships to, so on a Linux build machine it is dead until it is given
+   * the platform. It is worth covering because the everyday case is awkward: a card reader with no card still has a
+   * letter, and looking at it throws. That must not empty the list.
+   */
+  const present = (drives: string[]) => (path: string) => {
+    if (/^(?:C|D|E):\\$/u.test(path) && drives.includes(path[0]!.toUpperCase())) return { exists: true, isDirectory: true }
+    if (path.startsWith('E:')) throw new Error('There is no disk in the drive.')
+    return { exists: false, isDirectory: false }
+  }
+
+  it('lists every letter that exists and is a directory', () => {
+    const roots = windowsDriveRoots('win32', present(['C', 'D']))
+    expect(roots).toEqual(['C:\\', 'D:\\'])
+  })
+
+  it('skips a letter whose media has been removed instead of failing the whole list', () => {
+    // E: throws on every look, exactly as an empty card reader does.
+    const roots = windowsDriveRoots('win32', present(['C', 'D']))
+    expect(roots).not.toContain('E:\\')
+    expect(roots).toHaveLength(2)
+  })
+
+  it('offers a removable drive as a choice, labelled so the vendor recognises it', () => {
+    const choices = removableDriveChoices(windowsDriveRoots('win32', present(['C', 'D'])), 'win32')
+    // The system drive is not offered: copying an installer onto C:\ is not what the USB button is for.
+    expect(choices).toEqual([{ path: 'D:\\', label: 'D drive' }])
+  })
+
+  it('returns nothing away from Windows rather than inventing drive letters', () => {
+    expect(windowsDriveRoots('linux', () => ({ exists: true, isDirectory: true }))).toEqual([])
+    expect(windowsDriveRoots('darwin', () => ({ exists: true, isDirectory: true }))).toEqual([])
   })
 })

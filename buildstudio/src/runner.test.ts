@@ -1,14 +1,16 @@
-import { describe, expect, it } from 'vitest'
-import { createLineSplitter, resolveExecutable, runCommand } from './runner'
+import type { ChildProcess } from 'node:child_process'
+import type { spawn } from 'node:child_process'
+import { describe, expect, it, vi } from 'vitest'
+import { createLineSplitter, killTree, resolveExecutable, runCommand } from './runner'
 
 /**
  * The process runner. These run real child processes — `node` itself, which is guaranteed present where the tests
  * run — because the behaviour being tested is exactly the behaviour of a real process: streams arriving in chunks,
  * a non-zero exit, and a cancel that actually stops work.
  *
- * What cannot be tested here is the Windows half: `windowsHide`, `npm.cmd`, and taskkill walking the process tree.
- * Those are marked in docs/PHASES.md as needing the Windows pass, and the functions are separated so the parts that
- * *can* be checked without Windows are checked.
+ * The Windows half is tested too, by passing the platform in: `killTree` takes it as a parameter so `taskkill /T /F`
+ * and its fallback are exercised here rather than only on the machine this tool is for. What still needs a real
+ * Windows machine is whether Windows honours them — which is a question no test in this repository can answer.
  */
 
 function collect(): { lines: string[]; onLine: (line: string, stream: 'stdout' | 'stderr') => void } {
@@ -132,5 +134,58 @@ describe('running a real command', () => {
       secrets: [], onLine, onDone: () => {}, env: { INFOFLEX_BUILD_PROFILE: 'ghs-locked' },
     }).done
     expect(lines.join('\n')).toContain('profile=ghs-locked')
+  })
+})
+
+describe('cancelling a build on Windows', () => {
+  /**
+   * Every one of these branches is dead on the Linux build machine, and all of them run on the only machine this tool
+   * is for. `kill()` on Windows signals only the immediate child; npm's real work is in grandchildren, which keep
+   * running and keep the output files open — so Cancel has to mean `taskkill /T`.
+   */
+  const fakeChild = (pid: number | undefined) => ({
+    pid,
+    kill: vi.fn(),
+  }) as unknown as { pid: number | undefined; kill: ReturnType<typeof vi.fn> } & ChildProcess
+
+  it('walks the whole tree with taskkill, hidden, and does not plain-kill as well', () => {
+    const child = fakeChild(4242)
+    const spawnProcess = vi.fn(() => ({}) as unknown as ReturnType<typeof spawn>)
+    killTree(child, { platform: 'win32', spawn: (spawnProcess as unknown) as typeof spawn })
+
+    expect(spawnProcess).toHaveBeenCalledTimes(1)
+    const [command, args, options] = spawnProcess.mock.calls[0] as unknown as [string, string[], { windowsHide: boolean; stdio: string }]
+    expect(command).toBe('taskkill')
+    // /T walks the tree and /F makes it actually stop. Both matter: /T alone can hang on a busy process.
+    expect(args).toEqual(['/pid', '4242', '/T', '/F'])
+    expect(options.windowsHide).toBe(true)
+    expect(options.stdio).toBe('ignore')
+    // taskkill does the work; a SIGTERM on the parent as well would be redundant and could race.
+    expect(child.kill).not.toHaveBeenCalled()
+  })
+
+  it('falls back to a plain kill when taskkill cannot be started at all', () => {
+    const child = fakeChild(7)
+    const spawnProcess = vi.fn(() => { throw new Error('taskkill is not on PATH') })
+    killTree(child, { platform: 'win32', spawn: (spawnProcess as unknown) as typeof spawn })
+    // A machine with no taskkill must still be able to cancel a build.
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM')
+  })
+
+  it('uses SIGTERM away from Windows, and never taskkill', () => {
+    const child = fakeChild(11)
+    const spawnProcess = vi.fn()
+    killTree(child, { platform: 'darwin', spawn: (spawnProcess as unknown) as typeof spawn })
+    expect(spawnProcess).not.toHaveBeenCalled()
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM')
+  })
+
+  it('does nothing at all when the process never started', () => {
+    const child = fakeChild(undefined)
+    const spawnProcess = vi.fn()
+    killTree(child, { platform: 'win32', spawn: (spawnProcess as unknown) as typeof spawn })
+    // A pid of 0 would make taskkill act on the wrong thing; nothing is the only safe answer.
+    expect(spawnProcess).not.toHaveBeenCalled()
+    expect(child.kill).not.toHaveBeenCalled()
   })
 })

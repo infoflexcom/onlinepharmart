@@ -98,6 +98,31 @@ export interface DriveChoice {
 }
 
 /**
+ * The drive letters Windows currently has, as roots.
+ *
+ * Separated from the IPC handler because that handler is unreachable off Windows, and this is the part with a rule
+ * in it: a drive letter that exists but whose media has been removed throws when it is looked at (an empty card
+ * reader is the everyday case), and that must not stop the list being built.
+ */
+export function windowsDriveRoots(
+  platform: NodeJS.Platform,
+  look: (path: string) => { exists: boolean; isDirectory: boolean },
+): string[] {
+  if (platform !== 'win32') return []
+  const roots: string[] = []
+  for (let code = 65; code <= 90; code += 1) {
+    const root = `${String.fromCharCode(code)}:\\`
+    try {
+      const info = look(root)
+      if (info.exists && info.isDirectory) roots.push(root)
+    } catch {
+      // A drive with no media throws; it is simply not a choice.
+    }
+  }
+  return roots
+}
+
+/**
  * Filters the filesystem roots down to removable-looking drives.
  *
  * On Windows the roots are letters; A and B are never used and C is almost always the system drive, so they are

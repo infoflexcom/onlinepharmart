@@ -140,11 +140,19 @@ export function runCommand(options: RunnerOptions): RunningCommand {
  * `kill()` on Windows only signals the immediate child; npm's real work happens in grandchildren, which would keep
  * running and keep the output files open. taskkill /T walks the whole tree, which is what Cancel has to mean.
  */
-export function killTree(child: ChildProcess): void {
+export function killTree(
+  child: ChildProcess,
+  // Injected so the Windows path can be tested on a Linux build machine: the tool only ever ships to Windows, and a
+  // Cancel that leaves half a build tree running is the failure that matters most there.
+  options: { platform?: NodeJS.Platform; spawn?: typeof spawn } = {},
+): void {
   if (!child.pid) return
-  if (process.platform === 'win32') {
+  const platform = options.platform ?? process.platform
+  const spawnProcess = options.spawn ?? spawn
+  if (platform === 'win32') {
     try {
-      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+      // `windowsHide` and `stdio: 'ignore'`: the taskkill window must never appear.
+      spawnProcess('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
       return
     } catch {
       // Fall through to the plain kill below.
