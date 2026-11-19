@@ -116,20 +116,30 @@ These are the paths an unattended deployment takes, and none of them can be exer
 for a hang, not for a message.
 
 1. Install silently from an administrator prompt:
-   `"Infoflex Setup.exe" /S`
+   `"Infoflex Setup.exe" /S /PASSWORD=<the vendor password>`
    - Expected: it completes with no window at all and no visible dialog. Time it; record how long.
-2. Uninstall silently via `"%PROGRAMFILES%\Infoflex\Uninstall Infoflex.exe" /S`.
+2. **Check the gate is real, which it was not before this phase.** Run each of these and record the result:
+   - `"Infoflex Setup.exe" /S` with no password on a machine with no prior install.
+     Expected: it fails with "needs the vendor password for a silent install" and installs nothing. If it installs,
+     the gate is bypassable with one flag again.
+   - `"Infoflex Setup.exe" /S /PASSWORD=wrong`.
+     Expected: it fails, says the password is not correct, and changes nothing.
+   - `"Infoflex Setup.exe" /S /PASSWORD=<correct> /CURRENCY=XYZ` where XYZ is not a supported code.
+     Expected: it fails and names XYZ.
+   Be aware that the password you type appears in the process command line while it runs; this is a known and accepted
+   cost of the silent path, not a defect to report.
+3. Uninstall silently via `"%PROGRAMFILES%\Infoflex\Uninstall Infoflex.exe" /S`.
    - Expected: completes without a dialog, and keeps your data (silent means no question, and the safe default is "keep").
-3. **The upgrade test, which is the one that matters.** Install the previous build, complete first-run setup and add a
+4. **The upgrade test, which is the one that matters.** Install the previous build, complete first-run setup and add a
    product. Then install the new build over it, interactively.
    - Expected: the installer does **not** ask "Keep your shop data?" — the old uninstaller runs silently underneath it,
      and a question there would be about data the upgrade must keep.
    - Expected after the upgrade: your products are still there and the app opens without first-run setup.
    - Record what happens if you answer **No** at such a prompt, if you see one. That delete is unrecoverable, and seeing
      it at all means the `--updated` guard is not working.
-4. Repeat step 3 but start the new installer from a command line with `/S`.
+5. Repeat step 4 but start the new installer from a command line with `/S`.
    - Expected: same outcome, no dialog, data intact.
-5. Cancel an upgrade by running the new installer and answering "No" to "are you sure you want to cancel?" if offered.
+6. Cancel an upgrade by running the new installer and answering "No" to "are you sure you want to cancel?" if offered.
    - Expected: the old version is still installed and working. An upgrade that removes the old version before it has
      installed the new one leaves the machine with neither.
 
@@ -148,7 +158,10 @@ for a hang, not for a message.
 | Uninstall removes `install-config.json` from ProgramData | ☐ pass ☐ fail | |
 | "Remove everything" really removes `%APPDATA%\Infoflex` | ☐ pass ☐ fail | |
 | Uninstall as a different admin still removes machine-wide items | ☐ pass ☐ fail | |
-| Silent install `/S` completes with no dialog | ☐ pass ☐ fail | |
+| Silent install `/S /PASSWORD=` completes with no dialog | ☐ pass ☐ fail | |
+| Silent install with NO password FAILS and installs nothing | ☐ pass ☐ fail | |
+| Silent install with a WRONG password fails and changes nothing | ☐ pass ☐ fail | |
+| Silent install with an invalid `/CURRENCY=` fails | ☐ pass ☐ fail | |
 | Silent uninstall `/S` completes with no dialog, keeps data | ☐ pass ☐ fail | |
 | Upgrade does NOT ask the keep-data question | ☐ pass ☐ fail | |
 | Upgrade preserves products and skips first-run setup | ☐ pass ☐ fail | |

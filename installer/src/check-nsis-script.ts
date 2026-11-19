@@ -345,6 +345,50 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
     }
   }
 
+  // ---- a gate that only exists on a page
+  //
+  // A page callback ("Page custom FooCreate FooLeave") does not run in a silent install, because no page is drawn. A
+  // check that lives only in a Leave callback is therefore optional for anyone who passes /S -- and the vendor password
+  // gate is exactly such a check, guarding the currency the shop installs with. It was real for a double-click and
+  // absent for a typed flag until this rule's absence made it visible.
+  //
+  // The rule is narrow on purpose: it only fires when the script has a password check at all, and only when the silent
+  // branch of .onInit never runs a password checker. A script with no such gate is not a defect under this rule, which
+  // keeps it from pretending to be a general security review.
+  // Indentation matters here and cost this rule its first version: the page is inserted from inside a macro, so the
+  // line is `  Page custom PasswordPageCreate PasswordPageLeave` with leading whitespace. An anchored `^Page` matched
+  // nothing, the rule never ran, and a mutation that deleted the entire silent password check was reported clean.
+  const hasPasswordPage = /^\s*Page\s+custom\s+PasswordPageCreate\b/mu.test(strip.join('\n'))
+  if (hasPasswordPage) {
+    const onInitStart = strip.findIndex((raw) => /^Function\s+\.onInit\s*$/u.test(raw.trim()))
+    if (onInitStart === -1) {
+      problems.push({ line: 1, message: 'There is a password page but no .onInit, so nothing checks it silently.' })
+    } else {
+      const onInitEnd = strip.findIndex((raw, index) => index > onInitStart && /^FunctionEnd\s*$/u.test(raw.trim()))
+      const body = strip.slice(onInitStart, onInitEnd === -1 ? undefined : onInitEnd)
+      const silentIndex = body.findIndex((raw) => raw.includes('${Silent}'))
+      if (silentIndex === -1) {
+        problems.push({
+          line: onInitStart + 1,
+          message: 'The password page has no silent equivalent: a /S install skips every page and never checks it.',
+        })
+      } else {
+        const silentBranch = body.slice(silentIndex)
+        // The INVOCATION, not merely the name. `File /oname=...password-check.exe` is a copy, not a check, and an
+        // earlier version of this rule accepted it -- so a script whose silent branch staged the helper and never ran
+        // it passed. Requiring the call is the difference between moving a file and checking a password.
+        const runsChecker = silentBranch.some((raw) => /ExecToStack|ExecToLog|ExecWait/u.test(raw) && /password-check\.exe/u.test(raw))
+        const asksForFlag = silentBranch.some((raw) => /\/PASSWORD=/u.test(raw))
+        if (!runsChecker || !asksForFlag) {
+          problems.push({
+            line: onInitStart + silentIndex + 1,
+            message: 'The silent branch never verifies the vendor password, so /S bypasses the password page.',
+          })
+        }
+      }
+    }
+  }
+
   // ---- a MessageBox that will block a silent run
   //
   // NSIS suppresses a MessageBox in silent mode only when the command carries `/SD <button>`; without one it shows the

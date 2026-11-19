@@ -456,3 +456,51 @@ writing prose is not a suite.
 Two things that did not come out of this, and are recorded so they are not claimed as wins: no test caught these on its
 own, and the docs-accuracy failure alongside them was real — `installUtil.nsh` was named in prose as a file, and that
 suite requires each such name to exist or to be listed with a reason. It was listed.
+
+## The vendor password could be skipped with one flag
+
+The gate lives in `PasswordPageLeave`. A page callback runs when the page is left, and a silent install draws no pages at
+all — so `${Silent}` skipped the gate. `Infoflex Setup.exe /S` installed without the vendor password and let the caller
+name the currency on the command line. The gate was real for the person who double-clicked the file and absent for the
+person who typed a flag, and the code that would have noticed was the same code that was not running.
+
+What the gate protects is worth being precise about, because it has been over-stated before. It is not a licensing
+control: activation, machine binding and entitlement are enforced by the host application and the licence server, and
+none of them depend on the installer. It also does not stop someone determined — anyone holding the installer can attach
+a debugger, or simply run the app after installing it however they managed to. What it protects is the wizard's own
+decisions: that the first-run setup is driven by an authorised person rather than whoever passes by the machine, and in
+particular that the shop's currency is chosen by someone with the password rather than by a command-line argument.
+
+**The fix, and the trade-off in it.** The silent branch now requires `/PASSWORD=`, verifies it with the same PBKDF2
+helper at the same 310,000 iterations, and aborts the install on failure — the same fail-closed behaviour as the page,
+including when the helper itself is missing. A silent install without the flag fails, because the alternative is
+exactly the bypass. Two consequences are stated rather than hidden:
+
+- **The password appears in the process's command line** for the duration of the install, which a local administrator
+  could read or log. An environment variable is not better — it is equally readable and additionally leaks to child
+  processes — and stdin is not available from a double-clicked installer. This is a real reduction in secrecy for the
+  silent path, and it is the cost of having a silent path that checks anything at all. Interactive installs are
+  unaffected.
+- **There is no attempt counter on the silent path.** The five-attempt limit exists to slow a human at a keyboard, and
+  its counter is displayed on a page that does not exist here. A script with the wrong password gains nothing from being
+  told how many tries remain, and adding a counter would only make an unattended run hang. The helper's cost per attempt
+  is unchanged, so guessing is still expensive.
+
+**How the gap was found, and how the next one gets caught.** It was found by reading the pages list and noticing the
+gate was only on one of them. That is not a method. The check is now a rule in the static checker: a script with a
+password page must have a `.onInit` whose silent branch both reads `/PASSWORD=` and *invokes* the checker. The second
+half of that rule matters — the first version accepted `File /oname=...password-check.exe`, which stages the helper and
+checks nothing, so a script that copied the binary and never ran it passed. The obvious way to write the rule is not the
+way that catches the defect.
+
+**And the rule was itself dead for two runs.** Its page-detection regex was anchored `^Page`, but the page is inserted
+from inside a macro, so the line is indented. The rule never ran; a mutation deleting the entire silent password check
+was reported clean; the checker said "consistent". The anchor is now `^\s*Page`, the reasoning is in the code, and the
+test that would have caught it (a script with the page and no silent check, expected to be reported) is in the suite.
+That is the second time this phase a check was written against the shape the author had in mind rather than the shape
+the file has — the first was a test matching its own comments. Both were found by mutating, not by reading.
+
+**Not proven.** No silent install has been run. The flag parsing, the helper invocation and the abort paths are
+compiled and inspected, and the logic is the same helper the interactive path already uses, but "required" here means
+"the script says so and the checker enforces the script", not "observed on Windows". `docs/RELEASE-CHECKLIST.md` §1.5
+lists a silent install with a wrong password, with no password, and with the right one, each to be recorded.

@@ -288,4 +288,46 @@ describe('the redefinition rule still catches a genuine duplicate', () => {
     ].join('\n')
     expect(checkNsisScript(script).filter((p) => /\/SD/u.test(p.message))).toEqual([])
   })
+
+  it('reports a password page with no silent equivalent, which /S walks straight past', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '!macro pages',
+      '  Page custom PasswordPageCreate PasswordPageLeave',
+      '!macroend',
+      'Function .onInit',
+      '  ${If} ${Silent}',
+      '  ${EndIf}',
+      'FunctionEnd',
+      'Function PasswordPageLeave',
+      '  nsExec::ExecToStack \'"$PLUGINSDIR\\password-check.exe" a b c d\'',
+      'FunctionEnd',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    const problems = checkNsisScript(script)
+    expect(problems.some((problem) => /bypasses the password page/u.test(problem.message))).toBe(true)
+  })
+
+  it('accepts a silent branch that actually runs the checker', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '  Page custom PasswordPageCreate PasswordPageLeave',
+      'Function .onInit',
+      '  ${If} ${Silent}',
+      '    ${GetOptions} $R0 "/PASSWORD=" $1',
+      '    nsExec::ExecToStack \'"$PLUGINSDIR\\password-check.exe" a b c d\'',
+      '  ${EndIf}',
+      'FunctionEnd',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).filter((p) => /password page/u.test(p.message))).toEqual([])
+  })
+
+  it('does not fire on a script with no password page at all', () => {
+    // The rule is about this gate, not a general security review. A script without one is not a defect under it.
+    const script = ['OutFile "x.exe"', 'Function .onInit', 'FunctionEnd', 'Section', 'SectionEnd'].join('\n')
+    expect(checkNsisScript(script).filter((p) => /password/u.test(p.message))).toEqual([])
+  })
 })

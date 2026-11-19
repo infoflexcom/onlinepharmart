@@ -147,6 +147,68 @@ describe('the uninstaller hooks electron-builder actually calls', () => {
   })
 })
 
+describe('the vendor password gate cannot be skipped', () => {
+  // The gate is checked in PasswordPageLeave, which is a page callback. A silent run draws no pages, so `${Silent}`
+  // skipped the gate entirely: `Setup.exe /S` installed without the vendor password and let the caller choose the
+  // currency from the command line. The gate was real for a double-click and absent for a typed flag.
+  const onInit = (() => {
+    const start = script.indexOf('Function .onInit')
+    const end = script.indexOf('FunctionEnd', start)
+    return start === -1 ? '' : script.slice(start, end)
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith(';'))
+      .join('\n')
+  })()
+
+  it('verifies the password in the silent branch, not only on the password page', () => {
+    expect(onInit).toMatch(/\$\{Silent\}/u)
+    const silentBlock = onInit.slice(onInit.indexOf('${Silent}'))
+    expect(silentBlock).toMatch(/\/PASSWORD=/u)
+    // It must actually run the checker, not merely mention the flag.
+    expect(silentBlock).toMatch(/password-check\.exe/u)
+    expect(silentBlock).toMatch(/nsExec::ExecToStack/u)
+  })
+
+  it('refuses a silent install that supplies no password', () => {
+    const silentBlock = onInit.slice(onInit.indexOf('${Silent}'))
+    const flagRead = silentBlock.indexOf('/PASSWORD=')
+    expect(flagRead).toBeGreaterThanOrEqual(0)
+    const currencyRead = silentBlock.indexOf('/CURRENCY=')
+    expect(currencyRead).toBeGreaterThan(flagRead)
+
+    // The missing-flag branch, between reading the flag and reading the currency: it must Abort.
+    expect(silentBlock.slice(flagRead, currencyRead)).toMatch(/Abort/u)
+
+    // And a non-zero exit from the checker must Abort too, or the check is decorative. Look only at the region that
+    // follows the silent-path invocation.
+    const afterCheck = silentBlock.slice(silentBlock.indexOf('ExecToStack'))
+    expect(afterCheck).toMatch(/\$0 != "0"/u)
+    const failedBranch = afterCheck.slice(afterCheck.indexOf('$0 != "0"'))
+    expect(failedBranch.slice(0, failedBranch.indexOf('${EndIf}'))).toMatch(/Abort/u)
+  })
+
+  it('requires the password BEFORE the currency can be chosen from the command line', () => {
+    // Ordering matters: a currency parsed before the gate would be accepted on a run that then fails the gate, and any
+    // later code that reads it has already been told a lie about who is installing.
+    const silentBlock = onInit.slice(onInit.indexOf('${Silent}'))
+    const password = silentBlock.indexOf('/PASSWORD=')
+    const currency = silentBlock.indexOf('/CURRENCY=')
+    expect(password).toBeGreaterThanOrEqual(0)
+    expect(currency).toBeGreaterThanOrEqual(0)
+    expect(password).toBeLessThan(currency)
+  })
+
+  it('keeps the gate on the interactive page too, so the two paths agree', () => {
+    const pageLeave = (() => {
+      const start = script.indexOf('Function PasswordPageLeave')
+      const end = script.indexOf('FunctionEnd', start)
+      return start === -1 ? '' : script.slice(start, end)
+    })()
+    expect(pageLeave).toMatch(/nsExec::ExecToStack/u)
+    expect(pageLeave).toMatch(/\$0 == "0"/u)
+  })
+})
+
 describe('the uninstaller-pass build shape', () => {
   it('reproduces the template own un.onInit, which is what makes the collision visible', () => {
     // Without this function in the harness, the harness compiles while the shipping build does not -- the failure

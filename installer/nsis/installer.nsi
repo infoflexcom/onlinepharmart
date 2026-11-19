@@ -254,9 +254,46 @@ Function .onInit
     ${EndIf}
   ${EndIf}
 
-  ; ---- silent install: /S or /SILENT, with an optional validated /CURRENCY=CODE
+  ; ---- silent install: /S or /SILENT, with a REQUIRED /PASSWORD= and an optional validated /CURRENCY=CODE
+  ;
+  ; The vendor password is checked in PasswordPageLeave, which is a page callback -- and a silent run draws no pages,
+  ; so `${Silent}` skipped the gate entirely. Every other thing the gate protects was therefore optional: anyone could
+  ; run `Infoflex Setup.exe /S`, install without the vendor password, and choose the currency themselves from a command
+  ; line, which is the one decision the gate exists to keep with the vendor. The gate was real for the person who
+  ; double-clicked the file and absent for the person who typed a flag.
+  ;
+  ; So the silent path verifies the same password through the same helper. It is required, not optional: a silent
+  ; install without /PASSWORD= fails, because the alternative -- installing anyway -- is exactly the bypass.
+  ;
+  ; The password is read from the command line rather than an environment variable because Electron and NSIS alike keep
+  ; `GetParameters` in memory only; neither is logged. It does appear in a process listing for the duration of the
+  ; install, which is worth knowing and is stated in docs/DECISIONS.md rather than glossed over.
   ${If} ${Silent}
     ${GetParameters} $R0
+    ${GetOptions} $R0 "/PASSWORD=" $PasswordValue
+    ${If} ${Errors}
+      MessageBox MB_ICONSTOP|MB_OK "${PRODUCT_NAME} Setup needs the vendor password for a silent install: pass /PASSWORD=<the password supplied with your purchase>." /SD IDOK
+      SetErrorLevel 2
+      Abort
+    ${EndIf}
+    ; Same helper, same format, same failure mode as the password page: a missing helper fails CLOSED.
+    InitPluginsDir
+    File /oname=$PLUGINSDIR\password-check.exe "${INSTALLER_PASSWORD_CHECKER}"
+    ${IfNot} ${FileExists} "$PLUGINSDIR\password-check.exe"
+      MessageBox MB_ICONSTOP|MB_OK "The installer is incomplete: its password checker is missing. Download ${PRODUCT_NAME} Setup again." /SD IDOK
+      Quit
+    ${EndIf}
+    nsExec::ExecToStack '"$PLUGINSDIR\password-check.exe" "${INSTALLER_PASSWORD_SALT}" "${INSTALLER_PASSWORD_HASH}" "${INSTALLER_PASSWORD_ITERATIONS}" "$PasswordValue"'
+    Pop $0
+    Pop $1
+    ${If} $0 != "0"
+      ; No attempt counter here. The counter exists to slow a person at a keyboard; a silent run is scripted, has no
+      ; page to redraw, and a script that has the wrong password gains nothing by being told how many tries remain.
+      MessageBox MB_ICONSTOP|MB_OK "That vendor password is not correct. ${PRODUCT_NAME} Setup has not changed anything on this computer." /SD IDOK
+      SetErrorLevel 2
+      Abort
+    ${EndIf}
+
     ${GetOptions} $R0 "/CURRENCY=" $1
     ${IfNot} ${Errors}
       ; An empty value is an error, not a licence to use the default.

@@ -840,6 +840,18 @@ the test rather than the Output screen.
   data and `--delete-app-data` is the only way to ask otherwise. The hook now checks `--updated` first and returns. The
   ordering is the point — a check after a blocking dialog cannot prevent it — and the test compares offsets, so moving
   the check below the prompt fails it.
+- **The vendor password could be skipped with `/S`.** The gate lived only in `PasswordPageLeave`, and a silent install
+  draws no pages, so `/S` installed without the password and let the caller pick the currency from the command line. The
+  gate was real for a double-click and absent for a typed flag. The silent branch now requires `/PASSWORD=`, verifies it
+  with the same PBKDF2 helper and aborts on failure, including when the helper is missing. Two costs are documented
+  rather than hidden: the password is visible in the process command line for the duration, and there is no attempt
+  counter on a path whose counter would only hang an unattended run. A checker rule now requires a password page's
+  silent branch to *invoke* the helper — not merely stage it — because the obvious version of the rule accepted
+  `File /oname=...password-check.exe` and checked nothing.
+- **That rule was dead for two runs.** Its page regex was anchored `^Page`, but the page is inserted from inside a
+  macro and is therefore indented; the rule never executed, and a mutation deleting the whole silent password check was
+  reported clean. This is the second check this phase written against the shape the author pictured rather than the
+  shape the file has — the first was a test matching its own comments. Both were found by mutating.
 - **Still not proven:** that electron-builder's template agrees with our hooks, that the payload lands in the right
   place, or that anything behaves correctly on Windows.
 
