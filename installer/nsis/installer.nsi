@@ -247,7 +247,72 @@ Var PrereqExitCode
   ${EndIf}
 !macroend
 
+; ================================================================================== the install log
+;
+; Three places in this script tell the customer that `$INSTDIR\install.log` exists: the finish page offers to open it,
+; the finish-page text says it is beside the app, and the failure message says the log records what happened. Until now
+; nothing wrote it. The file was invented by the documentation of itself, so a customer who clicked "Open install log"
+; got a Windows "cannot find the file" error at the one moment they were looking for help.
+;
+; The obvious way to produce it -- NSIS's `LogSet on` -- does not exist in the build. `LogSet` is compiled in only when
+; NSIS was built with `NSIS_CONFIG_LOG`, and it is not: a probe in this sandbox fails with `LogSet specified,
+; NSIS_CONFIG_LOG not defined`. electron-builder wraps it in `${LogSet}`, which is a no-op unless the project sets
+; `customNsisBinary.debugLogging` -- and this project does not.
+;
+; So the log is written with `FileWrite`, which is always available and does exactly what is needed: lines we choose,
+; in an order we choose, appended as the install proceeds. `FileWrite` needs an open handle, so the handle is opened
+; once, in .onInit, and kept in a global. Every write is guarded on the handle, because an installer that crashes
+; while trying to write its own error log is worse than one with no log.
+Var LogHandle
+
+/**
+ * Open the log for appending, and write the header.
+ *
+ * $INSTDIR does not exist yet when .onInit runs, and on an upgrade it is the OLD directory. So the log is started in
+ * $PLUGINSDIR -- always writable -- and copied into $INSTDIR by FinishLog once the payload is in place. That ordering
+ * is what makes the log survive the case it is most needed for: an install that fails before $INSTDIR is usable.
+ */
+!macro StartLog
+  ${If} $LogHandle == ""
+    InitPluginsDir
+    FileOpen $LogHandle "$PLUGINSDIR\install.log" w
+    ${If} $LogHandle != ""
+      FileWrite $LogHandle "${PRODUCT_NAME} ${APP_VERSION} install log$\r$\n"
+      FileWrite $LogHandle "=================================$\r$\n"
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+/** Append one line if the log is open. */
+!macro LogLine TEXT
+  ${If} $LogHandle != ""
+    FileWrite $LogHandle "${TEXT}$\r$\n"
+  ${EndIf}
+!macroend
+
+/** Copy the finished log beside the application, then close it. */
+!macro FinishLog
+  ${If} $LogHandle != ""
+    FileWrite $LogHandle "Install finished.$\r$\n"
+    FileClose $LogHandle
+    StrCpy $LogHandle ""
+    ; $INSTDIR may not exist at all if the install failed before the payload landed; CreateDirectory is cheap and makes
+    ; the CopyFiles below succeed rather than silently leaving the log in the temp directory.
+    CreateDirectory $INSTDIR
+    CopyFiles /SILENT "$PLUGINSDIR\install.log" "$INSTDIR\install.log"
+  ${EndIf}
+!macroend
+
+Function .onInstSuccess
+  !insertmacro LogLine "Result: installed successfully."
+  !insertmacro FinishLog
+FunctionEnd
+
 Function .onInit
+  ; First, before anything can fail: the log the finish page and the failure message both promise.
+  StrCpy $LogHandle ""
+  !insertmacro StartLog
+  !insertmacro LogLine "Windows version check and prerequisite detection follow."
   StrCpy $PasswordAttempts 0
   StrCpy $DownloadAttempts 0
   StrCpy $DownloadFailed "0"
@@ -297,11 +362,13 @@ Function .onInit
     ; installs a 64-bit application that cannot start, and the deployment tool reports success. The page is still the
     ; friendly explanation for an interactive install; this is the refusal for the unattended one.
     ${IfNot} ${AtLeastWin10}
+      !insertmacro LogLine "Refused: Windows is older than 10."
       MessageBox MB_ICONSTOP|MB_OK "${PRODUCT_NAME} needs Windows 10 or later (64-bit). This is a silent install, so nothing was changed on this computer." /SD IDOK
       SetErrorLevel 3
       Abort
     ${EndIf}
     ${IfNot} ${RunningX64}
+      !insertmacro LogLine "Refused: 32-bit Windows."
       MessageBox MB_ICONSTOP|MB_OK "${PRODUCT_NAME} needs 64-bit Windows 10 or later; this computer is running 32-bit Windows. This is a silent install, so nothing was changed on this computer." /SD IDOK
       SetErrorLevel 3
       Abort
@@ -868,10 +935,22 @@ FunctionEnd
 ; Section: as a Section it would either conflict with electron-builder's own "Install" section or, standing alone,
 ; install a wizard that creates shortcuts to an application it never copied.
 !macro customInstall
+  !insertmacro LogLine "Install directory: $INSTDIR"
+  !insertmacro LogLine "Currency: $CurrencyCodeOut $CurrencySymbolOut ($CurrencyNameOut), custom=$CurrencyIsCustom"
+  !insertmacro LogLine "Existing installation updated: $WasInstalled"
+  !insertmacro LogLine "Prerequisite needed: $NeedsVcRuntime"
+  !insertmacro LogLine "Firewall rule requested: $FirewallWanted"
+  !insertmacro LogLine "Start with Windows: $StartupWanted"
+  !insertmacro LogLine "Keep in tray: $TrayWanted"
   Call InstallApplication
+  !insertmacro LogLine "Application files and install-config written."
   Call InstallPrerequisites
   Call ConfigureFirewall
+  !insertmacro LogLine "Firewall step done."
   Call ConfigureStartup
+  !insertmacro LogLine "Startup step done."
+  ; Left open on purpose: .onInstSuccess writes the result line and closes it. A section that stopped here by Abort-ing
+  ; leaves the handle open, which is why .onInstFailed also calls FinishLog.
 !macroend
 
 Function InstallPrerequisites
@@ -1136,7 +1215,10 @@ FunctionEnd
   RMDir "$0\${INSTALLER_CONFIG_DIR}"
 !macroend
 
-; ================================================================================== tracing
 Function .onInstFailed
+  ; The failure path writes its own reason first, then tries to leave a log behind. If $INSTDIR is not usable the copy
+  ; fails harmlessly and the message below still names the temp path, which is where the file actually is.
+  !insertmacro LogLine "Result: FAILED. See the message shown to the user."
+  !insertmacro FinishLog
   MessageBox MB_ICONSTOP|MB_OK "${PRODUCT_NAME} was not installed. Nothing on this computer was changed beyond what the log records.$\r$\n$\r$\nThe log is $INSTDIR\install.log." /SD IDOK
 FunctionEnd

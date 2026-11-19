@@ -147,6 +147,74 @@ describe('the uninstaller hooks electron-builder actually calls', () => {
   })
 })
 
+describe('the install log the customer is promised', () => {
+  // $INSTDIR\install.log is named in three places the customer sees: the finish-page "Open install log" button, the
+  // finish-page text ("The install log is beside the app"), and the failure message. Nothing wrote it. Clicking the
+  // button produced a Windows "cannot find the file" error at the exact moment somebody was looking for help.
+  //
+  // The obvious fix -- NSIS `LogSet on` -- is not available: LogSet is compiled in only with NSIS_CONFIG_LOG, which the
+  // build does not define (a probe fails with `LogSet specified, NSIS_CONFIG_LOG not defined`), and electron-builder
+  // wraps it in ${LogSet}, a no-op unless the project sets customNsisBinary.debugLogging. The log is therefore written
+  // with FileWrite, which is always available.
+  const code = script.split('\n').filter((line) => !line.trimStart().startsWith(';')).join('\n')
+
+  it('actually opens and writes the file it advertises', () => {
+    expect(code).toMatch(/FileOpen \$LogHandle [^\n]*install\.log/u)
+    expect(code).toMatch(/FileWrite \$LogHandle/u)
+    // And lands it where the three messages say it is.
+    expect(code).toMatch(/CopyFiles \/SILENT "\$PLUGINSDIR\\install\.log" "\$INSTDIR\\install\.log"/u)
+  })
+
+  it('does not rely on LogSet, which this build does not compile in', () => {
+    // A future edit that "simplifies" this back to LogSet would compile against electron-builder's ${LogSet} macro and
+    // do nothing at all, which is exactly how this defect existed unnoticed.
+    expect(code).not.toMatch(/^\s*LogSet\b/mu)
+    expect(code).not.toMatch(/\$\{LogSet\}/u)
+  })
+
+  it('writes a log on the failure path too, not only on success', () => {
+    const failed = (() => {
+      const start = code.indexOf('Function .onInstFailed')
+      const end = code.indexOf('FunctionEnd', start)
+      return code.slice(start, end)
+    })()
+    expect(failed).toMatch(/FinishLog/u)
+    const success = (() => {
+      const start = code.indexOf('Function .onInstSuccess')
+      const end = code.indexOf('FunctionEnd', start)
+      return code.slice(start, end)
+    })()
+    expect(success).toMatch(/FinishLog/u)
+  })
+
+  it('closes the handle, so the file is not left locked or truncated', () => {
+    // FileWrite into an open handle buffers; without FileClose the copy can move a partial file, which is the worst
+    // possible outcome for a log that exists to explain a failure.
+    const finish = (() => {
+      const start = code.indexOf('!macro FinishLog')
+      const end = code.indexOf('!macroend', start)
+      return code.slice(start, end)
+    })()
+    expect(finish).not.toBe('')
+    expect(finish.indexOf('FileClose')).toBeGreaterThanOrEqual(0)
+    expect(finish.indexOf('FileClose')).toBeLessThan(finish.indexOf('CopyFiles'))
+  })
+
+  it('guards every write on the handle being open', () => {
+    // LogLine is the only writer. An unguarded FileWrite on a failed FileOpen aborts the installer with an NSIS error,
+    // turning "the log could not be written" into "the install failed".
+    const logLine = (() => {
+      const start = code.indexOf('!macro LogLine')
+      const end = code.indexOf('!macroend', start)
+      return code.slice(start, end)
+    })()
+    expect(logLine).not.toBe('')
+    const guard = logLine.indexOf('$LogHandle != ""')
+    expect(guard).toBeGreaterThanOrEqual(0)
+    expect(logLine.indexOf('FileWrite')).toBeGreaterThan(guard)
+  })
+})
+
 describe('the vendor password gate cannot be skipped', () => {
   // The gate is checked in PasswordPageLeave, which is a page callback. A silent run draws no pages, so `${Silent}`
   // skipped the gate entirely: `Setup.exe /S` installed without the vendor password and let the caller choose the

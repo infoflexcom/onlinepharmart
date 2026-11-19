@@ -430,4 +430,42 @@ describe('the redefinition rule still catches a genuine duplicate', () => {
     ].join('\n')
     expect(checkNsisScript(script).filter((p) => /prerequisite/u.test(p.message))).toEqual([])
   })
+
+  it('reports a log the finish page advertises but nothing writes', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '  !define MUI_FINISHPAGE_SHOWREADME "$INSTDIR\\install.log"',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    const problems = checkNsisScript(script)
+    expect(problems.some((problem) => /but nothing writes or copies/u.test(problem.message))).toBe(true)
+  })
+
+  it('accepts a log that is actually copied to the advertised path', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '  !define MUI_FINISHPAGE_SHOWREADME "$INSTDIR\\install.log"',
+      'Section',
+      '  CopyFiles /SILENT "$PLUGINSDIR\\install.log" "$INSTDIR\\install.log"',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).filter((p) => /writes or copies/u.test(p.message))).toEqual([])
+  })
+
+  it('does not count a log left in the temp directory as satisfying the promise', () => {
+    // The customer is told the log is in $INSTDIR. A file written only to $PLUGINSDIR is not at that path, and a rule
+    // satisfied by "somewhere a file with this name is written" would bless exactly the defect it exists to catch.
+    const script = [
+      'OutFile "x.exe"',
+      '  !define MUI_FINISHPAGE_SHOWREADME "$INSTDIR\\install.log"',
+      'Function .onInit',
+      '  FileOpen $0 "$PLUGINSDIR\\install.log" w',
+      '  FileWrite $0 "header"',
+      'FunctionEnd',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).some((p) => /writes or copies/u.test(p.message))).toBe(true)
+  })
 })

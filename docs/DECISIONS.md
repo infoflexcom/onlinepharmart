@@ -562,3 +562,47 @@ break it on purpose first, and only then trust it.
 payload. The claims here are that the compiled script computes the prerequisite on both paths, refuses in the offline
 arm, and that the checker rejects the old shape — all verified by compiling and by reading NSIS's own template and
 runtime, not by execution.
+
+## The install log did not exist
+
+Three things the customer sees name `$INSTDIR\install.log`: the finish page's "Open install log" button, the
+finish-page text ("The install log is beside the app in the folder you chose"), and the failure message ("Nothing on
+this computer was changed beyond what the log records. The log is $INSTDIR\install.log"). Nothing wrote it. Clicking
+the button opened a Windows "cannot find the file" error at the one moment the customer was looking for help.
+
+**The obvious fix does not exist in this build.** NSIS's `LogSet on` is compiled in only when NSIS was built with
+`NSIS_CONFIG_LOG`, and it was not — a direct probe fails with `LogSet specified, NSIS_CONFIG_LOG not defined`.
+electron-builder wraps it in `${LogSet}`, which expands to nothing unless the project sets
+`customNsisBinary.debugLogging`; this project does not, and doing so would mean shipping a custom NSIS binary to get a
+log. So the log is written with `FileWrite`, which needs no build-time feature at all.
+
+**Where it lives, and why the ordering is the interesting part.** `$INSTDIR` does not exist when `.onInit` runs, and on
+an upgrade it is the *old* directory. The log is therefore opened in `$PLUGINSDIR` — always writable — written as the
+install proceeds, closed, and only then copied into `$INSTDIR`. That ordering is what makes the log survive the case it
+is most needed for: an install that fails before `$INSTDIR` is usable. `FinishLog` calls `CreateDirectory $INSTDIR`
+first so the copy lands even in that case.
+
+`.onInstSuccess` and `.onInstFailed` both close the handle and copy the file. Every write goes through one guarded
+macro, because an unguarded `FileWrite` on a handle that failed to open aborts the installer with an NSIS error —
+turning "the log could not be written" into "the install failed", which would be a spectacular own goal.
+
+**Two more checker bugs, both mine, both found by mutating.** The rule I added for this class — a `.log` the script
+advertises must actually be written to that path — was wrong twice:
+
+1. The advertisement regex used `\\` where the script has a single backslash. It matched nothing, so the rule had no
+   inputs and could never fire. Caught by testing the rule against a three-line script that obviously should trip it;
+   the rule said "clean". A rule that cannot fail is indistinguishable from a rule that always passes until you try to
+   make it fail.
+2. The satisfaction test looked for the file *name anywhere* on a `FileWrite` line. The log's own header string contains
+   the words "install log", so deleting both the `FileOpen` and the `CopyFiles` still passed — the header satisfied the
+   check. It now requires the *destination*: a handle opened on `$INSTDIR\...` or a `CopyFiles` whose target is that
+   path. Consequence, and it is the right one: a log written only to `$PLUGINSDIR` and never moved does **not** satisfy
+   the rule, because the customer cannot reach that path.
+
+That is now four checker rules this phase that were written, looked plausible, and did nothing. The standing practice —
+break the rule on purpose before trusting it — is not superstition; it is the only thing that has caught any of them.
+
+**Not proven.** Whether the file appears, what it contains, and whether WordPad opens it are runtime facts. Nothing here
+executed an installer. The claims are that the compiled script opens, writes, closes and copies the log, verified by
+compiling and reading NSIS's verbose log of the directives emitted; and that the checker rejects a script that
+advertises the file without producing it.

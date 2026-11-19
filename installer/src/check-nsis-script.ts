@@ -439,6 +439,44 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
     }
   }
 
+  // ---- a file the installer advertises but never writes
+  //
+  // `$INSTDIR\install.log` was named in the finish page's "Open install log" button, in the finish-page text, and in the
+  // failure message -- and written by nothing. Clicking the button gave a "cannot find the file" error at the moment
+  // the customer was looking for help, which is worse than offering no button at all.
+  //
+  // The rule is deliberately narrow: it looks only for a `.log` file named in this script and requires a FileWrite to
+  // that same name somewhere. It is not a general "every path mentioned exists" analysis, which would need the whole
+  // filesystem; it is the specific shape of a promise the script makes about its own output.
+  {
+    const text = strip.join('\n')
+    const advertised = new Set<string>()
+    for (const match of text.matchAll(/\$INSTDIR\\([A-Za-z0-9_.-]+\.log)\b/gu)) advertised.add(match[1]!)
+    for (const name of advertised) {
+      const escaped = name.replace('.', '\\.')
+      // The DESTINATION, not any mention. `FileWrite $h "Infoflex install.log"` writes text that HAPPENS to name the
+      // file into a handle pointed elsewhere; it is not a write of that file. The first version of this rule matched
+      // any line containing the name, so deleting both the FileOpen and the CopyFiles still passed -- the header string
+      // alone satisfied it. Two things count as writing it: a handle opened on that path, or a CopyFiles whose
+      // destination is that path.
+      // A handle opened on a temp path is not enough: the three messages all name `$INSTDIR`. What satisfies the
+      // promise is a file that ENDS UP at that path -- a FileOpen on it, or, in this script's design, a CopyFiles whose
+      // destination is it. `writesFile` alone was satisfied by a log opened in $PLUGINSDIR and never moved, which is
+      // a file the customer cannot reach at the path they were told.
+      const opensAtDestination = new RegExp(`FileOpen\\s+\\$[A-Za-z0-9_]+[^\\n]*\\$INSTDIR\\\\${escaped}`, 'u').test(text)
+      const copiesToDestination = new RegExp(`CopyFiles[^\\n]*\\$INSTDIR\\\\${escaped}"`, 'u').test(text) ||
+        new RegExp(`CopyFiles[^\\n]*\\$INSTDIR\\\\${escaped}\s`, 'u').test(text)
+      const writesFile = opensAtDestination || copiesToDestination
+      const copiesFile = copiesToDestination
+      if (!writesFile && !copiesFile) {
+        problems.push({
+          line: 1,
+          message: `The script advertises "$INSTDIR\\${name}" but nothing writes or copies a file of that name.`,
+        })
+      }
+    }
+  }
+
   // ---- a MessageBox that will block a silent run
   //
   // NSIS suppresses a MessageBox in silent mode only when the command carries `/SD <button>`; without one it shows the

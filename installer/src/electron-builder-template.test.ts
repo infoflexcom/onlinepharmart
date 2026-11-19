@@ -47,6 +47,11 @@ const INTERNAL_MACROS = new Set([
   // Shared by the system-check page, the silent branch of .onInit and the upgrade path, so the three cannot disagree
   // about whether the VC++ runtime is present. Not a hook: nothing in electron-builder knows it by name.
   'DetectVcRuntime',
+  // The install log. `$INSTDIR\install.log` is promised in the finish page and in the failure message, and these are
+  // how it is written: FileWrite needs an open handle, and NSIS's own `LogSet` is not compiled into this build.
+  'StartLog',
+  'LogLine',
+  'FinishLog',
 ])
 
 /** The macros we define that electron-builder may call. */

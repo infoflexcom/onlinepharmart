@@ -872,6 +872,16 @@ the test rather than the Output screen.
   inserted from a macro. Each looked correct, each was unreachable by reading, and each was caught by deleting the thing
   it was meant to protect and watching the check stay green. Mutating a new rule is now the practice here, not a
   formality.
+- **The install log the customer is promised was never written.** `$INSTDIR\install.log` is named in the finish page's
+  "Open install log" button, in the finish-page text and in the failure message. Nothing created it, so the button
+  produced a file-not-found error exactly when somebody needed help. NSIS's `LogSet` is unavailable — it needs
+  `NSIS_CONFIG_LOG`, which the build lacks, and electron-builder's `${LogSet}` is a no-op unless the project ships a
+  custom debug NSIS binary. The log is now written with `FileWrite`, opened in `$PLUGINSDIR`, closed, and copied into
+  `$INSTDIR` at the end, so it survives an install that fails before `$INSTDIR` is usable.
+- **Two more checker rules that did nothing.** The "advertised file must be written" rule first had a backslash-escaping
+  bug so it matched nothing at all, then a satisfaction test that counted the log's own header string as proof the file
+  was written. Both were found by mutating. That makes four such rules this phase; breaking a new rule on purpose is
+  the practice because nothing else has caught them.
 - **Still not proven:** that electron-builder's template agrees with our hooks, that the payload lands in the right
   place, or that anything behaves correctly on Windows.
 

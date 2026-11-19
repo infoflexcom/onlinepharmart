@@ -178,6 +178,8 @@ for a hang, not for a message.
 | Silent install with a WRONG password fails and changes nothing | ☐ pass ☐ fail | |
 | Silent install with an invalid `/CURRENCY=` fails | ☐ pass ☐ fail | |
 | Silent install INSTALLS the VC++ runtime when missing | ☐ pass ☐ fail | |
+| `install.log` exists after a successful install, opens, has content | ☐ pass ☐ fail | |
+| `install.log` exists after a FAILED install, ends `Result: FAILED` | ☐ pass ☐ fail | |
 | Offline installer refuses a missing payload | ☐ pass ☐ fail ☐ not tested | |
 | Silent install on 32-bit or pre-Win10 refuses | ☐ pass ☐ fail ☐ not tested (no machine) | |
 | Silent uninstall `/S` completes with no dialog, keeps data | ☐ pass ☐ fail | |
@@ -601,6 +603,18 @@ proves nothing about behaviour. The items below are that missing half, in the or
 - [ ] Open **Custom currency...**, enter a code, name, symbol and 3 decimals, and confirm the example updates and the wizard accepts it. Try to leave the page with an empty name and confirm it refuses with a plain sentence. (DONE WHEN 3)
 - [ ] On the system check, compare every row against the machine: Windows version, free space, the VC++ runtime (uninstall it first to see the orange arrow), firewall and printer as information only. A 32-bit VM must be refused outright. (DONE WHEN 5)
 - [ ] With the VC++ runtime uninstalled and the network **on**, complete the download page: progress, then a verified file, then the runtime installed. Then do it again with the network **off** and confirm the failure is explained in plain words and the file is deleted. (DONE WHEN 6, 7)
+- [ ] **Confirm the install log exists, since it never did before this phase.** After the install, open
+  `$INSTDIR\install.log` (typically `%PROGRAMFILES%\Infoflex\install.log`), and also click **Open install log** on
+  the finish page before closing the wizard.
+  - Expected: the file exists and opens in Notepad/WordPad, with a header naming the product and version, the install
+    directory, the currency, and one line per step. Previously the button produced a Windows "cannot find the file"
+    error because nothing ever wrote it.
+  - Record the first five lines and the last line verbatim. If the file is missing, that is a release blocker: three
+    separate on-screen messages tell the customer it is there.
+- [ ] **Check the failure path leaves a log too.** Temporarily make the install fail (e.g. run it with the app already
+  running so the payload copy fails, or cancel at the point the wizard reports an error).
+  - Expected: the error dialog names `$INSTDIR\install.log` and that file exists afterwards, ending with
+    `Result: FAILED`. A log that only appears on success is useless, because the failures are when it is read.
 - [ ] Install. On the finish page confirm the currency summary, the launch checkbox and the log link. Confirm a Start Menu entry, a desktop shortcut and an entry in **Apps & features**. (DONE WHEN 1)
 - [ ] Launch the app. It must open on **Activation** with the store name blank, and the first-run setup screen must arrive with the installer's currency already selected — including for the **custom** currency. (DONE WHEN 4, 9)
 - [ ] In `%ProgramData%\Infoflex\install-config.json`, confirm it holds the currency and no secret of any kind.
