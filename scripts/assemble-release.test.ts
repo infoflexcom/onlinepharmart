@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { deliverables } from './assemble-release.ts'
 
 /**
@@ -113,5 +114,105 @@ describe('the release refuses to finish without a verified prerequisite', () => 
     expect(SOURCE).toContain('PREREQUISITE.txt')
     expect(SOURCE).toContain('Microsoft version:')
     expect(SOURCE).toContain('certutil -hashfile vc_redist.x64.exe SHA256')
+  })
+})
+
+/**
+ * Two ways this script used to print the wrong thing.
+ *
+ * Both were found by running it on a genuinely clean clone rather than on the working tree, which is the only place
+ * either defect shows: the tree always has a profile by the time anyone looks.
+ */
+describe('the assembly fails with a sentence, not a Node error', () => {
+  it('reads the profile from the root, where the pin is written', () => {
+    // `installer:script` writes a copy under installer/nsis/ on every run. Reading that copy meant a clean checkout --
+    // where it does not exist -- threw ENOENT and the catch printed it verbatim.  Observed on a fresh clone before the
+    // fix: "RELEASE STOPPED: ENOENT: no such file or directory, open 'installer/nsis/build-profile.json'".
+    expect(SOURCE).toContain("const profilePath = BUILD_PROFILE_FILENAME")
+    expect(SOURCE).not.toContain("join('installer', 'nsis', BUILD_PROFILE_FILENAME), 'utf8'")
+  })
+
+  it('tolerates a checkout that has no profile yet', () => {
+    expect(SOURCE).toMatch(/existsSync\(profilePath\) \? parseBuildProfile/u)
+  })
+
+  it('marks an unpinned folder inside the folder, where a person will see it', () => {
+    // The terminal warning is gone by the time somebody copies release/ to a USB stick.
+    expect(SOURCE).toContain('DO-NOT-DISTRIBUTE.txt')
+    expect(SOURCE).toContain('THIS FOLDER IS NOT A RELEASE.')
+  })
+})
+
+describe('the release never claims an override it does not implement', () => {
+  it('does not tell the operator to move the file and set an environment variable', () => {
+    // The success message said "the offline build reads the file from INFOFLEX_PREREQUISITE_VCREDIST or
+    // installer/cache/". Nothing read that variable, so following the instruction produced a build bundling nothing.
+    const script = readFileSync('scripts/release-prerequisite.ts', 'utf8')
+    expect(script).not.toMatch(/reads the file from[\s\S]{0,40}PREREQUISITE_PATH_ENV/u)
+    expect(script).toContain('There is no override')
+  })
+})
+
+describe('every file the folder carries is in the checksum list', () => {
+  it('writes SHA256SUMS after the records it must include, not before', () => {
+    // Found by running it: PREREQUISITE.txt and DO-NOT-DISTRIBUTE.txt were created after the sums had been written, so
+    // the two files whose whole purpose is to be checked were the two the checksum list omitted. Verified fixed by
+    // building a folder and grepping SHA256SUMS.txt for DO-NOT-DISTRIBUTE.
+    const sumsAt = SOURCE.indexOf("writeFileSync(join(RELEASE, 'SHA256SUMS.txt')")
+    const warningAt = SOURCE.indexOf('DO-NOT-DISTRIBUTE.txt')
+    const recordAt = SOURCE.indexOf("join(RELEASE, 'PREREQUISITE.txt')")
+    expect(sumsAt).toBeGreaterThan(-1)
+    expect(sumsAt, 'the sums must be written after the warning file is created').toBeGreaterThan(warningAt)
+    expect(sumsAt, 'the sums must be written after the prerequisite record is created').toBeGreaterThan(recordAt)
+  })
+})
+
+describe('the profile that records the pin is tracked, and its generated copy is not', () => {
+  /**
+   * Both halves have been wrong. The root profile is where the pin is written, so losing it means a release with no
+   * record of its binary; the copy under installer/nsis/ is regenerated on every `installer:script` run, so tracking it
+   * means a file that shows as modified after every build. A bare `!build-profile.json` negation fixed the first and
+   * broke the second, which is the failure this pins.
+   */
+  const git = (args: string[]) => {
+    try {
+      return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    } catch (error) {
+      const failure = error as { status?: number; stdout?: string }
+      if (failure.status === 1) return failure.stdout ?? ''
+      throw error
+    }
+  }
+
+  it('does not ignore the root profile', () => {
+    expect(git(['check-ignore', 'build-profile.json']).trim()).toBe('')
+  })
+
+  it('still ignores the copy installer:script regenerates', () => {
+    expect(git(['check-ignore', 'installer/nsis/build-profile.json']).trim()).not.toBe('')
+  })
+})
+
+describe('the profile that travels with a release holds no secret', () => {
+  it('has no field for a password, a key or a token', () => {
+    // It is now committed, so this stopped being a matter of "nobody would put one there". The type is the guarantee:
+    // a field that does not exist cannot be serialised into a file that goes into git. `licenseServerUrl` is validated
+    // against embedded credentials (see build-profile.ts), and the rest is a currency code and a public digest.
+    const profile = readFileSync('installer/src/build-profile.ts', 'utf8')
+    // FIELD NAMES, not prose. The first version of this test scanned the whole interface including its comments and
+    // failed on the word "password" inside an explanatory sentence -- a false positive that would have been "fixed" by
+    // editing the sentence, which is the wrong direction.
+    const body = profile.slice(profile.indexOf('export interface BuildProfile'), profile.indexOf('export interface BuildProfileProblem'))
+    const fields = [...body.matchAll(/^\s{2}([A-Za-z][A-Za-z0-9]*)\??:/gmu)].map((match) => match[1]!.toLowerCase())
+    expect(fields.length, 'the field scan must find the fields, or it proves nothing').toBeGreaterThan(4)
+    for (const forbidden of ['password', 'privatekey', 'secret', 'token', 'apikey', 'credential']) {
+      expect(fields, `BuildProfile must not carry a ${forbidden} field`).not.toContain(forbidden)
+    }
+  })
+
+  it('is the file a release actually records its pin in', () => {
+    // Committed to the repository so this assertion can never pass vacuously against a missing file.
+    const tracked = execFileSync('git', ['ls-files', 'build-profile.json'], { encoding: 'utf8' }).trim()
+    expect(tracked, 'build-profile.json must be tracked, or the pin it records is not part of the release').toBe('build-profile.json')
   })
 })

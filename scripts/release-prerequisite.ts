@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  assertReleasePin, fetchPrerequisite, isDigestPinned, prerequisiteRecord, readSignerSubject, PREREQUISITE_PATH_ENV,
+  assertReleasePin, fetchPrerequisite, isDigestPinned, prerequisiteRecord, readSignerSubject,
   verifyCachedPrerequisite,
   type FetchedPrerequisite,
 } from '../installer/src/prerequisite-release'
@@ -148,7 +148,13 @@ function main(): void {
   console.log(`  Signed by: ${fetched.signerSubject}`)
   console.log(`  From:      ${fetched.url}`)
   console.log(`\n  Pinned into ${PROFILE_PATH}.`)
-  console.log(`  The offline build reads the file from ${PREREQUISITE_PATH_ENV} or installer/cache/.`)
+  // This used to say "the offline build reads the file from INFOFLEX_PREREQUISITE_VCREDIST or installer/cache/". Nothing
+  // read that variable, so the message offered an override that did not exist -- and an operator who moved the file and
+  // set it would have got a build that silently bundled nothing. The path is now stated as what it is, and the
+  // generated include is named so a reader can see where it lands.
+  console.log(`  The offline build bundles it from ${join('installer', 'cache', 'vc_redist.x64.exe')}, via the generated`)
+  console.log('  installer/nsis/prerequisite.nsh. There is no override: one path, so a build always carries the file the')
+  console.log('  pin was verified against.')
   console.log(`\n  Compare on a real PC: right-click the file -> Properties -> Details -> "File version" should read ${fetched.microsoftVersion}.`)
 }
 

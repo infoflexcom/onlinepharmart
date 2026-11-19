@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { ALLOWLISTED_COMPONENTS, hostOf, type AllowlistedComponent } from './download-allowlist'
+import { ALLOWED_DOWNLOAD_HOSTS, ALLOWLISTED_COMPONENTS, hostOf, type AllowlistedComponent } from './download-allowlist'
 import { runAuthenticodeCheck } from './password-check'
 
 /**
@@ -236,11 +236,51 @@ function safeDelete(path: string): void {
   }
 }
 
+/**
+ * Where a URL actually ended up, following redirects, without downloading the body.
+ *
+ * `aka.ms` is a shortener: the allowlisted address redirects to `download.visualstudio.microsoft.com`. That is fine,
+ * because both hosts are on the allowlist. What is not fine is following a redirect to somewhere else, and the download
+ * used to do exactly that -- `curl --location` follows up to three hops and the function's own comment claimed it
+ * "refuses a redirect to a host that is not allowlisted". Nothing checked. The signature check would still have caught
+ * a substituted binary, but the address rule was being enforced on the wrong address: the one before the redirects.
+ */
+export function resolveFinalUrl(url: string): string {
+  const output = execFileSync(
+    'curl',
+    ['--fail', '--silent', '--show-error', '--location', '--max-redirs', '3', '--head', '--output', '/dev/null',
+      '--write-out', '%{url_effective}', url],
+    { encoding: 'utf8', timeout: 60_000 },
+  )
+  return output.trim()
+}
+
+/** True when `url` is https and its host is on the allowlist. Used on the address the download actually reached. */
+export function isAllowlistedAddress(url: string): boolean {
+  const host = hostOf(url)
+  return host !== null && ALLOWED_DOWNLOAD_HOSTS.includes(host)
+}
+
 /** The real downloader. Deliberately tiny, and it refuses a redirect to a host that is not allowlisted. */
 function httpDownload(url: string, target: string): void {
   // Synchronous on purpose: this runs inside a build step that is already sequential, and a promise here would have to
   // be threaded through every caller for no benefit. curl ships with Windows 10+ and every Linux/macOS machine.
   try {
+    // Check where the request LANDS before fetching a body. `resolveFinalUrl` asks for headers only, so a refusal here
+    // costs a round trip rather than 25 MB.
+    let finalUrl = url
+    try {
+      finalUrl = resolveFinalUrl(url)
+    } catch {
+      // A HEAD that fails is not itself a reason to stop -- some servers refuse HEAD -- so fall through to the download
+      // and validate the bytes afterwards. The signature check is the backstop; this is defence in depth.
+      finalUrl = url
+    }
+    if (!isAllowlistedAddress(finalUrl)) {
+      throw new Error(
+        `the address redirected to ${finalUrl}, which is not an approved Microsoft address. Nothing was downloaded.`,
+      )
+    }
     execFileSync('curl', ['--fail', '--location', '--silent', '--show-error', '--max-redirs', '3', '--output', target, url], {
       stdio: 'pipe',
       timeout: 15 * 60 * 1000,
@@ -374,6 +414,12 @@ export function pinnedComponent(fetched: FetchedPrerequisite): AllowlistedCompon
 }
 
 /** The environment variable the offline build reads to know where the file is. Named to match the NSIS define. */
+/**
+ * @deprecated Not read by anything. Kept only because a stale message referred to it; delete once nothing imports it.
+ * The offline build's path is fixed at `installer/cache/vc_redist.x64.exe` and travels to the script through the
+ * generated `prerequisite.nsh`, so there is deliberately no environment override -- an override would let a build carry
+ * a file from somewhere the pin was not verified against.
+ */
 export const PREREQUISITE_PATH_ENV = 'INFOFLEX_PREREQUISITE_VCREDIST'
 
 /**

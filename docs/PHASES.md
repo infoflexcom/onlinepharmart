@@ -1070,3 +1070,47 @@ digests), a wrong-size file (refuses before hashing), a missing file (refuses an
 with no valid signature (refuses). Both mutations of the new function — disabling the digest comparison, and disabling
 the signature comparison — were caught by the tests that exist for them. Still not proven: none of these ran against a
 real Microsoft binary, for the same reasons as the section above.
+
+## Phase 15 (continued) — the phase was not finished, and the question "is that all?" found five more
+
+Everything below was found after the two commits above were pushed, by running the work on a **clean clone** and
+following the instructions the tooling itself prints. None of it was visible from the working tree, which is the point:
+the tree always has a profile by the time anyone looks, and the messages were only ever read by the person who wrote them.
+
+- **The redirect rule was enforced on the wrong address.** `httpDownload`'s own comment claimed it "refuses a redirect
+  to a host that is not allowlisted"; `curl --location` followed up to three hops and nothing checked where it landed.
+  `aka.ms` is a shortener, so the real request always goes through a redirect, which means the allowlist was checked
+  against an address that never serves the bytes. `resolveFinalUrl` now asks curl for the effective URL (`--head`, so no
+  body is fetched) and `isAllowlistedAddress` refuses anything that is not https on an allowlisted host. Verified
+  against a local server issuing real 302s, and against six addresses including `download.microsoft.com.evil.example`.
+  A failed HEAD falls through to the download rather than stopping, because the signature check is the real backstop.
+- **The pin was committed nowhere.** `docs/DECISIONS.md` said "the pinned SHA-256 lives in `build-profile.json`, a
+  committed text file". It was not committed: the root profile is not ignored but was never tracked either, so every
+  release was recorded with no statement of which binary it carried — exactly what requirement 4 was for. `.gitignore`
+  now carries `!build-profile.json` and the file is in the tree. The comment above `installer/cache/` claimed this was
+  already true, which is why nobody re-read it.
+- **A clean checkout printed `ENOENT` as a release decision.** `release:assemble` read the *generated* copy under
+  `installer/nsis/`, which does not exist until `installer:script` has run. On a fresh clone the catch printed
+  `RELEASE STOPPED: ENOENT: no such file or directory`. It now reads the root profile, and tolerates its absence with the
+  sentence it was always meant to print.
+- **The success message advertised an override that did not exist.** It told the operator the offline build "reads the
+  file from `INFOFLEX_PREREQUISITE_VCREDIST` or `installer/cache/`". Nothing read that variable. An operator who moved
+  the file and set it would have got a build that bundled nothing, and no error, because an unset define is legitimate.
+  The message now states the one path and says there is no override, because a single path is what keeps the bundled file
+  and the pinned digest the same file.
+- **`--allow-unpinned` warned only to the terminal, and its files were missing from the checksum list.** The warning is
+  now `release/DO-NOT-DISTRIBUTE.txt`, inside the folder somebody copies. And `SHA256SUMS.txt` was written *before* that
+  file and `PREREQUISITE.txt` were created, so the two files whose purpose is to be checked were the two it omitted —
+  found by grepping the built folder, now pinned by a test on the order of the writes.
+
+**What is proven here.** The clean-clone behaviour was re-run after the fix (`RELEASE STOPPED` with a sentence, not
+`ENOENT`). The redirect gate was verified against real 302 responses from a local server, and the address predicate was
+run against six addresses and refused the four it should. The order bug was verified by building a folder and finding
+`DO-NOT-DISTRIBUTE.txt` in `SHA256SUMS.txt`. Mutations — making `isAllowlistedAddress` always true, and restoring the
+`installer/nsis` read — were both caught by the tests written for them.
+
+**What is still not proven, and has not changed:** no real Microsoft download has ever been performed here, so the
+redirect chain `aka.ms` → `download.visualstudio.microsoft.com` is copied from documentation and from the allowlist
+rather than observed. `resolveFinalUrl` has run against a local redirect, not against `aka.ms`. The first release run on
+a networked machine is the first time this code meets that chain, and `docs/RELEASE-CHECKLIST.md` asks for the digest and
+version to be compared by hand at that point.

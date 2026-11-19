@@ -934,6 +934,12 @@ and it is not ours to redistribute from a git remote. `download-allowlist.ts` al
 needs the bytes at build time, not at clone time. A gitignored cache directory plus a recorded digest gives the offline
 installer what it needs and leaves the repository the size it should be.
 
+**A correction, because the first version of this section was wrong.** It said the profile was "a committed text file".
+It was not committed. The root profile is not gitignored, but it was never added either, so every release recorded its
+digitally-signed installers with no statement of which runtime binary they carried — the one fact requirement 4 exists
+to preserve. `.gitignore` now has an explicit `!build-profile.json` and the file is in the tree. The lesson is narrow
+and worth keeping: "not ignored" and "tracked" are different states, and only `git ls-files` distinguishes them.
+
 **The cost, stated plainly:** a fresh clone cannot build a shippable offline installer. It can build a development one,
 which carries no runtime and says so. That is a deliberate trade — an unbuildable-by-default shippable installer is
 better than a repository carrying a vendor binary whose provenance nobody re-checks.

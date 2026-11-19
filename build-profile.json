@@ -1,0 +1,9 @@
+{
+  "format": "infoflex-build-profile",
+  "version": 1,
+  "appVersion": "0.1.0",
+  "defaultCurrencyCode": "NGN",
+  "lockCurrency": false,
+  "maximumOnsitePeriodYears": null,
+  "licenseServerUrl": null
+}

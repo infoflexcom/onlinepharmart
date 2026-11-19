@@ -142,8 +142,13 @@ function main(): void {
   // stick, and a line in a JSON file does not stop them.
   let prerequisite: { sha256: string; microsoftVersion: string; sizeBytes: number; url: string; fetchedAt: string } | null = null
   try {
-    const profileText = readFileSync(join('installer', 'nsis', BUILD_PROFILE_FILENAME), 'utf8')
-    const profile = parseBuildProfile(profileText)
+    // The ROOT profile, read if it is there. It used to be read with an unconditional readFileSync, which on a clean
+    // checkout throws ENOENT -- and the catch below printed that as `RELEASE STOPPED: ENOENT: no such file or
+    // directory`, so the operator saw a Node error where a sentence about the prerequisite belonged. The release step
+    // must also work on a checkout that has never run `installer:script` here, because `npm run release:assemble` does
+    // not depend on it.
+    const profilePath = BUILD_PROFILE_FILENAME
+    const profile = existsSync(profilePath) ? parseBuildProfile(readFileSync(profilePath, 'utf8')) : null
     const pin = profile?.prerequisite
     // An explicit opt-in for the development pipeline, which must be able to assemble a folder to test the assembly
     // itself. It is a separate flag with its own name, not a lower bar: the release record then says
@@ -184,18 +189,28 @@ function main(): void {
     collected.push({ file: to, bytes: statSync(to).size, sha256: sha256(to) })
   }
 
-  // The paths are relative to the repository root, not to release/, so the file is verified with
-  // `sha256sum -c release/SHA256SUMS.txt` from the root. A header line says so, because the obvious guess --
-  // changing into release/ and running `sha256sum -c SHA256SUMS.txt` -- fails on every entry, and a checksum file
-  // that appears broken is a checksum file nobody checks.
-  const header = '# Verify from the repository root: sha256sum -c release/SHA256SUMS.txt\n'
-    + '# On Windows: certutil -hashfile <file> SHA256, for each file below.\n'
-    + '# Paths are relative to the repository root.\n'
-  const sums = collected.map((entry) => `${entry.sha256}  ${entry.file}`).join('\n')
-  writeFileSync(join(RELEASE, 'SHA256SUMS.txt'), `${header}${sums}\n`, 'utf8')
 
   // The pinned prerequisite, written where a person will look for it: a line in the manifest and a small text file
   // beside the installers, so the digest can be compared on a real PC without opening JSON.
+  if (!prerequisite) {
+    // The unpinned development route. Write the warning INTO the folder, not only to the terminal: `release/` is what
+    // somebody copies to a USB stick, and the scrollback is gone by the time they do. MANIFEST.json records it too, but
+    // nobody opens that file first.
+    const warningPath = join(RELEASE, 'DO-NOT-DISTRIBUTE.txt')
+    writeFileSync(warningPath, [
+      'THIS FOLDER IS NOT A RELEASE.',
+      '',
+      'It was assembled with --allow-unpinned, so the Microsoft Visual C++ prerequisite was never fetched and verified.',
+      'The offline installer in here carries NO runtime and will refuse to install, and the digest compiled into both',
+      'installers is the all-zeros placeholder, which refuses every download and every file.',
+      '',
+      'For a real release, on a machine with internet access:',
+      '  npm run release:prerequisite && npm run release:assemble',
+      '',
+    ].join('\n'), 'utf8')
+    collected.push({ file: warningPath, bytes: statSync(warningPath).size, sha256: sha256(warningPath) })
+  }
+
   if (prerequisite) {
     const recordPath = join(RELEASE, 'PREREQUISITE.txt')
     writeFileSync(recordPath, [
@@ -218,6 +233,16 @@ function main(): void {
     ].join('\n'), 'utf8')
     collected.push({ file: recordPath, bytes: statSync(recordPath).size, sha256: sha256(recordPath) })
   }
+
+  // The paths are relative to the repository root, not to release/, so the file is verified with
+  // `sha256sum -c release/SHA256SUMS.txt` from the root. A header line says so, because the obvious guess --
+  // changing into release/ and running `sha256sum -c SHA256SUMS.txt` -- fails on every entry, and a checksum file
+  // that appears broken is a checksum file nobody checks.
+  const header = '# Verify from the repository root: sha256sum -c release/SHA256SUMS.txt\n'
+    + '# On Windows: certutil -hashfile <file> SHA256, for each file below.\n'
+    + '# Paths are relative to the repository root.\n'
+  const sums = collected.map((entry) => `${entry.sha256}  ${entry.file}`).join('\n')
+  writeFileSync(join(RELEASE, 'SHA256SUMS.txt'), `${header}${sums}\n`, 'utf8')
 
   const manifest = {
     format: 'infoflex-release-manifest',

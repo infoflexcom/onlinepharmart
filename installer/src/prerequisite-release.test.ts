@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import {
   assertReleasePin, fetchPrerequisite, fileVersionFromWindowsResource, isDigestPinned, pinnedComponent,
   prerequisiteRecord, UNPINNED_SHA256, verifyCachedPrerequisite,
+  isAllowlistedAddress,
 } from './prerequisite-release'
 import { componentForProfile, generateInstallerHeader, generatePrerequisiteInclude } from './generate-installer-script'
 import { defaultBuildProfile, parseBuildProfile, serializeBuildProfile, type BuildProfile } from './build-profile'
@@ -370,5 +371,47 @@ describe('the release verifies the cached file, not just the pin', () => {
     const { directory, pin } = cached()
     expect(() => verifyCachedPrerequisite({ directory, pin, readSigner: () => null }))
       .toThrow(/release:prerequisite/u)
+  })
+})
+
+
+/**
+ * The address rule applies to the address the bytes came from, not the one that was requested.
+ *
+ * `aka.ms` is a shortener: the allowlisted URL redirects to `download.visualstudio.microsoft.com`. The downloader
+ * followed up to three redirects with `curl --location` and its own comment claimed it "refuses a redirect to a host
+ * that is not allowlisted". Nothing checked. The signature check would still have caught a substituted binary, but a
+ * rule enforced on the wrong address is not the rule, and a comment that describes a check nobody performs is worse than
+ * no comment -- it is why nobody looked.
+ */
+describe('the download may only land on an allowlisted address', () => {
+  it('accepts the hosts Microsoft actually serves the file from', () => {
+    // The real chain, as observed: aka.ms -> download.visualstudio.microsoft.com. Both are allowlisted, so the
+    // redirect itself is legitimate and must not be refused.
+    expect(isAllowlistedAddress('https://aka.ms/vs/17/release/vc_redist.x64.exe')).toBe(true)
+    expect(isAllowlistedAddress('https://download.visualstudio.microsoft.com/download/pr/x/vc_redist.x64.exe')).toBe(true)
+    expect(isAllowlistedAddress('https://download.microsoft.com/x')).toBe(true)
+  })
+
+  it('refuses an address that redirected somewhere else', () => {
+    expect(isAllowlistedAddress('https://evil.example.com/vc_redist.x64.exe')).toBe(false)
+  })
+
+  it('refuses a lookalike host that merely ends with an allowlisted name', () => {
+    // The suffix trap: a host containing "download.microsoft.com" is not the host "download.microsoft.com".
+    expect(isAllowlistedAddress('https://download.microsoft.com.evil.example/x')).toBe(false)
+    expect(isAllowlistedAddress('https://notdownload.microsoft.com/x')).toBe(false)
+  })
+
+  it('refuses plain http even on an allowlisted host', () => {
+    // Verified by hand: resolving a redirect to http://download.microsoft.com/... must not pass. The bytes would be
+    // handed to the installer over a connection anyone on the path can rewrite.
+    expect(isAllowlistedAddress('http://download.microsoft.com/x')).toBe(false)
+  })
+
+  it('refuses an address with no host at all', () => {
+    for (const value of ['', 'not a url', 'file:///etc/passwd']) {
+      expect(isAllowlistedAddress(value), value).toBe(false)
+    }
   })
 })
