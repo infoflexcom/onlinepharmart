@@ -575,6 +575,22 @@ proves nothing about behaviour. The items below are that missing half, in the or
 ### Build, once, on a Windows build machine
 - [ ] On Windows with Node 20+, run `npm run installer:online` and `npm run installer:offline`. Both must finish and leave `dist/online/Infoflex Setup.exe` and `dist/offline/Infoflex Setup Offline.exe`.
 - [ ] Pin the prerequisite checksum first: replace the all-zero `sha256` in `installer/src/download-allowlist.ts` with the digest of the exact VC++ redistributable being shipped, and rebuild. (**With the zeros in place every verification fails by design.**) That now includes the execution path: until this phase, `InstallPrerequisites` ran the file without checking it, so the zeros blocked the download page while the unverified path still installed the binary.
+- [ ] **Supply the redistributable the offline build carries — a decision, not just a task.** This is the one open
+  question that needs a person to choose, so the options are laid out rather than assumed:
+
+  | Option | What it costs | What goes wrong |
+  | --- | --- | --- |
+  | Commit `vc_redist.x64.exe` to the repository | ~25 MB in every clone, forever, for a binary Microsoft publishes | Git history grows; the file must be re-fetched and re-verified each time Microsoft revises it; it is a stale copy of a security-relevant binary |
+  | Fetch it in the release job | a download step in CI, pinned by the digest already recorded | the release job needs network access to `aka.ms`, which the build agent here does not have; a fetch failure blocks a release |
+  | Ship without it, on purpose | nothing | the offline installer stops being offline for its one prerequisite: a machine with no internet cannot complete the install, which is the case the offline build exists to serve |
+
+  Whichever is chosen, the offline build must then define `-DPREREQUISITE_VCREDIST=<path>`, and the digest in
+  `installer/nsis/generated.nsh` must be the real SHA-256 of the supplied file rather than the all-zero placeholder —
+  an all-zero digest makes every verification path refuse the file. Note that as of this phase the offline arm
+  **refuses to install** when the payload is missing (see below), so "ship without it" is now a loud failure rather
+  than a quiet one. That is deliberate: before this phase the offline build installed anyway while its components page
+  promised the prerequisite was included.
+
 - [ ] **Supply the redistributable the offline build carries.** `installer.nsi` includes it with `File` only when `PREREQUISITE_VCREDIST` is defined, and no configuration defines it yet — so today the offline build produces an installer that carries no runtime and will ask for it on first use. Put `vc_redist.x64.exe` somewhere in the repo (it is ~25 MB, so decide deliberately whether to commit it or fetch it in the release job) and add `-DPREREQUISITE_VCREDIST=<path>` to the offline build so the "every prerequisite bundled" promise is actually kept. **This was a build-stopping error before the guard was added:** the offline installer would not compile at all, and the compile check could not show it because the harness defined the variable itself.
 - [ ] Optional: code-sign both executables. The build must also work unsigned.
 
