@@ -673,3 +673,30 @@ describe('the redefinition rule still catches a genuine duplicate', () => {
     expect(checkNsisScript(script).some((p) => /writes or copies/u.test(p.message))).toBe(true)
   })
 })
+
+/**
+ * The generated includes must be reachable from the packaged build, not only from the harness.
+ *
+ * `installer.nsi` `!include`s `prerequisite.nsh` by bare name. That resolves because NSIS searches the directory of the
+ * including file first, and electron-builder compiles `nsis.include` from the project directory -- so the file beside
+ * `installer.nsi` is found without being in `files[]`. This is the same harness-versus-build divergence that bit this
+ * project three times (a define the harness passed with -D, a `File` path resolved against the wrong working directory,
+ * and a generated header the harness supplied itself). So the assumption is written down and checked: the file exists
+ * where the include will look for it.
+ */
+describe('every bare !include in installer.nsi resolves beside it', () => {
+  const script = require('node:fs').readFileSync('installer/nsis/installer.nsi', 'utf8') as string
+
+  it('has prerequisite.nsh beside installer.nsi, which is where NSIS looks first', () => {
+    const includes = [...script.matchAll(/^!include\s+"([^"]+)"/gmu)].map((match) => match[1]!)
+    // Only the project's own files: the vendor headers (FileFunc.nsh, x64.nsh, LogicLib.nsh) live in NSISDIR.
+    const ours = includes.filter((name) => !/^(FileFunc|StrContains|x64|LogicLib|WinVer|MUI2|nsDialogs|StdUtils)\.nsh$/u.test(name))
+    expect(ours.length, 'the include scan must find our own includes, or it proves nothing').toBeGreaterThan(3)
+    for (const name of ours) {
+      expect(
+        require('node:fs').existsSync(`installer/nsis/${name}`),
+        `installer.nsi includes "${name}", which must exist at installer/nsis/${name} for the real build`,
+      ).toBe(true)
+    }
+  })
+})
