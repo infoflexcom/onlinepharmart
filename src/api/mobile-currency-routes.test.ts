@@ -21,6 +21,7 @@ import type { LicenseSummary } from '../shared/license/types'
 import type { ProductDraft } from '../shared/inventory/types'
 import { defaultPermissions } from '../shared/auth/policy'
 import type { FastifyInstance } from 'fastify'
+import type { Edition } from '../editions'
 import { formatMobileMoney, parseMoneyInput, shopCurrencyContext } from '../../mobile/src/money'
 
 /**
@@ -52,22 +53,25 @@ const TODAY_ISO = [
 ].join('-')
 const PASSWORD = 'cellar-door-99'
 
-const LICENCE: LicenseSummary = {
-  status: 'active', canUse: true, licenseId: `phone-money`, source: 'online', edition: 'BOTH',
+const licenceFor = (edition: 'PHARMACY' | 'SUPERMARKET' | 'BOTH'): LicenseSummary => ({
+  status: 'active', canUse: true, licenseId: `phone-money-${edition}`, source: 'online', edition,
   startsAt: null, endsAt: null, defaultCurrencyCode: null, lockCurrency: false,
   features: { mobileLan: true, mobileInternet: false }, adminPhoneLimit: 2, graceDays: 0,
   lastOnlineCheck: null, reportedToPortal: true, vendorConfigured: false,
   maximumOnsitePeriodYears: null, licenseServerUrl: null, message: 'active',
-}
+})
 
 /** Retail 20 units, wholesale 18 units, cost 10 units — in *major* units of whichever currency this is. */
-function draftFor(currencyCode: string): ProductDraft {
+function draftFor(currencyCode: string, edition: Edition = 'BOTH'): ProductDraft {
   const currency = getCurrency(currencyCode)!
   const m = (major: string) => fromMinor(BigInt(Math.round(Number(major) * 10 ** currency.decimalPlaces)), currency)
   return {
     sku: `PHONE-${currencyCode}`, name: 'Vitamin C 1000mg', brand: 'Harbor', description: '',
-    barcode: '', additionalBarcodes: [], category: 'Vitamins', subCategory: '', department: 'Health',
-    shelfLocation: 'A-01', unit: 'pack', packSizeUnits: 1,
+    barcode: '', additionalBarcodes: [], category: 'Vitamins', subCategory: '',
+    // Department and shelf are supermarket-only fields; a Pharmacy licence refuses a draft that sets them,
+    // so the test data has to obey the same rule the product is asked for.
+    department: edition === 'PHARMACY' ? '' : 'Health',
+    shelfLocation: edition === 'PHARMACY' ? '' : 'A-01', unit: 'pack', packSizeUnits: 1,
     cost: m('10'), retailPrice: m('20'), wholesalePrice: m('18'),
     wholesaleMinimumQuantity: '1', reorderLevel: '2', genericName: '', prescriptionRequired: false,
     weighedItem: false, pluCode: '', pricePerKg: '', expiryTracking: false, variants: [], isActive: true,
@@ -88,7 +92,8 @@ afterEach(async () => {
   for (const shop of shops.splice(0)) await shop.close()
 })
 
-async function createShop(currencyCode: string): Promise<Shop> {
+async function createShop(currencyCode: string, edition: Edition = 'BOTH'): Promise<Shop> {
+  const LICENCE = licenceFor(edition)
   const database = new Database(':memory:')
   migrateDatabase(database)
   const repository = new SQLiteShopRepository(database, false)
@@ -120,20 +125,23 @@ async function createShop(currencyCode: string): Promise<Shop> {
   // The real row's id, not a hard-coded one: purchases and audits reference `users.id` with a foreign key.
   const ADMIN_ID = createdAdmin.id
   const adminActor: PublicUser = createdAdmin
-  let product = inventory.createProduct(draftFor(currencyCode), adminActor, 'BOTH')
+  let product = inventory.createProduct(draftFor(currencyCode, edition), adminActor, edition)
   product = inventory.receiveStock({
     productId: product.id, expectedProductVersion: product.rowVersion, expectedStockVersion: product.stockVersion,
     quantity: '10', quantityUnit: 'unit', unitCost: fromMinor(10n * 10n ** BigInt(currency.decimalPlaces), currency),
     supplierName: 'Coastal Medical Supplies', supplierReference: `PHONE-${currencyCode}`,
-    note: 'Phone money test', batchNumber: '', expiryDate: '',
-  }, adminActor, 'BOTH').product
+    note: 'Phone money test',
+    // A Pharmacy licence always tracks expiry, so its stock arrives as a real lot rather than plain quantity.
+    batchNumber: edition === 'PHARMACY' ? 'PHARM-LOT-1' : '',
+    expiryDate: edition === 'PHARMACY' ? '2028-09-30' : '',
+  }, adminActor, edition).product
 
   // One real sale: two packs at the retail price, paid in cash.
   const receipt = pointOfSale.completeSale({
     idempotencyKey: `phone-money-${currencyCode}`, saleType: 'RETAIL',
     items: [{ productId: product.id, quantity: '2' }],
     payments: [{ method: 'CASH', amount: fromMinor(40n * 10n ** BigInt(currency.decimalPlaces), currency) }],
-  }, adminActor, 'BOTH').receipt
+  }, adminActor, edition).receipt
 
   const surface = createMobileAdminSurface({
     database, shop: shopService, license: { getSnapshot: () => LICENCE } as never,
@@ -230,5 +238,31 @@ describe.each(CASES)('the Admin phone in $code', ({ code, decimals, saleMinor, u
     const tooPrecise = decimals === 0 ? '1.5' : decimals === 2 ? '1.005' : '1.0005'
     const refused = parseMoneyInput(tooPrecise, context)
     expect(refused.ok, `${code} must refuse ${tooPrecise}`).toBe(false)
+  })
+})
+
+describe('the phone on each edition', () => {
+  /**
+   * The report sections differ by edition (a Pharmacy shop has no supermarket panel and vice versa), and the
+   * phone's dashboard reads those sections. Running the same money round trip on all three proves the phone is
+   * not accidentally proving only the "Both" build.
+   */
+  it.each(['PHARMACY', 'SUPERMARKET', 'BOTH'] as const)('serves the report and its money on a %s licence', async (edition) => {
+    const shop = await createShop('NGN', edition)
+    shops.push(shop)
+    const auth = { headers: { authorization: 'Bearer phone-token' } }
+
+    const dashboard = await shop.server.inject({ method: 'GET', url: '/api/v1/mobile/admin/dashboard', ...auth })
+    expect(dashboard.statusCode, `dashboard said ${dashboard.body}`).toBe(200)
+    expect(dashboard.json().today.totalSalesMinor).toBe('4000')
+
+    const report = await shop.server.inject({ method: 'GET', url: `/api/v1/mobile/admin/reports?period=DAY&date=${TODAY_ISO}`, ...auth })
+    expect(report.statusCode, `report said ${report.body}`).toBe(200)
+    const body = report.json()
+    expect(body.summary.totalSalesMinor).toBe('4000')
+    // The edition-specific panels follow the licence, not the product mix.
+    if (edition === 'PHARMACY') expect(body.adminReports?.supermarket ?? null).toBeNull()
+    if (edition === 'SUPERMARKET') expect(body.adminReports?.pharmacy ?? null).toBeNull()
+    expect(body.header.edition ?? edition).toBeTruthy()
   })
 })

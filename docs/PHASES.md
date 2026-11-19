@@ -278,6 +278,7 @@ proves the behaviour and the arithmetic; it does not prove layout.
 | Desktop login per role | Pass — `first-run-authentication.test.ts` (Admin, Supervisor, Cashier) | n/a |
 | A sale to receipt in NGN, USD, JPY, KWD | Pass — `pos-currency-end-to-end.test.ts` (sale → receipt → reprint → report, per currency) | Emulator only — receipt rendering is asserted as markup, not a screenshot |
 | The phone draws and accepts those amounts in each currency | Pass — `mobile-currency-routes.test.ts`: a real sale in each currency, read back over the real admin routes (dashboard, product, sale, report), then formatted and re-parsed by the phone's own money module | Emulator only — layout unproven |
+| The phone on a Pharmacy, Supermarket **and** Both licence | Pass — same file: the report and its money on each of the three editions, with the edition-specific panels following the licence | Emulator only |
 | A wholesale sale by a cashier on desktop | Pass — `pos-currency-end-to-end.test.ts` | n/a |
 | A return | Pass — `return-service.test.ts` | Emulator only |
 | Reports and Excel export | Pass — `accounting-report-service.test.ts` (opened with `exceljs`, real cell values and formats), `report-export-sections.test.ts` | n/a |
@@ -302,11 +303,21 @@ proves the behaviour and the arithmetic; it does not prove layout.
 | Pharmacy (desktop) | Pass | Pass | Pass | Pass | Pass (currency module sweep) |
 | Supermarket (desktop) | Pass | Pass | Pass | Pass | Pass (currency module sweep) |
 | Both (desktop) | Pass | Pass | Pass | Pass | Pass (currency module sweep) |
-| Pharmacy / Supermarket / Both (phone API) | Pass | Pass | Pass | Pass | Pass (currency module sweep) |
+| Pharmacy / Supermarket / Both (phone API) | Pass | Pass² | Pass² | Pass² | Pass (currency module sweep) |
+
+*² NGN is proven on all three editions; the other three currencies are proven on **Both**, and the edition
+switches are proven in NGN. The two axes are tested separately rather than as a nine-cell product.*
 
 *The phone-API row is backed by `src/api/mobile-currency-routes.test.ts`, which was written after the matrix
 first claimed it: the route layer previously had no money test in ANY currency. Writing it found two
 defects, both now fixed and both covered by tests that fail without the fix.*
+
+*The whole matrix was then re-audited row by row — every cited file opened and the claimed scenario located in it
+— because a matrix that was wrong once cannot be trusted on inspection. Every other row held. Two gaps were found
+and closed: the phone-API row had only ever run the **Both** edition, and the store-name-snapshot row cited tests
+that do prove it (by renaming the shop and reading an old receipt back) but whose names never mention it. The
+edition gap is now covered by tests on all three licences; the snapshot row's citation is unchanged because the
+assertions were always there, at `point-of-sale-service.test.ts:196` and `return-service.test.ts:444`.*
 
 | Platform | Automated here | Owed to hardware/emulator |
 | --- | --- | --- |
