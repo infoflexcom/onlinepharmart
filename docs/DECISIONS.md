@@ -966,3 +966,26 @@ in `MANIFEST.json` does not stop them. The stop has to be the exit code.
 **Not a substitute for the human check.** The gate proves the digest is not the placeholder. It cannot prove the file
 behind it is current, untouched Microsoft bytes — that is what `docs/RELEASE-CHECKLIST.md` asks a person to compare on a
 real PC with `certutil`, and what the signature check on the installing machine re-establishes at install time.
+
+
+## The pin is a list because "one" was a guess about the future
+
+**Decided:** a build profile records verified components as `prerequisites: BuildPrerequisitePin[]`, each with its own
+`id`, and every reader matches by id. A profile that pins more than the installer can carry is refused, with the
+components named.
+
+**Why it changed.** The field was a single optional object whose `id` was the literal type `'vcredist-x64'`. That was
+accurate for today and wrong as a structure, because `download-allowlist.ts` is deliberately a table — the whole point
+of it is that a second component is an entry, not a refactor. With a single-value pin, adding that entry would have
+produced a component that is fetched, verified and bundled while the release record says the build carries one thing.
+Nothing would have failed; the record would simply have been incomplete, which is the failure mode this phase keeps
+finding: the check runs, the answer is plausible, and it is not the truth.
+
+**Why refuse a second pin rather than ignore it.** The installer carries one runtime today — one `VCREDIST_*` family of
+defines, one `File` command, one execution. A profile pinning two would otherwise build an installer that bundles one
+and reports the build's components. Failing names what is pinned and says nothing was built, which is a five-minute
+problem instead of a release that misdescribes itself.
+
+**Why id and not position.** A list read as `[0]` is a list that will eventually be read wrong, and the profile is a
+document a vendor can edit. Matching by id also means a pin for a component the header does not describe cannot have its
+digest compiled into the installer's defines.

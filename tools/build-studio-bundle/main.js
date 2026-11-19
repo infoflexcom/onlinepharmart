@@ -749,6 +749,21 @@ function getCurrency(code) {
   return currencyByCode.get(code.toUpperCase());
 }
 
+// installer/src/download-allowlist.ts
+var ALLOWLISTED_COMPONENTS = [
+  {
+    id: "vcredist-x64",
+    title: "Microsoft Visual C++ 2015-2022 Redistributable (x64)",
+    url: "https://aka.ms/vs/17/release/vc_redist.x64.exe",
+    publisher: "Microsoft Corporation",
+    // NOTE FOR RELEASE: replace with the SHA-256 of the exact build being shipped. The all-zeros value below
+    // deliberately fails verification, so an unpinned build cannot be installed by accident.
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000",
+    sizeBytes: 25e6,
+    silentArguments: ["/install", "/quiet", "/norestart"]
+  }
+];
+
 // installer/src/build-profile.ts
 var BUILD_PROFILE_FORMAT = "infoflex-build-profile";
 var BUILD_PROFILE_VERSION = 1;
@@ -775,17 +790,26 @@ function buildProfileProblems(profile) {
   if (typeof profile.appVersion !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(profile.appVersion)) {
     problems.push({ field: "appVersion", message: "The version must look like 1.4.2 (numbers separated by dots)." });
   }
-  if (profile.prerequisite !== void 0) {
-    const pin = profile.prerequisite;
-    if (pin === null || typeof pin !== "object") {
-      problems.push({ field: "prerequisite", message: "The release prerequisite record is not an object." });
-    } else if (typeof pin.sha256 !== "string" || !/^[0-9a-f]{64}$/u.test(pin.sha256)) {
-      problems.push({
-        field: "prerequisite",
-        message: "The release prerequisite checksum must be 64 lowercase hexadecimal characters."
-      });
-    } else if (pin.id !== "vcredist-x64") {
-      problems.push({ field: "prerequisite", message: `Unknown prerequisite "${String(pin.id)}".` });
+  if (profile.prerequisites !== void 0) {
+    if (!Array.isArray(profile.prerequisites)) {
+      problems.push({ field: "prerequisite", message: "The release prerequisite record must be a list." });
+    } else {
+      const seen = /* @__PURE__ */ new Set();
+      for (const pin of profile.prerequisites) {
+        if (pin === null || typeof pin !== "object") {
+          problems.push({ field: "prerequisite", message: "The release prerequisite record is not an object." });
+        } else if (typeof pin.sha256 !== "string" || !/^[0-9a-f]{64}$/u.test(pin.sha256)) {
+          problems.push({
+            field: "prerequisite",
+            message: "The release prerequisite checksum must be 64 lowercase hexadecimal characters."
+          });
+        } else if (!ALLOWLISTED_COMPONENTS.some((component) => component.id === pin.id)) {
+          problems.push({ field: "prerequisite", message: `Unknown prerequisite "${String(pin.id)}".` });
+        } else if (seen.has(pin.id)) {
+          problems.push({ field: "prerequisite", message: `"${pin.id}" is pinned twice.` });
+        }
+        seen.add(String(pin.id));
+      }
     }
   }
   const currency = getCurrency(profile.defaultCurrencyCode);
@@ -837,7 +861,7 @@ function serializeBuildProfile(profile) {
     maximumOnsitePeriodYears: profile.maximumOnsitePeriodYears,
     licenseServerUrl: profile.licenseServerUrl
   };
-  if (profile.prerequisite) ordered.prerequisite = profile.prerequisite;
+  if (profile.prerequisites && profile.prerequisites.length > 0) ordered.prerequisites = profile.prerequisites;
   return `${JSON.stringify(ordered, null, 2)}
 `;
 }

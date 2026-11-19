@@ -216,3 +216,29 @@ describe('the profile that travels with a release holds no secret', () => {
     expect(tracked, 'build-profile.json must be tracked, or the pin it records is not part of the release').toBe('build-profile.json')
   })
 })
+
+describe('pinning one component does not discard another', () => {
+  it('merges into the list instead of replacing it', () => {
+    // No test caught this when it was mutated to `slice(0, 0)`, because the write happens inside `main()` and running
+    // it needs a fetch. So this is a structural test and is labelled one: it pins the shape of the merge, not its
+    // behaviour. The behaviour is guarded a step earlier by the list itself -- `prerequisites` is an array precisely so
+    // that an assignment cannot express "add one" -- and by the validation that refuses a duplicate id.
+    const script = readFileSync('scripts/release-prerequisite.ts', 'utf8')
+    expect(script).toMatch(/prerequisites = \[\s*\n\s*\.\.\.\(profile\.prerequisites \?\? \[\]\)\.filter/u)
+    expect(script).not.toMatch(/profile\.prerequisites = \[\s*\n\s*\{/u)
+  })
+
+  it('records the component id the fetch actually used, not a literal', () => {
+    // A hard-coded 'vcredist-x64' here would make every pin for a different component claim to be this one.
+    const script = readFileSync('scripts/release-prerequisite.ts', 'utf8')
+    expect(script).toContain('id: fetched.componentId')
+    expect(script).not.toMatch(/id: 'vcredist-x64',\s*\n\s*sha256: fetched/u)
+  })
+
+  it('matches the pin it reads by component id', () => {
+    const script = readFileSync('scripts/release-prerequisite.ts', 'utf8')
+    expect(script).toContain("entry.id === 'vcredist-x64'")
+    // And never takes the first entry: a list read positionally is a list that will be read wrong.
+    expect(script).not.toMatch(/prerequisites\?\.\[0\]/u)
+  })
+})

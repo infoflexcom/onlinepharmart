@@ -1,4 +1,5 @@
 import { getCurrency, type CurrencyDefinition } from '../../src/currency/catalog'
+import { ALLOWLISTED_COMPONENTS } from './download-allowlist'
 
 /**
  * The vendor's per-build settings, as Build Studio writes them and the installer and app read them.
@@ -56,11 +57,25 @@ export interface BuildProfile {
    * file: the digest travels with the build that used it, and two builds of different ages cannot disagree about which
    * binary they carry.
    */
-  prerequisite?: BuildPrerequisitePin
+  /**
+   * The verified components this build carries. Absent or empty means a development build; see
+   * `installer/src/prerequisite-release.ts`.
+   */
+  prerequisites?: BuildPrerequisitePin[]
 }
 
+/**
+ * One verified component, recorded as the release record of what the build carries.
+ *
+ * This was a single optional field (`prerequisite?:`) until it became clear what the shape costs: `download-allowlist.ts`
+ * is written as a table so a second component is an entry, not a refactor, and a single-value field would have made the
+ * installer build silently carry the first one only. It is now a list, so adding a component to the allowlist cannot
+ * lose its pin without something having to be deleted.
+ */
 export interface BuildPrerequisitePin {
-  id: 'vcredist-x64'
+  /** Which allowlisted component this pins. `id` was previously the literal 'vcredist-x64', which made the pin unable
+   *  to describe anything else. */
+  id: string
   sha256: string
   sizeBytes: number
   /** The Microsoft version string, as read from the file, for a person to compare on a real PC. */
@@ -106,17 +121,29 @@ export function buildProfileProblems(profile: BuildProfile): BuildProfileProblem
   if (typeof profile.appVersion !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(profile.appVersion)) {
     problems.push({ field: 'appVersion', message: 'The version must look like 1.4.2 (numbers separated by dots).' })
   }
-  if (profile.prerequisite !== undefined) {
-    const pin = profile.prerequisite
-    if (pin === null || typeof pin !== 'object') {
-      problems.push({ field: 'prerequisite', message: 'The release prerequisite record is not an object.' })
-    } else if (typeof pin.sha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(pin.sha256)) {
-      problems.push({
-        field: 'prerequisite',
-        message: 'The release prerequisite checksum must be 64 lowercase hexadecimal characters.',
-      })
-    } else if (pin.id !== 'vcredist-x64') {
-      problems.push({ field: 'prerequisite', message: `Unknown prerequisite "${String(pin.id)}".` })
+  if (profile.prerequisites !== undefined) {
+    if (!Array.isArray(profile.prerequisites)) {
+      problems.push({ field: 'prerequisite', message: 'The release prerequisite record must be a list.' })
+    } else {
+      const seen = new Set<string>()
+      for (const pin of profile.prerequisites) {
+        if (pin === null || typeof pin !== 'object') {
+          problems.push({ field: 'prerequisite', message: 'The release prerequisite record is not an object.' })
+        } else if (typeof pin.sha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(pin.sha256)) {
+          problems.push({
+            field: 'prerequisite',
+            message: 'The release prerequisite checksum must be 64 lowercase hexadecimal characters.',
+          })
+        } else if (!ALLOWLISTED_COMPONENTS.some((component) => component.id === pin.id)) {
+          // Checked against the allowlist rather than a literal, so a component added to the table cannot be pinned
+          // without this validation knowing about it -- and a pin for something that is not on the allowlist is
+          // refused rather than carried into a build.
+          problems.push({ field: 'prerequisite', message: `Unknown prerequisite "${String(pin.id)}".` })
+        } else if (seen.has(pin.id)) {
+          problems.push({ field: 'prerequisite', message: `"${pin.id}" is pinned twice.` })
+        }
+        seen.add(String((pin as { id?: unknown }).id))
+      }
     }
   }
   const currency = getCurrency(profile.defaultCurrencyCode)
@@ -195,26 +222,31 @@ export function parseBuildProfile(text: string): BuildProfile | null {
   }
   // The release prerequisite pin, when the file carries one. Parsed explicitly rather than spread: a profile is a
   // document a vendor can edit, so an unknown field must not become a value the release trusts.
-  const pin = record.prerequisite
-  if (pin && typeof pin === 'object' && !Array.isArray(pin)) {
-    const fields = pin as Record<string, unknown>
-    if (
-      fields.id === 'vcredist-x64' &&
-      typeof fields.sha256 === 'string' &&
-      typeof fields.sizeBytes === 'number' &&
-      typeof fields.microsoftVersion === 'string' &&
-      typeof fields.url === 'string' &&
-      typeof fields.fetchedAt === 'string'
-    ) {
-      profile.prerequisite = {
-        id: 'vcredist-x64',
-        sha256: fields.sha256,
-        sizeBytes: fields.sizeBytes,
-        microsoftVersion: fields.microsoftVersion,
-        url: fields.url,
-        fetchedAt: fields.fetchedAt,
+  const pins = record.prerequisites
+  if (Array.isArray(pins)) {
+    const parsed: BuildPrerequisitePin[] = []
+    for (const entry of pins) {
+      if (!entry || typeof entry !== 'object') continue
+      const fields = entry as Record<string, unknown>
+      if (
+        typeof fields.id === 'string' &&
+        typeof fields.sha256 === 'string' &&
+        typeof fields.sizeBytes === 'number' &&
+        typeof fields.microsoftVersion === 'string' &&
+        typeof fields.url === 'string' &&
+        typeof fields.fetchedAt === 'string'
+      ) {
+        parsed.push({
+          id: fields.id,
+          sha256: fields.sha256,
+          sizeBytes: fields.sizeBytes,
+          microsoftVersion: fields.microsoftVersion,
+          url: fields.url,
+          fetchedAt: fields.fetchedAt,
+        })
       }
     }
+    if (parsed.length > 0) profile.prerequisites = parsed
   }
   return buildProfileProblems(profile).length === 0 ? profile : null
 }
@@ -232,7 +264,7 @@ export function serializeBuildProfile(profile: BuildProfile): string {
   // Carried through when present. A profile written by Build Studio has no pin; the release step adds one, and
   // `installer:script` re-serialises the profile into `installer/nsis/`, so dropping it here would lose the pin
   // between generating the header and building the offline installer.
-  if (profile.prerequisite) ordered.prerequisite = profile.prerequisite
+  if (profile.prerequisites && profile.prerequisites.length > 0) ordered.prerequisites = profile.prerequisites
   return `${JSON.stringify(ordered, null, 2)}\n`
 }
 

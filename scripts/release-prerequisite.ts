@@ -45,6 +45,16 @@ function readProfile(): BuildProfile {
   return profile
 }
 
+/**
+ * The pin this tool cares about: the one for the allowlisted prerequisite component.
+ *
+ * Matched by id rather than taken as the first entry. The profile is a document a vendor can edit and the list exists
+ * so more than one component can be pinned, so "the first one" is not a safe reading of it.
+ */
+function vcredistPin(profile: BuildProfile) {
+  return profile.prerequisites?.find((entry) => entry.id === 'vcredist-x64')
+}
+
 function writeProfile(profile: BuildProfile): void {
   writeFileSync(PROFILE_PATH, `${JSON.stringify(profile, null, 2)}\n`, 'utf8')
 }
@@ -60,7 +70,7 @@ function main(): void {
 
   if (args.includes('--check')) {
     const profile = readProfile()
-    const sha256 = profile.prerequisite?.sha256 ?? ''
+    const sha256 = vcredistPin(profile)?.sha256 ?? ''
     if (!isDigestPinned(sha256)) {
       fail(
         'The VC++ prerequisite checksum is still the all-zero placeholder, so this build cannot be released.\n\n' +
@@ -72,7 +82,7 @@ function main(): void {
       )
     }
     assertReleasePin(sha256)
-    const pin = profile.prerequisite!
+    const pin = vcredistPin(profile)!
     // A real digest is necessary and not sufficient: the file about to be bundled must BE that file. Without this the
     // check passes on a stale cache and the offline installer ships bytes its own checksum refuses.
     // Every failure of this function is a release-stopping fact, and each one already carries a plain-English message
@@ -98,7 +108,7 @@ function main(): void {
 
   if (args.includes('--record')) {
     const profile = readProfile()
-    const pin = profile.prerequisite
+    const pin = vcredistPin(profile)
     if (!pin || !isDigestPinned(pin.sha256)) {
       fail('There is no pinned prerequisite to record. Run `npm run release:prerequisite` first.')
     }
@@ -126,14 +136,20 @@ function main(): void {
   }
 
   const profile = readProfile()
-  profile.prerequisite = {
-    id: 'vcredist-x64',
-    sha256: fetched.sha256,
-    sizeBytes: fetched.sizeBytes,
-    microsoftVersion: fetched.microsoftVersion,
-    url: fetched.url,
-    fetchedAt: new Date().toISOString(),
-  }
+  // Replace this component's entry, keeping any other component's pin intact. Assigning the whole list would make
+  // pinning the runtime silently discard every other verified component.
+  profile.prerequisites = [
+    ...(profile.prerequisites ?? []).filter((entry) => entry.id !== fetched.componentId),
+    {
+      // The component's own id, from the allowlist entry the fetch used, not a literal.
+      id: fetched.componentId,
+      sha256: fetched.sha256,
+      sizeBytes: fetched.sizeBytes,
+      microsoftVersion: fetched.microsoftVersion,
+      url: fetched.url,
+      fetchedAt: new Date().toISOString(),
+    },
+  ]
   writeProfile(profile)
 
   if (!existsSync(fetched.path)) {

@@ -1114,3 +1114,55 @@ redirect chain `aka.ms` → `download.visualstudio.microsoft.com` is copied from
 rather than observed. `resolveFinalUrl` has run against a local redirect, not against `aka.ms`. The first release run on
 a networked machine is the first time this code meets that chain, and `docs/RELEASE-CHECKLIST.md` asks for the digest and
 version to be compared by hand at that point.
+
+## Phase 15 (continued) — the version reader was never right, and the pin could only describe one thing
+
+Two of the claims this project had been repeating were dischargeable rather than recordable, so they were discharged.
+The first one came out badly.
+
+**The version reader had three defects, and none of them was visible from a synthetic fixture.** `fileVersionFromWindowsResource`
+looked for the UTF-16LE key `FileVersion` anywhere in the file and read what followed. It had never been run against a
+real executable. The repository ships several — `signtool.exe` and the WiX compiler in `node_modules` — and running it
+against them produced this:
+
+| File | Old reader | Truth |
+| --- | --- | --- |
+| `signtool.exe` | `null` | `4.00 (WinBuild.160101.0800)` |
+| `7z-x64.exe` | `null` | `16.04` |
+| `candle.exe` | `]⼀[FileVersionMajorMinor]̀.⌀[AssemblyCompany]✀…` | `3.10.0.2103` |
+
+1. **Alignment padding.** The key is padded to a 4-byte boundary and the padding is not one NUL — `signtool.exe` has
+   three. The reader stopped at the first control character, so it returned `null` for every real file, which the caller
+   reported as "unreadable on this machine" and the checklist turned into a blank a person fills in by hand.
+2. **Real values are not bare numbers.** `4.00 (WinBuild.160101.0800)` does not match `^\d+(\.\d+)+$`.
+3. **A linear scan finds the key in text that is not a version resource.** `candle.exe` embeds a WiX template containing
+   `[FileVersionMajorMinor]`, and the old reader returned box-drawing characters as the version of the file. A wrong
+   version in a release record is a fact somebody will compare against a real PC and believe.
+
+The reader now searches for `VS_VERSION_INFO` first and only accepts a key inside it — every genuine resource has that
+marker a few hundred bytes before its string table, and the template text that fooled the scan has none. Tests assert
+all three real files exactly, and assert the *shape* of a version (digits, letters, dots, spaces, parentheses) so a
+future false positive fails on form rather than on a lucky string. They skip with a stated reason if the packages are
+ever pruned, rather than passing on an empty loop.
+
+**The pin could only ever describe one component, and the release record was the place it would have gone wrong.**
+`prerequisite` was a single optional object with `id: 'vcredist-x64'` typed as a literal. `download-allowlist.ts` is
+written as a table so that a second component is an entry rather than a refactor, and a single-value pin would have
+turned that into a trap: the release record reads the pin, so a second verified component would have been fetched,
+bundled, and then omitted from the record of what the build carries — with nothing failing. The field is now
+`prerequisites: BuildPrerequisitePin[]`, `id` is a string validated against the allowlist rather than a literal, a
+duplicate id is refused, and readers match **by id rather than by position**. Pinning now merges into the list instead
+of assigning it.
+
+Adding a component to the allowlist is still not enough for the installer to carry it, and rather than leave that as a
+quiet half-truth the generator now **refuses a profile that pins more than the installer can carry**, naming the
+components and saying nothing was built.
+
+**What is proven.** All three version-reader defects were found and fixed by running against real Microsoft-built
+executables, and the tests fail if either the padding or the resource-boundary fix regresses (both mutations were run
+and both were caught). The list change was verified end to end: a pinned profile produces `VCREDIST_SHA256` and
+`PREREQUISITE_INCLUDE` exactly as before, and `release:assemble` still refuses a cache whose signature is not Microsoft's.
+
+**What is still not proven.** The `info` about `aka.ms`'s redirect chain, and every claim about behaviour on a real
+Windows PC, remain as they were: no networked release run and no Windows execution of these installers has happened
+here. `docs/RELEASE-CHECKLIST.md` is what converts those into a person's observation.

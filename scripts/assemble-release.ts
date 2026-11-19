@@ -149,7 +149,8 @@ function main(): void {
     // not depend on it.
     const profilePath = BUILD_PROFILE_FILENAME
     const profile = existsSync(profilePath) ? parseBuildProfile(readFileSync(profilePath, 'utf8')) : null
-    const pin = profile?.prerequisite
+    // Matched by component id, like every other reader of the profile.
+    const pin = profile?.prerequisites?.find((entry) => entry.id === 'vcredist-x64')
     // An explicit opt-in for the development pipeline, which must be able to assemble a folder to test the assembly
     // itself. It is a separate flag with its own name, not a lower bar: the release record then says
     // `pinned: false` and the folder is marked as not for distribution, so a build that took this route cannot be

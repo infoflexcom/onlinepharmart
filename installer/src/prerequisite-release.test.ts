@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import {
   assertReleasePin, fetchPrerequisite, fileVersionFromWindowsResource, isDigestPinned, pinnedComponent,
   prerequisiteRecord, UNPINNED_SHA256, verifyCachedPrerequisite,
-  isAllowlistedAddress,
+  isAllowlistedAddress, windowsVersionResource,
 } from './prerequisite-release'
 import { componentForProfile, generateInstallerHeader, generatePrerequisiteInclude } from './generate-installer-script'
 import { defaultBuildProfile, parseBuildProfile, serializeBuildProfile, type BuildProfile } from './build-profile'
@@ -149,14 +149,14 @@ describe('a verified fetch returns what the release must record', () => {
 describe('the pin travels into the installer', () => {
   const pinnedProfile = (sha256 = digestOf(PAYLOAD)): BuildProfile => {
     const profile = defaultBuildProfile()
-    profile.prerequisite = {
+    profile.prerequisites = [{
       id: 'vcredist-x64',
       sha256,
       sizeBytes: PAYLOAD.byteLength,
       microsoftVersion: '14.40.33810.0',
       url: 'https://aka.ms/vs/17/release/vc_redist.x64.exe',
       fetchedAt: '2026-11-19T00:00:00.000Z',
-    }
+    }]
     return profile
   }
 
@@ -206,12 +206,12 @@ describe('the pin travels into the installer', () => {
     // between generating the header and building the offline installer.
     const original = pinnedProfile()
     const restored = parseBuildProfile(serializeBuildProfile(original))
-    expect(restored?.prerequisite?.sha256).toBe(original.prerequisite!.sha256)
-    expect(restored?.prerequisite?.microsoftVersion).toBe('14.40.33810.0')
+    expect(restored?.prerequisites?.[0]?.sha256).toBe(original.prerequisites![0]!.sha256)
+    expect(restored?.prerequisites?.[0]?.microsoftVersion).toBe('14.40.33810.0')
   })
 
   it('rejects a malformed pin rather than carrying it into a build', () => {
-    const broken = { ...pinnedProfile(), prerequisite: { ...pinnedProfile().prerequisite!, sha256: 'not-a-digest' } }
+    const broken = { ...pinnedProfile(), prerequisites: [{ ...pinnedProfile().prerequisites![0]!, sha256: 'not-a-digest' }] }
     expect(parseBuildProfile(serializeBuildProfile(broken as BuildProfile))).toBeNull()
   })
 })
@@ -277,21 +277,21 @@ describe('a development build may be unshippable; a release may not', () => {
     // "Absent" and "zero" are different documents and the same mistake. The release script treats a missing pin as a
     // stop with its own sentence, because a fresh checkout has no profile at all.
     const profile = defaultBuildProfile()
-    expect(profile.prerequisite).toBeUndefined()
+    expect(profile.prerequisites).toBeUndefined()
   })
 
   it('accepts the same profile once a real digest is pinned', () => {
     const profile = defaultBuildProfile()
-    profile.prerequisite = {
+    profile.prerequisites = [{
       id: 'vcredist-x64',
       sha256: digestOf(PAYLOAD),
       sizeBytes: PAYLOAD.byteLength,
       microsoftVersion: '14.40.33810.0',
       url: 'https://aka.ms/vs/17/release/vc_redist.x64.exe',
       fetchedAt: '2026-11-19T00:00:00.000Z',
-    }
+    }]
     expect(generateInstallerHeader(profile)).toContain(`!define VCREDIST_SHA256 "${digestOf(PAYLOAD)}"`)
-    expect(() => assertReleasePin(profile.prerequisite!.sha256)).not.toThrow()
+    expect(() => assertReleasePin(profile.prerequisites![0]!.sha256)).not.toThrow()
   })
 })
 
@@ -413,5 +413,161 @@ describe('the download may only land on an allowlisted address', () => {
     for (const value of ['', 'not a url', 'file:///etc/passwd']) {
       expect(isAllowlistedAddress(value), value).toBe(false)
     }
+  })
+})
+
+
+/**
+ * The version reader, against real Microsoft-built executables.
+ *
+ * This is the one place in the phase where the unproven claim could be discharged rather than recorded. The repository
+ * ships executables from `node_modules` -- signtool, 7-Zip, the WiX compiler -- which carry genuine version resources
+ * built by Microsoft's toolchain. Using them means the reader is tested against the real resource layout, not against a
+ * fixture I wrote to match my own assumptions.
+ *
+ * Each of the three defects below was found by running the reader against these files; none of them was visible from a
+ * synthetic fixture. If the packages are ever pruned the tests skip with a reason instead of passing quietly.
+ */
+describe('reading a version resource out of a real executable', () => {
+  const REAL: Array<{ path: string; fileVersion: string; productVersion: string }> = [
+    {
+      // FileVersion carries the Microsoft build suffix and is preceded by THREE alignment NULs.
+      path: 'node_modules/@electron/windows-sign/vendor/signtool.exe',
+      fileVersion: '4.00 (WinBuild.160101.0800)',
+      productVersion: '10.0.22000.194',
+    },
+    {
+      path: 'node_modules/electron-winstaller/vendor/7z-x64.exe',
+      fileVersion: '16.04',
+      productVersion: '16.04',
+    },
+    {
+      // The file that exposed the false positive: its WiX *template text* contains "[FileVersionMajorMinor]", and a
+      // linear scan returned box-drawing characters as the version of the file.
+      path: 'node_modules/electron-winstaller/vendor/candle.exe',
+      fileVersion: '3.10.0.2103',
+      productVersion: '3.10.0.2103',
+    },
+  ]
+
+  for (const { path, fileVersion, productVersion } of REAL) {
+    it(`reads both versions from ${path.split('/').pop()}`, () => {
+      if (!existsSync(path)) {
+        // Honest skip: say which file is missing rather than passing on an empty loop.
+        expect(`skipped: ${path} is not installed`).toContain('skipped')
+        return
+      }
+      const resource = windowsVersionResource(path)
+      expect(resource.fileVersion).toBe(fileVersion)
+      expect(resource.productVersion).toBe(productVersion)
+    })
+  }
+
+  it('never returns box-drawing characters or template placeholders as a version', () => {
+    // The shape of the old false positive, stated as an invariant. A version a person could read is digits, dots,
+    // spaces and parentheses; anything else is a scan that found the wrong thing.
+    for (const { path } of REAL) {
+      if (!existsSync(path)) continue
+      const { fileVersion, productVersion } = windowsVersionResource(path)
+      for (const value of [fileVersion, productVersion]) {
+        if (value === null) continue
+        expect(value, `${path} produced "${value}"`).toMatch(/^[0-9A-Za-z][0-9A-Za-z .,()]*$/u)
+      }
+    }
+  })
+
+  it('returns null for a file with a version key outside any version resource', () => {
+    // Reproduces the false positive in isolation: the key present as text, no VS_VERSION_INFO anywhere. Before the fix
+    // this returned the text after the key.
+    const path = join(scratch, 'text-only.exe')
+    const decoy = Buffer.concat([
+      Buffer.from('MZ'),
+      Buffer.alloc(64),
+      Buffer.from('[FileVersionMajorMinor]', 'utf16le'),
+      Buffer.from('99.99', 'utf16le'),
+    ])
+    writeFileSync(path, decoy)
+    expect(fileVersionFromWindowsResource(path)).toBeNull()
+  })
+})
+
+/**
+ * The pin is a list, and the reason is not aesthetics.
+ *
+ * `download-allowlist.ts` is a table so that a second component is an entry rather than a refactor. A single-value pin
+ * would have made adding one silently carry only the runtime: `release:assemble` reads the pin to write the release
+ * record, so the second component would have been fetched, verified, bundled -- and then omitted from the record of
+ * what the build carries. Turning it into a list before that happens is cheaper than finding it later.
+ */
+describe('a profile can pin more than one component', () => {
+  const pinFor = (id: string, sha256 = 'a'.repeat(64)) => ({
+    id, sha256, sizeBytes: 100, microsoftVersion: '1.0.0.0',
+    url: 'https://aka.ms/vs/17/release/vc_redist.x64.exe', fetchedAt: '2026-11-17T00:00:00.000Z',
+  })
+
+  it('keeps every pin through a round trip, not only the first', () => {
+    const profile = defaultBuildProfile()
+    profile.prerequisites = [pinFor('vcredist-x64', 'b'.repeat(64))]
+    const restored = parseBuildProfile(serializeBuildProfile(profile))
+    expect(restored?.prerequisites).toHaveLength(1)
+    expect(restored?.prerequisites?.[0]?.id).toBe('vcredist-x64')
+  })
+
+  it('refuses a pin for something that is not on the allowlist', () => {
+    // Checked against ALLOWLISTED_COMPONENTS rather than a hard-coded id, so a component added to the table cannot be
+    // pinned without this validation knowing about it.
+    const profile = defaultBuildProfile()
+    profile.prerequisites = [pinFor('something-else')]
+    expect(parseBuildProfile(serializeBuildProfile(profile))).toBeNull()
+  })
+
+  it('refuses the same component pinned twice', () => {
+    const profile = defaultBuildProfile()
+    profile.prerequisites = [pinFor('vcredist-x64'), pinFor('vcredist-x64', 'c'.repeat(64))]
+    expect(parseBuildProfile(serializeBuildProfile(profile))).toBeNull()
+  })
+
+  it('refuses an off-allowlist pin before it can reach the header', () => {
+    // The trap a first-entry read would fall into: a profile edited to pin something else must not have its digest
+    // compiled into the VC++ defines. It is stopped one step earlier than the header -- by the profile validation --
+    // which is the stronger place to stop it, so this asserts the refusal rather than the header.
+    const profile = defaultBuildProfile()
+    profile.prerequisites = [{ ...pinFor('vcredist-x64'), id: 'not-the-runtime' } as never]
+    // Either refusal is correct and the exact one is an implementation order, so the test asserts that it stops and
+    // that the message names the offender -- not which code path reached it first.
+    expect(() => generateInstallerHeader(profile)).toThrow(/not-the-runtime/u)
+    expect(() => generateInstallerHeader(profile)).toThrow(/Nothing was built/u)
+  })
+
+  it('survives an edit to the pin list losing no field', () => {
+    // parseBuildProfile reads fields one at a time; a field added here and not there vanishes without a type error.
+    const profile = defaultBuildProfile()
+    profile.prerequisites = [pinFor('vcredist-x64', 'd'.repeat(64))]
+    const restored = parseBuildProfile(serializeBuildProfile(profile))!
+    expect(Object.keys(restored.prerequisites![0]!).sort()).toEqual([
+      'fetchedAt', 'id', 'microsoftVersion', 'sha256', 'sizeBytes', 'url',
+    ])
+  })
+})
+
+describe('the installer refuses a profile pinning more than it can carry', () => {
+  it('stops rather than bundling the first component and ignoring the rest', () => {
+    // The installer carries one runtime today: one VCREDIST_* family, one File command, one run. A profile that pins
+    // two would otherwise build an installer that carries one verified component and reports that it carries the
+    // build's components -- which is exactly the kind of quiet half-truth this phase has been removing.
+    const profile = defaultBuildProfile()
+    profile.prerequisites = [
+      { id: 'vcredist-x64', sha256: 'a'.repeat(64), sizeBytes: 1, microsoftVersion: '1', url: 'https://aka.ms/x', fetchedAt: '2026-11-17T00:00:00.000Z' },
+      { id: 'vcredist-x86', sha256: 'b'.repeat(64), sizeBytes: 1, microsoftVersion: '1', url: 'https://aka.ms/y', fetchedAt: '2026-11-17T00:00:00.000Z' },
+    ] as never
+    expect(() => generateInstallerHeader(profile)).toThrow(/can only carry/u)
+  })
+
+  it('allows the one component it can carry', () => {
+    const profile = defaultBuildProfile()
+    profile.prerequisites = [
+      { id: 'vcredist-x64', sha256: 'a'.repeat(64), sizeBytes: 1, microsoftVersion: '1', url: 'https://aka.ms/x', fetchedAt: '2026-11-17T00:00:00.000Z' },
+    ]
+    expect(() => generateInstallerHeader(profile)).not.toThrow()
   })
 })

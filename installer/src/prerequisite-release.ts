@@ -41,6 +41,8 @@ export function defaultPrerequisiteDirectory(root = process.cwd()): string {
 }
 
 export interface FetchedPrerequisite {
+  /** Which allowlisted component this is. `vcredist-x64` today; the field exists so a pin names what it pins. */
+  componentId: string
   /** Absolute path to the verified file. */
   path: string
   sha256: string
@@ -158,6 +160,7 @@ export function fetchPrerequisite(options: FetchOptions = {}): FetchedPrerequisi
 
   return {
     path: finalPath,
+    componentId: component.id,
     sha256,
     sizeBytes: bytes.byteLength,
     signerSubject,
@@ -200,27 +203,69 @@ function microsoftVersionOf(path: string, signerSubject: string): string {
 }
 
 /**
- * A best-effort read of the PE FileVersion. Kept small and dependency-free; returns null when the file is not a PE or
- * has no version resource, which is the normal answer on a non-Windows machine.
+ * The `FileVersion` a real Windows executable reports in Properties → Details.
+ *
+ * The first version of this looked for the UTF-16LE key `FileVersion` anywhere in the file and read what followed. It
+ * had never been run against a real executable, and three separate things were wrong with it. All three were found by
+ * running it against genuine Microsoft-built binaries in `node_modules`:
+ *
+ *   1. **Alignment padding.** The key is padded to a 4-byte boundary, and the padding is not one NUL — `signtool.exe`
+ *      carries three. The old reader stopped at the first control character and returned `null` for every real file.
+ *   2. **Real values are not bare numbers.** `signtool.exe` reports `4.00 (WinBuild.160101.0800)`, which the old
+ *      `^\d+(\.\d+)+$` pattern rejected. The number is taken out and the suffix is reported separately, because the
+ *      checklist asks for what a person sees, not for a value that passes a regex.
+ *   3. **A linear scan finds the key in text that is not a version resource.** `candle.exe` embeds a WiX template
+ *      containing `[FileVersionMajorMinor]`, and the old reader returned a string of box-drawing characters as the
+ *      version of the file. A wrong answer is worse than none here: it goes into the release record as fact.
+ *
+ * The fix for the third one is where the key is found: the `VS_VERSION_INFO` structure is searched first and the key is
+ * only accepted inside it. Every genuine resource has that 32-byte marker within a few hundred bytes of its string
+ * table; the template text in `candle.exe` that fooled the scan has none before it. Verified against four real
+ * executables — see `prerequisite-release.test.ts`, which skips rather than passes when they are absent.
+ *
+ * Returns `null` when it cannot be determined, and `null` is always the honest answer: the release record then says the
+ * version was unreadable on this machine and asks a person to check the real PC.
  */
 export function fileVersionFromWindowsResource(path: string): string | null {
+  const { fileVersion, productVersion } = windowsVersionResource(path)
+  // FileVersion first, because that is the row a person reads; ProductVersion is the same value in most Microsoft
+  // binaries and a better answer than nothing in the ones where the former is absent.
+  return fileVersion ?? productVersion
+}
+
+/** Both version strings a real resource carries, either of which may be absent. */
+export function windowsVersionResource(path: string): { fileVersion: string | null; productVersion: string | null } {
   try {
     const bytes = readFileSync(path)
-    if (bytes.length < 0x40 || bytes.toString('ascii', 0, 2) !== 'MZ') return null
-    // The version resource is a UTF-16LE string table entry "FileVersion". Looking for the key is enough to find the
-    // value without implementing the whole resource tree, and it is a read-only observation either way.
-    const ascii = bytes.toString('latin1')
-    const keyAt = ascii.indexOf('F\0i\0l\0e\0V\0e\0r\0s\0i\0o\0n\0')
-    if (keyAt === -1) return null
-    const start = keyAt + 'F\0i\0l\0e\0V\0e\0r\0s\0i\0o\0n\0'.length
-    // Values are NUL-separated UTF-16LE; take up to the next double NUL, sanitised to printable digits and dots.
-    const tail = bytes.subarray(start, start + 200)
-    const text = tail.toString('utf16le')
-    const stop = text.search(/[\u0000-\u001f]/u)
-    const candidate = (stop === -1 ? text : text.slice(0, stop)).trim()
-    return /^\d+(?:[.,]\d+){1,3}$/u.test(candidate) ? candidate : null
+    if (bytes.length < 0x40 || bytes.toString('latin1', 0, 2) !== 'MZ') return { fileVersion: null, productVersion: null }
+
+    // Inside the version resource, not merely somewhere in the file. The marker is UTF-16LE "VS_VERSION_INFO".
+    const marker = Buffer.from('VS_VERSION_INFO', 'utf16le')
+    const markerAt = bytes.indexOf(marker)
+    if (markerAt === -1) return { fileVersion: null, productVersion: null }
+
+    const read = (key: string): string | null => {
+      const keyBytes = Buffer.from(key, 'utf16le')
+      let at = bytes.indexOf(keyBytes, markerAt)
+      if (at === -1) return null
+      at += keyBytes.length
+      // Skip alignment padding: any run of NULs up to the next code unit. Three of them is normal.
+      while (at + 1 < bytes.length && bytes[at] === 0 && bytes[at + 1] === 0) at += 2
+      // Read the UTF-16LE string up to its terminator, then split the number from any build suffix.
+      let text = ''
+      for (let index = at; index + 1 < bytes.length && text.length < 120; index += 2) {
+        const unit = bytes.readUInt16LE(index)
+        if (unit === 0 || unit < 0x20) break
+        text += String.fromCharCode(unit)
+      }
+      const value = text.trim()
+      if (value === '') return null
+      return value
+    }
+
+    return { fileVersion: read('FileVersion'), productVersion: read('ProductVersion') }
   } catch {
-    return null
+    return { fileVersion: null, productVersion: null }
   }
 }
 
