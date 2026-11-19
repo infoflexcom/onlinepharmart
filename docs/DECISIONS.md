@@ -268,6 +268,22 @@ could not have been built at all had anyone run the build:
   typo on our side), every hook we rely on still exists, the four page hooks keep their page order, `customInstall` still
   runs after the payload and shortcuts, and `customUnInstall` still runs before the files are deleted. Renaming
   `customInstall` to `customInstal` now fails two tests by name.
+- **`oneClick` is now pinned, because one boolean deletes the password gate.** electron-builder picks between two page
+  templates: `assistedInstaller.nsh` when `oneClick` is false, `oneClick.nsh` when it is true. Only the first calls
+  `customWelcomePage`, `customPageAfterChangeDir` or `customFinishPage` — `oneClick.nsh` is eighteen lines and calls none
+  of them. Setting `oneClick: true` therefore removes the vendor password gate and the Region and Currency page from the
+  installer, and the build still succeeds with no warning anywhere: the hooks are defined, they are simply never
+  inserted. Nothing in the compile check would have noticed either, because the harness inserts the hooks itself. A
+  test now asserts `oneClick: false` and re-derives from electron-builder's templates why that matters, so if a future
+  version teaches `oneClick.nsh` to call the hooks the test says so instead of the requirement silently becoming stale.
+- **The offline wrapper is compiled, which it never was.** The shipping offline build does not include `installer.nsi`:
+  it includes `offline-include.nsh`, which sets `INFOPLEX_OFFLINE` and includes `installer.nsi`. The compile check had
+  been building "the offline build" by passing `-DINFOPLEX_OFFLINE=1` directly, so this wrapper was compiled by nothing
+  at all. It is now a third build in the check, and a typo in its `!include` fails the run. Making it compile also
+  needed two honest fixes rather than test scaffolding: the wrapper's `!define` is now guarded, because NSIS treats a
+  redefinition as a hard error, and the harness no longer pre-defines `INFOPLEX_OFFLINE` — `installer.nsi` already
+  defaults it, so the value now always comes from the file under test rather than from a harness that agreed with
+  itself. The wrapper's output is byte-identical to the offline build's, which is the point of it.
 - **What this still does not prove, and the docs say so.** It produces a real `.exe`, and it still does not prove
   electron-builder's template agrees with us — page order, where `customInstall` runs, whether the payload lands in the
   right place. It does not prove anything runs correctly on Windows: the file has never been executed, because there

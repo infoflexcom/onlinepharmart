@@ -25,9 +25,11 @@
 ; Set INFOPLEX_OFFLINE=1 on the command line (-DINFOPLEX_OFFLINE=1) to compile the offline build's branch, which
 ; bundles the Visual C++ runtime instead of downloading it. Both branches are worth compiling: they differ, and only
 ; one of them runs in any given installer.
-!ifndef INFOPLEX_OFFLINE
-  !define INFOPLEX_OFFLINE 0
-!endif
+;
+; The harness does not define INFOPLEX_OFFLINE at all, and that is deliberate. installer.nsi already defaults it to 0,
+; so the online build needs nothing; and offline-include.nsh sets it to 1, which is what makes the wrapper compile here
+; as its own build. Leaving the define alone means the value always comes from the file under test rather than from a
+; harness that happened to agree with itself -- the distinction that hid every defect this phase found.
 !ifndef PREREQUISITE_VCREDIST
   !define PREREQUISITE_VCREDIST "/tmp/infoflex-harness-resources/password-check.exe"
 !endif
@@ -92,7 +94,14 @@ Var /GLOBAL launchLink
 ; The file under test. It must be included before anything inserts its macros -- NSIS resolves a macro only after the
 ; !macro line has been read. electron-builder's template does the same, for the same reason.
 ; ==========================================================================================
-!include "installer.nsi"
+; Which file to compile. Normally installer.nsi. The shipping offline build does not include that file directly: it
+; includes offline-include.nsh, a one-line wrapper that sets INFOPLEX_OFFLINE and includes installer.nsi. Nothing
+; compiled that wrapper, so a typo in it would have been found only by a real `npm run build` on Windows -- the same
+; shape as every defect this harness has found. The driver compiles it as a third build by passing this define.
+!ifndef HARNESS_ENTRY
+  !define HARNESS_ENTRY "installer.nsi"
+!endif
+!include "${HARNESS_ENTRY}"
 
 ; installer.nsi disables three warnings by number, because electron-builder builds with -WX and any warning is fatal
 ; there. That is right for the real build and blind for this harness: warning 6010 is the only signal NSIS gives that it

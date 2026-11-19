@@ -290,6 +290,9 @@ const EXPECTED_UNREFERENCED: Record<string, string[]> = {
   // The download page and its offline fallback exist only in the online build, by design (see installer.nsi's
   // `!if ${INFOPLEX_OFFLINE} == 0`).
   offline: ['LoadDefaultCurrencyFields', 'DownloadPageCreate', 'DownloadOfflineClicked'],
+  // offline-include.nsh sets INFOPLEX_OFFLINE and includes installer.nsi, so the compiler sees exactly what the offline
+  // build sees and drops exactly the same functions.
+  'offline-wrapper': ['LoadDefaultCurrencyFields', 'DownloadPageCreate', 'DownloadOfflineClicked'],
 }
 
 interface Result {
@@ -384,9 +387,12 @@ function main(): void {
 
   const online = compile('online', [])
   const offline = compile('offline', ['-DINFOPLEX_OFFLINE=1'])
+  // The third build is the one the shipping offline installer actually performs. electron-builder's `include` for that
+  // configuration is offline-include.nsh, not installer.nsi, and compiling the second never compiled the first.
+  const wrapper = compile('offline-wrapper', ['-DHARNESS_ENTRY=offline-include.nsh'])
 
   let failed = false
-  for (const result of [online, offline]) {
+  for (const result of [online, offline, wrapper]) {
     if (result.blocking.length > 0) {
       failed = true
       console.log(`\n${result.label}: NSIS rejected the script.`)
@@ -443,7 +449,7 @@ function main(): void {
     process.exitCode = 1
     return
   }
-  console.log('\nBoth builds produced real installers. See docs/DECISIONS.md for what this does and does not prove.')
+  console.log('\nAll three builds produced real installers. See docs/DECISIONS.md for what this does and does not prove.')
 }
 
 main()

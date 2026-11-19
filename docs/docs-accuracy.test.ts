@@ -38,6 +38,9 @@ const RUNTIME_FILES = new Set([
   // NSIS's own standard headers. They are part of the makensis installation, not of this repository, and the docs name
   // them to explain which header defines which macro -- the distinction that cost six compile failures.
   'x64.nsh', 'WinVer.nsh', 'FileFunc.nsh', 'LogicLib.nsh', 'nsDialogs.nsh', 'MUI2.nsh',
+  // electron-builder's own NSIS templates, from node_modules. Named in the docs to explain which template calls which
+  // hook -- the difference between an installer with a password page and one without it.
+  'assistedInstaller.nsh', 'oneClick.nsh', 'installSection.nsh', 'uninstaller.nsh',
 ])
 
 /** Files produced by a build rather than committed; `build-studio.ts` copies or writes each of them. */

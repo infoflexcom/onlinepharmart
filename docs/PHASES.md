@@ -840,6 +840,13 @@ the test rather than the Output screen.
   password page. Six tests read the template from `node_modules`: no orphan macros, every relied-on hook still present,
   page order preserved, and `customInstall`/`customUnInstall` still on the right side of the payload copy and the file
   delete.
+- **`oneClick` would have silently deleted the password gate.** Only the assisted template calls our three page hooks;
+  `oneClick.nsh` calls none of them. `oneClick: true` builds cleanly and ships an installer with no vendor gate — and
+  every existing test would still have passed, because the harness inserts the hooks itself. A test now pins the
+  setting and re-derives the reason from electron-builder's templates.
+- **The offline wrapper had never been compiled.** The shipping offline build includes `offline-include.nsh`, not
+  `installer.nsi`; the check had been simulating that build with a command-line define and leaving the wrapper untested.
+  It is now a third build, and its output is byte-identical to the offline build's.
 - **Still not proven:** the real `npm run build` cannot run here (electron-builder downloads its NSIS from GitHub and
   needs plugin DLLs this sandbox lacks), so the template is read rather than executed. And the `.exe` has never been executed. There is no Windows and no Wine here. The shippable
   installer still comes from `npm run build` on a Windows machine with the NSIS target, and the manual checklist in

@@ -4,5 +4,10 @@
 ; compile-time define. So this wrapper sets the define and then pulls in the pages themselves — the same file the
 ; online build includes, unchanged. The two installers therefore cannot drift: there is one set of pages, one password
 ; gate, one currency page, and only the download behaviour differs.
-!define INFOPLEX_OFFLINE 1
+;
+; Guarded rather than a bare `!define`: NSIS treats redefining a define as a hard error, and this file is compiled by
+; the check as well as by electron-builder. A caller that has already chosen a value keeps it.
+!ifndef INFOPLEX_OFFLINE
+  !define INFOPLEX_OFFLINE 1
+!endif
 !include "installer.nsi"
