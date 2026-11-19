@@ -15,3 +15,7 @@ coverage/
 Thumbs.db
 buildstudio/out/
 installer/nsis/build-profile.json
+
+# Compiled installer output. A build artefact, never a source file: it is produced by `npm run build` (or, for the
+# harness, by `npm run installer:compile`) and would go stale in the tree the moment the script changed.
+*.exe

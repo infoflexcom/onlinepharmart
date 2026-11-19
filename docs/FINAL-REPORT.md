@@ -97,10 +97,12 @@ Each of these is now covered by a test that fails if the defect returns.
 - The doc-accuracy tests, which verify every file path mentioned in the documentation actually exists.
 - `npm run release:scan` — with deliberately planted leaks to prove it detects them, then clean on the tree.
 - `npm run installer:check` — 19 shipped installer files, static analysis only.
-- `npm run installer:compile` — **a real makensis, built from NSIS source in this sandbox, compiling both the online
-  and the offline installer.** Every page, function, macro and instruction resolves. It stops at the final write only
-  because the installer stub is a one-byte placeholder; the check was itself verified by planting two of the six
-  defects above and confirming it rejects them.
+- `npm run installer:compile` — **a real makensis, built from NSIS source in this sandbox, producing a real installer
+  for both the online and the offline build.** Not a parse: the stubs are cross-compiled from NSIS's own sources with
+  Zig, so makensis writes a complete 111 KB i386 executable, and the check verifies the result from its own PE header
+  (MZ, PE signature, machine 0x014c, Windows GUI subsystem, seven sections). The check was itself verified twice: by
+  planting two of the six defects above and confirming it rejects them, and by removing `customPageAfterChangeDir` and
+  confirming it names the eight page functions NSIS silently discarded.
 - Build Studio's bundle, the web build, the mobile PWA build, the Electron bundle, the cloud package zip.
 
 **Not tested, and cannot be tested here:**

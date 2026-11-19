@@ -44,7 +44,15 @@
 !define INSTALL_MODE_PER_ALL_USERS
 
 Name "${PRODUCT_NAME}"
-OutFile "harness-output.exe"
+
+; Where the compiled installer is written. The driver passes an absolute path per build (online, offline) so the two
+; cannot overwrite each other -- a shared name would let one build's output satisfy the other build's check, which is
+; exactly the kind of false pass this harness exists to avoid. NSIS resolves a relative OutFile against the script's own
+; directory, not the working directory, so passing a relative path from a driver would not have been enough.
+!ifndef HARNESS_OUTFILE
+  !define HARNESS_OUTFILE "harness-output.exe"
+!endif
+OutFile "${HARNESS_OUTFILE}"
 InstallDir "$PROGRAMFILES\${PRODUCT_NAME}"
 RequestExecutionLevel admin
 

@@ -808,4 +808,28 @@ the test rather than the Output screen.
   the regex patching MUI lacked the `m` flag so it silently matched nothing. It now demands positive proof of a full
   compile and treats "no compile output" as failure.
 - **Still not proven:** that electron-builder's template agrees with our hooks, that the payload lands in the right
-  place, or that anything behaves correctly on Windows. No `.exe` was produced.
+  place, or that anything behaves correctly on Windows.
+
+## Phase 15 (continued) — a real installer, not just a compiling script
+
+- **The stubs are no longer a placeholder.** NSIS treats its Windows stubs as a Windows-only artefact (`SKIPSTUBS=all`
+  is the documented POSIX recipe) and its release tarball ships none, so every earlier run stopped at the final
+  byte-write with `PE file contains invalid DOS header`. `scripts/nsis-stub-builder.ts` now cross-compiles them from
+  NSIS's own `Source/exehead`, using **Zig** — published to PyPI as a plain wheel, and a complete clang+lld
+  cross-compiler — behind `i686-w64-mingw32-*` shims so NSIS's SConstruct builds unmodified. Twelve stubs, three
+  compressions by four variants.
+- **`npm run installer:compile` now produces a real `.exe` for both builds:** 111,049 bytes online, 110,816 bytes
+  offline, each a verified i386 PE with the Windows GUI subsystem.
+- **The check inspects the artefact instead of trusting the log.** `installer/src/pe-artifact.ts` validates the DOS
+  magic, the PE signature, the machine, the optional-header size, the section count and the subsystem, with 11 tests.
+  It immediately earned its keep: dropping `-Wl,--subsystem,windows` from the stub link produced a **console** binary,
+  which NSIS accepted without complaint and which would have flashed a terminal window at every vendor during install.
+- **`warning 6010` is now a failure unless the omission is expected.** Zeroing a function body is how four custom pages
+  were silently lost in an earlier phase. `EXPECTED_UNREFERENCED` lists what each build may drop; removing the page
+  hook now fails the build and names eight discarded page functions.
+- **`ChangeUI` still cannot be restored**, and the docs now say why: with real stubs in place, `ChangeUI all` fails
+  with `Can't find IDD_LICENSE (102) in the custom UI` because it edits dialog resources, which needs a Windows
+  resource compiler. That is a genuine limit, not a missing stub.
+- **Still not proven:** the `.exe` has never been executed. There is no Windows and no Wine here. The shippable
+  installer still comes from `npm run build` on a Windows machine with the NSIS target, and the manual checklist in
+  `RELEASE-CHECKLIST.md` is still the only thing that will tell us the pages behave.

@@ -223,20 +223,37 @@ could not have been built at all had anyone run the build:
   success while `makensis` was failing at start-up, because (a) the error went to stderr and only stdout was read,
   (b) `makensis` exits 0 on script errors unless `-V2` is passed, so the throw never happened, and (c) the regex that
   patched MUI's `ChangeUI` lines lacked the `m` flag, so it silently matched nothing and the build failed on a MUI
-  error instead. Each of those made a broken run look clean. The script now requires positive proof of a full compile
-  — the dummy stub failing at the final write is the signal that everything before it resolved — and reports
-  "produced no compile output at all" as a failure rather than a pass.
+  error instead. Each of those made a broken run look clean. The script now requires a produced file and reads its
+  header — see the next entry — rather than inferring success from output text.
 - **The harness inserts the page hooks, because without them four functions are never compiled.** `customPageAfterChangeDir`
   registers the four custom `Page` commands; a harness that omits it leaves those functions unreferenced, NSIS emits
   "warning 6010 ... zeroing code", and their bodies — the currency page's entire read-back logic — are thrown away
   unexamined. A planted `${NSD_LB_BogusMacro}` on the currency page went undetected until the hooks were inserted at
   the same points electron-builder uses (assistedInstaller.nsh lines 9, 43, 48).
+- **The stubs are real, so the check produces an actual installer instead of stopping short of one.** NSIS does not
+  ship Windows stubs for POSIX and its own build treats them as a Windows-only artefact, which is why the previous
+  phase could only get as far as "every macro resolved, then the final byte-write failed on the placeholder". They are
+  now cross-compiled from NSIS's own `Source/exehead` by `scripts/nsis-stub-builder.ts`, using Zig — which is on PyPI
+  as a plain wheel and is a complete clang+lld cross-compiler — driven through `i686-w64-mingw32-*` shims so NSIS's
+  SConstruct builds unmodified. `npm run installer:compile` now writes a 111 KB i386 PE for each build.
+- **The produced file is inspected, not assumed.** `installer/src/pe-artifact.ts` reads the DOS magic, the PE
+  signature at `e_lfanew`, the machine, the optional-header size, the section count and the subsystem, and the build
+  fails if any of them is wrong. This has already earned its keep: dropping `-Wl,--subsystem,windows` from the stub
+  link produced a *console* binary — a valid-looking PE that would flash a terminal window at the vendor — and the
+  subsystem check is what caught it. NSIS was perfectly happy with that build.
+- **Warning 6010 is treated as a failure unless the omission is expected.** "Zeroing code" means NSIS threw a function
+  body away unexamined. That is legitimate for the download page in the offline build, and it is exactly how four
+  custom pages were silently lost before the harness inserted the right hook. `EXPECTED_UNREFERENCED` names the
+  functions each build may drop; anything else, and any listed omission that no longer happens, fails the build.
+  Removing `customPageAfterChangeDir` now reports eight discarded page functions by name.
 - **Two things are stubbed, and only two.** MUI2's `ChangeUI` and `InstProgressFlags` open the installer's own UI
-  `.exe` and rewrite its dialog resources, which needs a Windows resource compiler. They are cosmetic and unrelated to
-  the file under test, so they are commented out in a private copy of the NSIS tree with a marker at each site;
-  nothing in the repository is touched. A one-byte stub and hand-built plugin DLLs stand in for artefacts NSIS only
-  reads when writing the final file.
-- **What this still does not prove, and the docs say so.** It does not prove electron-builder's template agrees with
-  us — page order, where `customInstall` runs, whether the payload lands in the right place. It does not produce an
-  installer. It does not prove anything runs correctly on Windows. `installer:check` no longer claims that compiling
-  "needs Windows or Wine", because that stopped being true.
+  `.exe` and rewrite its dialog resources, which needs a Windows resource compiler — a real limitation, not a
+  placeholder. They are commented out in a private copy of the NSIS tree with a marker at each site; nothing in the
+  repository is touched. Re-tested with the real stubs: restoring `ChangeUI` still fails with
+  `Can't find IDD_LICENSE (102) in the custom UI`, so the patch is not a stand-in for a missing stub.
+- **What this still does not prove, and the docs say so.** It produces a real `.exe`, and it still does not prove
+  electron-builder's template agrees with us — page order, where `customInstall` runs, whether the payload lands in the
+  right place. It does not prove anything runs correctly on Windows: the file has never been executed, because there
+  is no Windows and no Wine here. The full electron-builder build (`npm run build` with the NSIS target) is the only
+  thing that will produce the shippable installer, and that needs a Windows machine. `installer:check` no longer
+  claims that compiling "needs Windows or Wine", because that stopped being true.

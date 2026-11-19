@@ -1,6 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { buildStubs } from './nsis-stub-builder.ts'
+import { inspectPe, type PeArtifact } from '../installer/src/pe-artifact.ts'
 
 /**
  * Compiles the real installer/nsis/installer.nsi with a real makensis, and reports what NSIS itself says.
@@ -25,14 +27,16 @@ import { join } from 'node:path'
  *
  * WHAT IT PROVES, AND WHAT IT DOES NOT
  *
- * It proves the script parses and every macro, page, function and instruction resolves. It uses the real NSIS headers.
- * It does **not** produce an installer: that needs a Windows resource compiler for the UI and the installer stub, and
- * neither exists here, so a dummy stub is used and the build stops at the final byte-write ("PE file contains invalid
- * DOS header") -- after every check that matters. It also cannot prove electron-builder's template agrees with us.
+ * It proves the script parses, every macro, page, function and instruction resolves, AND that makensis can write a
+ * complete Windows installer: the stubs are cross-compiled from NSIS's own sources by scripts/nsis-stub-builder.ts, so
+ * the final byte-write succeeds and the output is a real i386 PE. The bytes of that PE are checked, not assumed.
  *
- * Two local patches to the NSIS install are applied, and they are the only two: MUI2's ChangeUI calls and the
- * InstProgressFlags directive are stubbed, because both open a Windows .exe and rewrite its dialog resources. Neither
- * has anything to do with the file under test.
+ * What it still does not prove: that electron-builder's own template agrees with us, and that the resulting installer
+ * runs. There is no Windows here to run it on. Those remain on the manual checklist.
+ *
+ * One local patch to the NSIS install is applied: MUI2's ChangeUI calls and the InstProgressFlags directive are
+ * stubbed, because both open a Windows .exe and rewrite its dialog resources, which needs a Windows resource compiler
+ * "--codepage" mode NSIS does not have. Neither has anything to do with the file under test.
  *
  * Usage: npx tsx scripts/compile-check-installer.ts
  */
@@ -271,7 +275,32 @@ function minimalPeWithExports(names: string[]): Buffer {
   return pad(Buffer.concat([head, Buffer.alloc(raw1 - head.length), export_, Buffer.alloc(raw2 - raw1 - export_.length), rsrc]))
 }
 
-interface Result { label: string; output: string; blocking: string[] }
+/**
+ * Functions NSIS is allowed to find unreferenced in each build, and why.
+ *
+ * Warning 6010 ("zeroing code") is not noise to be filtered: it means NSIS discarded a function body. That is fine when
+ * a function is deliberately compiled out of one build, and dangerous anywhere else -- the first version of this harness
+ * silently lost every custom page this way, because the hook that inserts them was missing. An unreferenced function
+ * that is not on this list is a failure, so a page or a handler dropping out of the build is loud rather than quiet.
+ */
+const EXPECTED_UNREFERENCED: Record<string, string[]> = {
+  // Nothing is compiled out of the online build. The currency page's helper is unreferenced because the default build
+  // profile does not lock the currency; the locked branch is the only caller.
+  online: ['LoadDefaultCurrencyFields'],
+  // The download page and its offline fallback exist only in the online build, by design (see installer.nsi's
+  // `!if ${INFOPLEX_OFFLINE} == 0`).
+  offline: ['LoadDefaultCurrencyFields', 'DownloadPageCreate', 'DownloadOfflineClicked'],
+}
+
+interface Result {
+  label: string
+  output: string
+  blocking: string[]
+  /** Absolute path to the installer this run wrote, when makensis got that far. */
+  installer: string | null
+  /** What the produced file actually is, once verified. */
+  artifact: PeArtifact | null
+}
 
 /** Compiles the harness, twice: once for the online build and once for the offline build. */
 function compile(label: string, defines: string[]): Result {
@@ -283,6 +312,13 @@ function compile(label: string, defines: string[]): Result {
   }
   run('cp', ['-f', join(root, 'build/installer-sidebar.bmp'), join(resources, 'installer-sidebar.bmp')])
 
+  // Each build writes to its own directory. Sharing one would let the online build's successful output satisfy the
+  // offline build's check, so an offline build that never ran would still look like it had produced an installer.
+  const outdir = join(WORK, 'out', label)
+  mkdirSync(outdir, { recursive: true })
+  const expected = join(outdir, 'harness-output.exe')
+  rmSync(expected, { force: true })
+
   try {
     const output = run(MAKENSIS, [
       ...defines,
@@ -290,34 +326,40 @@ function compile(label: string, defines: string[]): Result {
       // compile failure looks like success. This is the difference between a check and a decoration.
       '-V2',
       '-INPUTCHARSET', 'UTF8',
+      `-DHARNESS_OUTFILE=${expected}`,
       '-X!addincludedir ' + join(root, 'installer/nsis'),
       '-DBUILD_RESOURCES_DIR=' + resources,
       join(root, 'installer/nsis/harness/harness.nsi'),
     ], { cwd: root, env: { ...process.env, NSISDIR } })
-    return { label, output, blocking: [] }
+    let artifact: PeArtifact | null = null
+    if (existsSync(expected)) {
+      try {
+        artifact = inspectPe(readFileSync(expected))
+      } catch (error) {
+        return { label, output: `${output}\n${(error as Error).message}`, blocking: [(error as Error).message], installer: expected, artifact: null }
+      }
+    }
+    return { label, output, blocking: [], installer: existsSync(expected) ? expected : null, artifact }
   } catch (error) {
     // Both streams: makensis writes "Error initializing CEXEBuild" to stderr and script errors to stdout. Reading only
     // one of them is how this check first reported success while compiling nothing at all.
     const stdout = String((error as { stdout?: string }).stdout ?? '')
     const stderr = String((error as { stderr?: string }).stderr ?? '')
     const output = `${stdout}${stderr}`
-    return { label, output, blocking: blockingErrors(output) }
+    return { label, output, blocking: blockingErrors(output), installer: null, artifact: null }
   }
 }
 
 /**
- * Separates the errors that matter from the one that does not.
+ * Separates the errors that matter from the ones that do not.
  *
- * The dummy stub is one byte, so the final write always fails with "PE file contains invalid DOS header". Every check
- * of the script itself has already run by then, so that message is expected and is not a failure of the script.
+ * Warnings are deliberately not listed here: NSIS emits 6001 and 6010 for perfectly good scripts, and a check that
+ * fails on them is a check people turn off. The one error that matters most is `Error initializing CEXEBuild`, which
+ * means makensis never even began and the run proves nothing; it goes to stderr and was invisible to the first version.
  */
 function blockingErrors(output: string): string[] {
   return output.split('\n').map((line) => line.trim()).filter((line) =>
-    // `Error initializing CEXEBuild` is the one that matters most: it means makensis never even began, and the run
-    // proves nothing. It is on stderr and was invisible to the first version of this function.
-    /^(Invalid command|!include: error|!insertmacro:|Error: |Error in |Usage:|File: |Error initializing)/u.test(line)
-    && !/invalid DOS header/u.test(line)
-    && !/aborting creation process/u.test(line),
+    /^(Invalid command|!include: error|!insertmacro:|Error: |Error in |Usage:|File: |Error initializing)/u.test(line),
   )
 }
 
@@ -325,39 +367,78 @@ function main(): void {
   ensureMakensis()
   prepareIncludes()
 
+  // The stubs are built after prepareIncludes, because it is prepareIncludes that decides where NSISDIR lives.
+  if (!buildStubs(join(WORK, 'nsis'), NSISDIR)) {
+    // Not a soft failure. Without stubs makensis gets every check right and then fails at the final byte-write, so the
+    // run would report a script error that is really a toolchain problem. Say which it is.
+    console.log('The installer stubs could not be cross-compiled, so makensis cannot write an executable.')
+    console.log(`  Look for build errors above, then check ${join(WORK, 'mingw-shim')} and ${join(WORK, 'zig')}.`)
+    process.exitCode = 1
+    return
+  }
+
   const online = compile('online', [])
   const offline = compile('offline', ['-DINFOPLEX_OFFLINE=1'])
 
   let failed = false
   for (const result of [online, offline]) {
-    const warnings = result.output.split('\n').filter((line) => /^warning 6050|^warning 60\d\d/u.test(line.trim()))
-    // -V2 suppresses the "Processed N file" line, so the proof that the script got all the way through is the dummy
-    // stub failing at the final write. Reaching that point means every page, function, macro and instruction resolved.
-    const compiled = /invalid DOS header/u.test(result.output)
-    if (result.blocking.length === 0 && !compiled) {
-      failed = true
-      console.log(`\n${result.label}: makensis produced no compile output at all, so nothing was checked.`)
-      console.log(`  ${result.output.split('\n').filter((line) => line.trim()).slice(-3).join('\n  ')}`)
-      continue
-    }
-    if (result.blocking.length === 0) {
-      console.log(`\n${result.label}: NSIS accepted the script.`)
-      console.log('  Every page, function, macro and instruction resolved, and both hooks compiled.')
-      console.log('  It stopped at the final write ("invalid DOS header") because the stub is a placeholder.')
-      for (const warning of warnings) console.log(`  ${warning.trim()}`)
-    } else {
+    if (result.blocking.length > 0) {
       failed = true
       console.log(`\n${result.label}: NSIS rejected the script.`)
       for (const problem of result.blocking) console.log(`  ${problem}`)
+      continue
     }
+
+    const warnings = result.output.split('\n')
+      .map((line) => line.trim())
+      .filter((line) => /^warning \d{4}/u.test(line))
+
+    // 6010 names the function it discarded, so the check can hold each build to exactly the set it expects.
+    const discarded = new Set<string>()
+    for (const warning of warnings) {
+      const match = /^warning 6010: \w+ function "(?<name>[^"]+)" not referenced/u.exec(warning)
+      if (match?.groups?.name) discarded.add(match.groups.name)
+    }
+    const unexpected = [...discarded].filter((name) => !(EXPECTED_UNREFERENCED[result.label] ?? []).includes(name))
+    const expectedButMissing = (EXPECTED_UNREFERENCED[result.label] ?? []).filter((name) => !discarded.has(name))
+
+    if (!result.artifact) {
+      // A clean exit with no artifact is the failure mode that matters most: it looks like success.
+      failed = true
+      console.log(`\n${result.label}: NSIS reported no errors but produced no installer.`)
+      console.log(`  Expected a file at ${result.installer ?? join(WORK, 'out', result.label)}.`)
+      continue
+    }
+
+    console.log(`\n${result.label}: built a ${result.artifact.bytes.toLocaleString('en-US')}-byte installer.`)
+    console.log('  Every page, function, macro and instruction resolved, and both electron-builder hooks compiled.')
+    console.log(`  Verified from its own header: MZ, PE at 0x${result.artifact.peOffset.toString(16)}, ` +
+      `machine 0x014c (i386), subsystem 2 (Windows GUI), ${result.artifact.sections} sections.`)
+    if (warnings.length > 0) console.log(`  ${warnings.length} warning(s): ${warnings.map((w) => w.split(':')[0]).join(', ')}`)
+
+    if (unexpected.length > 0) {
+      failed = true
+      console.log(`  NSIS discarded function(s) this build is supposed to contain: ${unexpected.join(', ')}`)
+      console.log('  A page or handler has dropped out of the script -- check the macro that inserts it.')
+    }
+    // The reverse direction matters too: a list of expected omissions that no longer omits anything is a stale list,
+    // and a stale list is how a real omission gets pre-approved.
+    if (expectedButMissing.length > 0) {
+      console.log(`  Note: these were expected to be compiled out but were not: ${expectedButMissing.join(', ')}`)
+      console.log('  Update EXPECTED_UNREFERENCED in this script if the script changed on purpose.')
+      failed = true
+    }
+
+    // Reaching here twice means the two builds are genuinely separate artefacts, not one file checked twice.
+    console.log(`  Artefact: ${result.installer}`)
   }
 
   if (failed) {
-    console.log('\nThe installer script does not compile. Nothing else in this phase can be trusted until it does.')
+    console.log('\nThe installer does not build. Nothing else in this phase can be trusted until it does.')
     process.exitCode = 1
     return
   }
-  console.log('\nBoth builds compile. See docs/DECISIONS.md for what this does and does not prove.')
+  console.log('\nBoth builds produced real installers. See docs/DECISIONS.md for what this does and does not prove.')
 }
 
 main()
