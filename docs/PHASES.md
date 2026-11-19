@@ -861,6 +861,17 @@ the test rather than the Output screen.
   quoting, so a `MessageBox` whose message contained a semicolon lost everything after it — including its `/SD IDOK` —
   and was reported as a silent-mode hazard that did not exist. NSIS starts a comment at a `;` outside quotes only; the
   stripper now does the same, with a test in each direction.
+- **The prerequisite was skipped on the silent path, and the offline promise was never enforced.** `$NeedsVcRuntime`
+  was computed only in `ChecksPageCreate`, so `/S` left it `"0"`, `InstallPrerequisites` returned immediately, and the
+  interactive path installed the VC++ runtime while the unattended one did not. The offline build separately promised
+  "every prerequisite is included" and installed anyway when the payload was missing, because the flag meant to catch
+  that is set by a page the offline build excludes. The probe is now a `DetectVcRuntime` macro called by the page and by
+  the silent branch, and the offline arm refuses with `SetErrorLevel 4`.
+- **Three checker rules that did nothing, found only by mutating.** One tested a list of function names for a variable
+  name; one used an index from a sliced array as though it were global; one was anchored past the indentation of a line
+  inserted from a macro. Each looked correct, each was unreachable by reading, and each was caught by deleting the thing
+  it was meant to protect and watching the check stay green. Mutating a new rule is now the practice here, not a
+  formality.
 - **Still not proven:** that electron-builder's template agrees with our hooks, that the payload lands in the right
   place, or that anything behaves correctly on Windows.
 

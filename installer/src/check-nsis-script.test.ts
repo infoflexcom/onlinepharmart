@@ -390,4 +390,44 @@ describe('the redefinition rule still catches a genuine duplicate', () => {
     ].join('\n')
     expect(checkNsisScript(script).some((p) => /no "\/SD/u.test(p.message))).toBe(true)
   })
+
+  it('reports a prerequisite computed only in a page callback, which /S never runs', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '  Page custom ChecksPageCreate ChecksPageLeave',
+      'Function .onInit',
+      '  ${If} ${Silent}',
+      '  ${EndIf}',
+      'FunctionEnd',
+      'Function ChecksPageCreate',
+      '  StrCpy $NeedsVcRuntime "0"',
+      '  ReadRegStr $2 HKLM "SOFTWARE\\X" "Version"',
+      'FunctionEnd',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    const problems = checkNsisScript(script)
+    expect(problems.some((problem) => /never detects the missing prerequisite/u.test(problem.message))).toBe(true)
+  })
+
+  it('accepts a silent branch that runs the detector', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '  Page custom ChecksPageCreate ChecksPageLeave',
+      '!macro DetectVcRuntime',
+      '  StrCpy $NeedsVcRuntime "1"',
+      '!macroend',
+      'Function .onInit',
+      '  ${If} ${Silent}',
+      '    !insertmacro DetectVcRuntime',
+      '  ${EndIf}',
+      'FunctionEnd',
+      'Function ChecksPageCreate',
+      '  !insertmacro DetectVcRuntime',
+      'FunctionEnd',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).filter((p) => /prerequisite/u.test(p.message))).toEqual([])
+  })
 })

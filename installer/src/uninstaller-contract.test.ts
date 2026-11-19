@@ -210,6 +210,32 @@ describe('the vendor password gate cannot be skipped', () => {
     expect(beforeCurrency.match(/Abort/gu)?.length ?? 0).toBeGreaterThanOrEqual(2)
   })
 
+  it('detects the missing VC++ runtime on the silent path, not only on a page', () => {
+    // $NeedsVcRuntime was computed only inside ChecksPageCreate. On /S it stayed "0", so InstallPrerequisites returned
+    // at its first line and the prerequisite was never installed -- the interactive path installed it and the
+    // unattended one silently skipped it.
+    const silentBlock = onInit.slice(onInit.indexOf('${Silent}'))
+    expect(silentBlock).toMatch(/DetectVcRuntime/u)
+    // Order matters: it must be known before the password and currency handling, and long before the install section.
+    expect(silentBlock.indexOf('DetectVcRuntime')).toBeLessThan(silentBlock.indexOf('/PASSWORD='))
+  })
+
+  it('re-derives the runtime need in one place, so the two paths cannot drift', () => {
+    // The registry probe must exist once, in the macro. A second copy in ChecksPageCreate is how the two paths came to
+    // disagree in the first place.
+    const code = script.split('\n').filter((line) => !line.trimStart().startsWith(';')).join('\n')
+    const probes = [...code.matchAll(/Runtimes\\x64" "Version"/gu)]
+    expect(probes.length).toBeGreaterThanOrEqual(2) // both registry views, inside the single macro
+    expect(code).toMatch(/!macro DetectVcRuntime/u)
+    // The page defers to the macro rather than re-implementing it.
+    const checksCreate = (() => {
+      const start = code.indexOf('Function ChecksPageCreate')
+      const end = code.indexOf('FunctionEnd', start)
+      return code.slice(start, end)
+    })()
+    expect(checksCreate).toMatch(/DetectVcRuntime/u)
+  })
+
   it('keeps the gate on the interactive page too, so the two paths agree', () => {
     const pageLeave = (() => {
       const start = script.indexOf('Function PasswordPageLeave')

@@ -36,10 +36,25 @@ function templateSource(): string {
     .join('\n')
 }
 
-/** The macros we define, which electron-builder may call. */
+/**
+ * Macros this script defines for its own use, not as electron-builder hooks.
+ *
+ * The template calls a hook by name via `!ifmacrodef`; anything else we define is ours alone, and listing it here is a
+ * deliberate act rather than a wildcard. Each entry needs a reason, because an unexplained name here would silently
+ * disable the typo check that the surrounding tests exist for.
+ */
+const INTERNAL_MACROS = new Set([
+  // Shared by the system-check page, the silent branch of .onInit and the upgrade path, so the three cannot disagree
+  // about whether the VC++ runtime is present. Not a hook: nothing in electron-builder knows it by name.
+  'DetectVcRuntime',
+])
+
+/** The macros we define that electron-builder may call. */
 function ourMacros(): string[] {
   const text = readFileSync('installer/nsis/installer.nsi', 'utf8')
-  return [...text.matchAll(/^!macro ([A-Za-z_0-9]+)$/gmu)].map((match) => match[1]!)
+  return [...text.matchAll(/^!macro ([A-Za-z_0-9]+)$/gmu)]
+    .map((match) => match[1]!)
+    .filter((name) => !INTERNAL_MACROS.has(name))
 }
 
 /** Every macro name electron-builder guards with `!ifmacrodef`. */

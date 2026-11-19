@@ -525,3 +525,40 @@ semicolon inside the sentence. The stripper now tracks quotes and requires white
 rule. Two tests hold both directions — a message with a semicolon is not truncated, and a real trailing comment is still
 stripped (so `; /SD IDOK` in a comment does not satisfy the rule).
 
+## The prerequisite was skipped, not just unchecked
+
+`$NeedsVcRuntime` was computed inside `ChecksPageCreate` — a page callback, so a silent install left it at `"0"` and
+`InstallPrerequisites` returned at its first line. The interactive path installed the Visual C++ runtime; the unattended
+path silently did not. Two builds of the same installer disagreed about what they do, and only the one a person clicks
+was correct.
+
+**And the offline build's promise was never connected to its behaviour.** The offline components page says "every
+prerequisite is included in this installer". A build whose payload is missing installed anyway, because the code that
+was supposed to catch that (`$DownloadFailed`, set by the download page) belongs to a page the offline build `!if`-s
+out entirely. The offline arm now refuses with `SetErrorLevel 4`; the online arm still carries on, because online the
+app asks for the runtime on first use and the download has already had its three attempts.
+
+**One probe, three callers.** The registry lookups (`...\VC\Runtimes\x64\Version` under both `SOFTWARE` and
+`SOFTWARE\WOW6432Node`) are now a `DetectVcRuntime` macro called by the page, by `.onInit`'s silent branch, and
+available to the upgrade path. Keeping one copy is what stops the two paths drifting, which is exactly how they came to
+disagree. The macro is genuinely internal, not a hook, and the test that requires every `!macro` here to be a name
+electron-builder calls now has a reasoned `INTERNAL_MACROS` list rather than being loosened.
+
+**Three bugs in the checker, in one sitting, all found by mutating.** This is worth recording as a pattern rather than
+three incidents:
+
+1. The gate rule tested `leaveGates.join(',')` for a *variable* name (`NeedsVcRuntime`), but that list holds *function*
+   names — so the condition could never be true and the rule did nothing. A mutation walked straight past it.
+2. A `.onInit` search used `findIndex` over an array that had already been sliced, so the index it returned was local
+   while being used as global, and the wrong lines were examined.
+3. The `DetectVcRuntime` macro was placed after its first use, which NSIS rejects — found by compiling, not by reading.
+
+The first two are the same mistake: a rule that *looks* like it checks something because the expressions are
+plausible. Neither was reachable by reading the code; both were found by deleting the thing the rule was meant to
+protect and seeing the check stay green. That is now the standing practice for any new checker rule in this repository:
+break it on purpose first, and only then trust it.
+
+**Not proven.** No silent install has been run, and no offline installer has been pointed at a deliberately incomplete
+payload. The claims here are that the compiled script computes the prerequisite on both paths, refuses in the offline
+arm, and that the checker rejects the old shape — all verified by compiling and by reading NSIS's own template and
+runtime, not by execution.

@@ -142,4 +142,29 @@ describe('an unpinned digest must not leave a usable install path', () => {
     const allowlist = readFileSync('installer/src/download-allowlist.ts', 'utf8')
     expect(allowlist, 'the all-zeros digest is the deliberate release-time default').toContain(`sha256: '${'0'.repeat(64)}'`)
   })
+
+  it('refuses an offline build whose carried payload is missing, instead of installing anyway', () => {
+    // The offline components page promises "every prerequisite is included in this installer". A build whose payload
+    // was missing carried on and installed regardless -- the promise and the behaviour were never connected, and
+    // $DownloadFailed (the template's own way of expressing this) is never set on the offline path because its
+    // download page is !if-excluded. An installer built to be carried to a machine with no internet cannot quietly
+    // leave the prerequisite behind.
+    const body = functionBody('InstallPrerequisites')
+    const missing = body.slice(body.indexOf('${IfNot} ${FileExists}'))
+    expect(missing).not.toBe('')
+    expect(missing).toMatch(/\$\{INFOPLEX_OFFLINE\} == 1/u)
+    const offlineArm = missing.slice(missing.indexOf('${INFOPLEX_OFFLINE} == 1'))
+    const beforeEnd = offlineArm.slice(0, offlineArm.indexOf('${EndIf}'))
+    expect(beforeEnd, 'the offline arm must Abort, not fall through to installing').toMatch(/Abort/u)
+    expect(beforeEnd).toMatch(/SetErrorLevel 4/u)
+  })
+
+  it('lets the ONLINE build carry on without the runtime, which it is allowed to do', () => {
+    // The distinction is the whole point: online, the app asks for the runtime on first use and the download page has
+    // already had its three attempts. Refusing there would break an install that works.
+    const body = functionBody('InstallPrerequisites')
+    const missing = body.slice(body.indexOf('${IfNot} ${FileExists}'))
+    const afterOfflineArm = missing.slice(missing.indexOf('${EndIf}', missing.indexOf('${INFOPLEX_OFFLINE} == 1')))
+    expect(afterOfflineArm).toMatch(/Return/u)
+  })
 })

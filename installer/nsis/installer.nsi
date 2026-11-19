@@ -224,6 +224,29 @@ Var PrereqExitCode
 !macroend
 
 ; ================================================================================ init and silent mode
+; =============================================================== does this machine need the VC++ runtime?
+;
+; This used to be computed only inside ChecksPageCreate, which is a page callback. Two consequences, both silent:
+;
+;   * on a `/S` install, `$NeedsVcRuntime` stayed "0", so InstallPrerequisites returned at its first line and the
+;     prerequisite was never installed -- the interactive path installed it and the unattended one skipped it;
+;   * on an offline build it was worse. The offline download page is `!if`-excluded, so nothing sets $DownloadFailed
+;     either, and a page callback never runs to try. The offline installer's refusal to continue on a missing payload
+;     was therefore never armed: it would have carried on and installed an app whose prerequisite was absent.
+;
+; It is a macro so the page, the silent branch and the upgrade path all ask the same question with the same registry
+; lookups, rather than each keeping its own copy of a two-key probe.
+!macro DetectVcRuntime
+  StrCpy $NeedsVcRuntime "0"
+  ReadRegStr $2 HKLM "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Version"
+  ${If} $2 == ""
+    ReadRegStr $2 HKLM "SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Version"
+  ${EndIf}
+  ${If} $2 == ""
+    StrCpy $NeedsVcRuntime "1"
+  ${EndIf}
+!macroend
+
 Function .onInit
   StrCpy $PasswordAttempts 0
   StrCpy $DownloadAttempts 0
@@ -283,6 +306,9 @@ Function .onInit
       SetErrorLevel 3
       Abort
     ${EndIf}
+
+    ; The prerequisite probe, for the same reason as the two checks above: its only other home is a page callback.
+    !insertmacro DetectVcRuntime
 
     ${GetParameters} $R0
     ${GetOptions} $R0 "/PASSWORD=" $PasswordValue
@@ -583,12 +609,8 @@ Function ChecksPageCreate
     ${Else}
       ${NSD_LB_AddString} $ChecksList "OK Free disk space — $1 MB free"
 
-      ReadRegStr $2 HKLM "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Version"
-      ${If} $2 == ""
-        ReadRegStr $2 HKLM "SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Version"
-      ${EndIf}
-      ${If} $2 == ""
-        StrCpy $NeedsVcRuntime "1"
+      !insertmacro DetectVcRuntime
+      ${If} $NeedsVcRuntime == "1"
         ${If} ${INFOPLEX_OFFLINE} == 1
           ${NSD_LB_AddString} $ChecksList "-> Microsoft Visual C++ 2015-2022 Redistributable (x64) — not installed; it is included in this installer."
         ${Else}
@@ -872,6 +894,19 @@ Function InstallPrerequisites
     !endif
   ${EndIf}
   ${IfNot} ${FileExists} "$PLUGINSDIR\vc_redist.x64.exe"
+    ; The online build may legitimately carry on: the app asks for the runtime on first use, and the download path that
+    ; was meant to fetch it has already had its three attempts.
+    ;
+    ; The offline build may not. It tells the customer "every prerequisite is included in this installer" on the
+    ; components page, and until now a build whose payload was missing carried on and installed anyway -- the promise
+    ; and the behaviour were never connected. `$DownloadFailed` was the template's way of expressing this, and the
+    ; offline download page is `!if`-excluded, so nothing ever set it. The offline arm refuses instead, because an
+    ; installer that exists to be carried to a machine with no internet cannot quietly leave the prerequisite behind.
+    ${If} ${INFOPLEX_OFFLINE} == 1
+      MessageBox MB_ICONSTOP|MB_OK "This offline installer is incomplete: the Microsoft Visual C++ runtime it was built to carry is missing, and there is no internet here to fetch it. Nothing was installed. Ask for a fresh copy of the offline installer." /SD IDOK
+      SetErrorLevel 4
+      Abort
+    ${EndIf}
     DetailPrint "The runtime file is missing; skipping it. Infoflex will ask for it when needed."
     Return
   ${EndIf}

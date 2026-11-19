@@ -132,18 +132,29 @@ for a hang, not for a message.
      the record rather than ticking it.
    Be aware that the password you type appears in the process command line while it runs; this is a known and accepted
    cost of the silent path, not a defect to report.
-3. Uninstall silently via `"%PROGRAMFILES%\Infoflex\Uninstall Infoflex.exe" /S`.
+3. **Check the prerequisite is installed on the silent path.** On a Windows machine that does NOT have the Visual C++
+   2015-2022 x64 redistributable (a fresh VM is ideal; check `HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64`),
+   run the silent install from step 1.
+   - Expected: the runtime IS installed afterwards, the same as an interactive install would do. It used to be skipped
+     silently, because the detection lived only on a page that `/S` never draws.
+   - Also confirm the app starts, which is the thing the runtime is for.
+4. **The offline installer must refuse an incomplete build.** If you can produce one deliberately (build with
+   `-DPREREQUISITE_VCREDIST` pointing at a missing file), run it on a machine with no internet.
+   - Expected: it refuses and says the installer is incomplete. It used to install anyway while the components page
+     promised "every prerequisite is included".
+   - If you cannot produce one, record that rather than ticking it.
+5. Uninstall silently via `"%PROGRAMFILES%\Infoflex\Uninstall Infoflex.exe" /S`.
    - Expected: completes without a dialog, and keeps your data (silent means no question, and the safe default is "keep").
-4. **The upgrade test, which is the one that matters.** Install the previous build, complete first-run setup and add a
+6. **The upgrade test, which is the one that matters.** Install the previous build, complete first-run setup and add a
    product. Then install the new build over it, interactively.
    - Expected: the installer does **not** ask "Keep your shop data?" — the old uninstaller runs silently underneath it,
      and a question there would be about data the upgrade must keep.
    - Expected after the upgrade: your products are still there and the app opens without first-run setup.
    - Record what happens if you answer **No** at such a prompt, if you see one. That delete is unrecoverable, and seeing
      it at all means the `--updated` guard is not working.
-5. Repeat step 4 but start the new installer from a command line with `/S`.
+7. Repeat step 6 but start the new installer from a command line with `/S`.
    - Expected: same outcome, no dialog, data intact.
-6. Cancel an upgrade by running the new installer and answering "No" to "are you sure you want to cancel?" if offered.
+8. Cancel an upgrade by running the new installer and answering "No" to "are you sure you want to cancel?" if offered.
    - Expected: the old version is still installed and working. An upgrade that removes the old version before it has
      installed the new one leaves the machine with neither.
 
@@ -166,6 +177,8 @@ for a hang, not for a message.
 | Silent install with NO password FAILS and installs nothing | ☐ pass ☐ fail | |
 | Silent install with a WRONG password fails and changes nothing | ☐ pass ☐ fail | |
 | Silent install with an invalid `/CURRENCY=` fails | ☐ pass ☐ fail | |
+| Silent install INSTALLS the VC++ runtime when missing | ☐ pass ☐ fail | |
+| Offline installer refuses a missing payload | ☐ pass ☐ fail ☐ not tested | |
 | Silent install on 32-bit or pre-Win10 refuses | ☐ pass ☐ fail ☐ not tested (no machine) | |
 | Silent uninstall `/S` completes with no dialog, keeps data | ☐ pass ☐ fail | |
 | Upgrade does NOT ask the keep-data question | ☐ pass ☐ fail | |

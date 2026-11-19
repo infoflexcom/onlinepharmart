@@ -374,16 +374,24 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
   // the signal, because a callback that only records a checkbox value is not gating anything. The check on the silent
   // side is deliberately loose -- it looks for evidence that .onInit refuses on its own terms -- because the two
   // branches legitimately differ in wording; requiring identical text would force duplication to satisfy a checker.
+  // A page callback is skipped entirely by /S, whether it creates the page or leaves it -- so a value computed only in
+  // a Create callback is missing too. That is what happened to $NeedsVcRuntime: it was set in ChecksPageCreate, so a
+  // silent install left it "0" and the prerequisite was never installed. Both halves are therefore searched, and only
+  // the Leave half is required to contain Abort (a Create callback that cannot refuse is not a gate, it is a
+  // presentation concern -- the VC++ case is caught by the requirement below that .onInit run the detector).
   const leaveGates: string[] = []
+  let computesPrerequisite = false
   for (const [index, raw] of strip.entries()) {
     const line = raw.trim()
-    const leave = /^Function\s+(\w+PageLeave)\s*$/u.exec(line)
+    const leave = /^Function\s+(\w+Page(?:Leave|Create))\s*$/u.exec(line)
     if (!leave) continue
     const end = strip.findIndex((candidate, position) => position > index && /^FunctionEnd\s*$/u.test(candidate.trim()))
     const body = strip.slice(index, end === -1 ? undefined : end)
-    if (body.some((candidate) => /^\s*Abort\s*$/u.test(candidate))) leaveGates.push(leave[1]!)
+    const leaves = leave[1]!.endsWith('PageLeave')
+    if (/NeedsVcRuntime/u.test(body.join('\n'))) computesPrerequisite = true
+    if (leaves && body.some((candidate) => /^\s*Abort\s*$/u.test(candidate))) leaveGates.push(leave[1]!)
   }
-  if (leaveGates.length > 0) {
+  if (leaveGates.length > 0 || computesPrerequisite) {
     const onInitStart = strip.findIndex((raw) => /^Function\s+\.onInit\s*$/u.test(raw.trim()))
     if (onInitStart === -1) {
       problems.push({
@@ -412,7 +420,16 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
             })
           }
         }
-        if (/(?:Checks|System)PageLeave/.test(leaveGates.join(',')) && !/AtLeastWin\d+|RunningX64/u.test(silentBranch)) {
+        // `leaveGates` holds function NAMES, so testing it for a variable name never matches -- that is how the first
+        // version of this rule silently did nothing. What is being asked is whether any page computes the
+        // prerequisite; ask the flag that recorded it.
+        if (computesPrerequisite && !/DetectVcRuntime|NeedsVcRuntime/u.test(silentBranch)) {
+          problems.push({
+            line: onInitStart + silentIndex + 1,
+            message: 'The silent branch never detects the missing prerequisite, so /S installs without it.',
+          })
+        }
+        if (/(?:Checks|System)Page(?:Leave|Create)/.test(leaveGates.join(',')) && !/AtLeastWin\d+|RunningX64/u.test(silentBranch)) {
           problems.push({
             line: onInitStart + silentIndex + 1,
             message: 'The silent branch never re-checks the OS or architecture, so /S skips the system check page.',
