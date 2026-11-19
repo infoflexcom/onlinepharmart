@@ -467,9 +467,13 @@ rather than "done".
 ## Phase 13 — the installer on a clean Windows machine (Gate 5)
 
 `npm run check:phase13` proves the installer's rules, its generated data, its structure and that no master
-password is compiled into it. It cannot produce a `.exe`: the Windows toolchain cannot be downloaded in the build
-environment (TLS interception), `makensis` is not installed, and there is no Wine. **So no installer binary has
-been built or run.** The items below are that missing half, in the order a person would meet them.
+password is compiled into it. It cannot produce a **shippable** `.exe`, because the Windows Electron runtime cannot be
+downloaded in the build environment (TLS interception on `objects.githubusercontent.com`), so there is no application
+payload to package and no Wine to run one under. **So no shippable installer binary has been built or run.**
+
+What *has* been built is the installer itself: `npm run installer:compile` compiles all three build shapes to real i386
+executables and verifies each from its PE header. That proves the script, the hooks and the electron-builder wiring; it
+proves nothing about behaviour. The items below are that missing half, in the order a person would meet them.
 
 ### Build, once, on a Windows build machine
 - [ ] On Windows with Node 20+, run `npm run installer:online` and `npm run installer:offline`. Both must finish and leave `dist/online/Infoflex Setup.exe` and `dist/offline/Infoflex Setup Offline.exe`.

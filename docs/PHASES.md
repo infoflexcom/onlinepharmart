@@ -775,7 +775,8 @@ the test rather than the Output screen.
   passed before and after all three. The config side now has its own test and the checker has a rule against
   `Section "Install"`.
 - **No `.exe` exists.** electron-builder cannot fetch the Windows Electron runtime (TLS interception;
-  `objects.githubusercontent.com` unreachable), `makensis` cannot be installed without root, and there is no Wine. The
+  `objects.githubusercontent.com` unreachable), `makensis` cannot be installed without root (since disproved — see
+  below), and there is no Wine. The
   release folders and the manifest record exactly what is missing and why, and carry the NSIS sources and the Build
   Studio bundle so a Windows machine can rebuild the three executables.
 - **Nothing ran on Windows, on a phone, or on a printer.** The Phase 15 end-to-end walk-through was not performed: its

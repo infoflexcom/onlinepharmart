@@ -41,6 +41,9 @@ const RUNTIME_FILES = new Set([
   // electron-builder's own NSIS templates, from node_modules. Named in the docs to explain which template calls which
   // hook -- the difference between an installer with a password page and one without it.
   'assistedInstaller.nsh', 'oneClick.nsh', 'installSection.nsh', 'uninstaller.nsh',
+  // The Electron runtime electron-builder downloads. Named in the docs as the one remaining blocker, so it is a file
+  // that must exist somewhere -- just not in this repository, and not on this build agent.
+  'electron-v45.3.3-win32-x64.zip',
 ])
 
 /** Files produced by a build rather than committed; `build-studio.ts` copies or writes each of them. */

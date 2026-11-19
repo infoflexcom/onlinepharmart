@@ -16,15 +16,15 @@ every file that *is* there.
 
 ## Why the three `.exe` files are missing
 
-Not for want of code. Three specific, checkable reasons, in the order they are hit:
+Not for want of code, and now down to **one** reason rather than three:
 
-1. **electron-builder must download the Electron runtime for Windows.** It fetches it from `github.com/electron/electron/releases/download/…`, which redirects to `objects.githubusercontent.com`. This build agent cannot reach that host — a direct request returns nothing at all. The rest of `github.com` is reachable, which is what makes this easy to mistake for a working network.
-2. **`makensis` is not installed** and cannot be: `apt-get install nsis` needs root, which this environment does not have. `npm pack makensis` was tried in an earlier phase and is only a wrapper around the same missing binary.
-3. **There is no Wine**, so a Windows compiler could not be run even if both of the above were solved.
+1. **electron-builder must download the Electron runtime for Windows.** It fetches `electron-v45.3.3-win32-x64.zip` from `github.com/electron/electron/releases/download/…`, which redirects to `objects.githubusercontent.com`. This build agent cannot reach that host — a direct `curl` of the redirect target exits 35 (SSL connect error). The rest of `github.com` is reachable, which is what makes this easy to mistake for a working network. Without a Windows payload there is nothing to put inside an installer.
+2. **Not `makensis`.** An earlier version of this file said the compiler could not be installed without root. That is no longer true and is not the reason: NSIS is built from source here and its Windows stubs are cross-compiled with Zig, so `npm run installer:compile` produces a **real installer** for all three build shapes. Verified from each output's PE header.
+3. **No Wine**, so the produced installer cannot be *run* here. That limits testing, not building.
 
-The same wall stops `npm run dist:win`, `installer:online`, `installer:offline` and `dist:studio` on this machine. On any
-Windows PC with the repository checked out, `npm ci` followed by those four commands produces all three exactly as
-documented in `docs/RELEASE-CHECKLIST.md`.
+The same wall stops `npm run dist:win`, `installer:online`, `installer:offline` and `dist:studio` on this machine — all
+four need the Windows Electron runtime. On any Windows PC with the repository checked out, `npm ci` followed by those
+four commands produces all three exactly as documented in `docs/RELEASE-CHECKLIST.md`.
 
 **What this does not tell you:** whether the installers work. Nothing here has been run on Windows.
 

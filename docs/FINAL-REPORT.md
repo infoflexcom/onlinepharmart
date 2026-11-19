@@ -130,29 +130,35 @@ The full clean-machine checklist is in `docs/RELEASE-CHECKLIST.md`; it is the sc
 
 ## 5. Why no `.exe` exists
 
-Three independent walls, in the order they are hit:
+**One wall remains, not three.** The earlier version of this section listed walls that have since been taken down, and
+naming a blocker that is gone is its own kind of inaccuracy — it tells a reader to work around something that is already
+solved. What is actually true now:
 
-0. **The installer *script* is no longer a blocker.** `makensis` builds from source here (zlib from source, SCons
-   from PyPI, `scons SKIPSTUBS=all`), and `npm run installer:compile` proves both builds compile. What is still missing
-   is a Windows resource compiler for the UI and the installer stub, which is what the `.exe` needs — and that is a
-   smaller problem than it was, because the script's own correctness is no longer unknown.
-1. **electron-builder must download the Electron runtime.** It fetches the Windows Electron runtime (version 45.3.3, win32-x64) from
-   `github.com/electron/electron/releases/download/…`, which redirects to `objects.githubusercontent.com`. That host
-   is unreachable from here — a direct request returns nothing. `github.com` itself resolves and returns 200, which is
-   what makes this look like a working network. The build fails with
-   `⨯ unable to verify the first certificate`, a TLS-interception error raised while following that redirect.
-2. **`makensis` is not installed**, and cannot be: `apt-get install nsis` requires root, which this environment does
-   not grant. No npm package supplies a working binary — the `makensis` npm module is a wrapper around the same
-   missing executable.
-3. **No Wine**, so even a Windows compiler could not be run.
+0. **The installer is not a blocker any more, and this is the big change.** `makensis` is built from source here, NSIS's
+   Windows stubs are cross-compiled with Zig, and `npm run installer:compile` produces a **real i386 installer** for
+   each of the three build shapes: online, offline, and the `offline-include.nsh` wrapper the offline configuration
+   actually ships. Each output is verified from its own PE header, and the builds run under `-WX` exactly as
+   electron-builder does, so a warning that would stop the real build stops this one too.
+1. **The remaining wall is the Electron runtime.** electron-builder must download
+   `electron-v45.3.3-win32-x64.zip` to have an application to put inside the installer. `github.com` answers (302) and
+   redirects to `objects.githubusercontent.com`, and this agent's network refuses that host — `curl` exits 35, "SSL
+   connect error". This was tested directly rather than assumed: the redirect target was fetched by hand and failed the
+   same way. Without a Windows payload there is nothing to package, however well the installer compiles.
+2. **No Wine**, so the produced `.exe` still cannot be executed here even once it exists. That is a limit on *testing*
+   the installer, not on building it.
 
 The result is recorded in `release/MANIFEST.json`: the release folder contains everything that *could* be produced, a
-SHA-256 for each of those files, and for each of the three missing executables a plain statement of why. It also
-contains `release/installer-sources/` — the six NSIS files — and `tools/build-studio-bundle/`, so that a Windows
-machine can rebuild all three without the rest of the repository.
+SHA-256 for each of those files, and for each missing executable a plain statement of the one real reason. It also
+contains `release/installer-sources/` — the NSIS files — and `tools/build-studio-bundle/`, so that a Windows machine can
+rebuild all three without the rest of the repository.
 
 **To produce them:** on any Windows 10/11 machine with Node 20+, run `npm ci`, then `npm run installer:online`,
 `npm run installer:offline`, `npm run dist:studio` and `npm run release:assemble`.
+
+**What that build will and will not have been checked against.** The script, the hooks and the config are now checked
+against electron-builder's own template and its `-WX` flag, so the failure modes that used to be invisible at build time
+are covered. What is not covered is anything that needs the file to run: the password gate, the currency page, the
+prerequisite check, the firewall rule and the uninstaller have still never executed.
 
 ---
 

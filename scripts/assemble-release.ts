@@ -44,36 +44,41 @@ function present(path: string): boolean {
 /**
  * The five deliverables of this project, and whether this environment could produce each.
  *
- * The three `.exe` files are missing for one reason, stated once: electron-builder must download the Electron
- * runtime for Windows, and the only host serving it (`objects.githubusercontent.com`, which
- * github.com/releases/download redirects to) is unreachable from the build agent. `makensis` is also absent, so
- * even a supplied runtime would not finish an NSIS installer without installing NSIS first.
+ * The three `.exe` files are missing for exactly ONE reason, and it is worth stating precisely because the earlier
+ * version of this comment named two that were not true. `makensis` is not a blocker: it is built from source here, and
+ * the installer stubs are cross-compiled with Zig, so `npm run installer:compile` produces a real i386 installer. The
+ * remaining blocker is the Electron **runtime**: electron-builder must download
+ * `electron-v45.3.3-win32-x64.zip`, `github.com` redirects that to `objects.githubusercontent.com`, and this agent's
+ * network refuses that host (curl exit 35, "SSL connect error"). Without the runtime there is no application payload
+ * to put inside the installer, however well the installer itself compiles.
  */
-const deliverables: Deliverable[] = [
+export const deliverables: Deliverable[] = [
   {
     target: join(RELEASE, 'Infoflex Setup.exe'),
     source: null,
     required: true,
     description: 'The customer installer: prerequisites, password gate, Region and Currency page.',
-    absent: 'Needs the Windows toolchain. electron-builder downloads the Electron runtime from '
-      + 'objects.githubusercontent.com, which this build agent cannot reach (TLS interception); makensis, which '
-      + 'turns installer.nsi into the .exe, is not installed and cannot be installed without root. '
-      + 'Run `npm run installer:online` on any Windows PC with the repository checked out.',
+    absent: 'Needs the Windows Electron runtime. electron-builder downloads electron-v45.3.3-win32-x64.zip, and '
+      + 'github.com redirects that to objects.githubusercontent.com, which this build agent cannot reach (SSL connect '
+      + 'error). The installer compiler itself is no longer a blocker: `npm run installer:compile` builds it from source '
+      + 'here and produces a real i386 installer for each build shape. What is missing is the application payload to put '
+      + 'inside that installer. Run `npm run installer:online` on any Windows PC with the repository checked out.',
   },
   {
     target: join(RELEASE, 'Infoflex Setup Offline.exe'),
     source: null,
     required: true,
     description: 'The same wizard with every prerequisite bundled and no download page.',
-    absent: 'Same reason as Infoflex Setup.exe. `npm run installer:offline` produces it elsewhere.',
+    absent: 'Same reason as Infoflex Setup.exe: the Electron runtime, not the installer. `npm run installer:offline` '
+      + 'produces it elsewhere.',
   },
   {
     target: join(TOOLS, 'Infoflex Build Studio.exe'),
     source: null,
     required: true,
     description: "The vendor's graphical build tool.",
-    absent: 'Same Windows-toolchain reason. `npm run dist:studio` produces it elsewhere. The tool itself is '
-      + 'built and tested here; only the packaged .exe needs Windows.',
+    absent: 'Same reason as the installers: the Windows Electron runtime cannot be fetched here. `npm run dist:studio` '
+      + 'produces it elsewhere. The tool itself is built and tested here; only the packaging needs Windows.',
   },
   {
     target: join(CLOUD, 'infoflex-vendor-cloud.zip'),
@@ -166,4 +171,6 @@ function main(): void {
   }
 }
 
-main()
+// Only build the manifest when run directly. A test imports `deliverables` to check the stated reasons, and importing
+// a script that assembles a release folder as a side effect would be a surprising thing to do to a reader's tree.
+if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) main()
