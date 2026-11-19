@@ -301,6 +301,23 @@ could not have been built at all had anyone run the build:
   defines the variable at all; and a test pins the harness's list of defines so it cannot quietly grow a new
   substitute for a value the real build is missing. The release checklist now says plainly that the checklist item is
   to **supply** that file, not merely to pin its checksum.
+- **Every shortcut was built from a guessed executable name.** `CreateShortCut`, the finish page's "Run now" box and the
+  autostart registry value all pointed at `"${PRODUCT_NAME}.exe"`. electron-builder writes the executable as
+  `"${PRODUCT_FILENAME}.exe"`, and those two differ whenever the product name contains a character Windows forbids in a
+  file name: `productName: "Infoflex:Pharmart"` yields `InfoflexPharmart.exe`. The installer would then report success
+  while creating a desktop shortcut, a Start menu shortcut, a finish-page Run target and an autostart entry that all
+  pointed at nothing. It is correct today only because the product name happens to have no such character, which is
+  exactly the sort of assumption that survives until somebody renames the product. All four sites now use
+  electron-builder's own `APP_EXECUTABLE_FILENAME`, with a `!ifndef` fallback for a standalone compile; verified by
+  compiling the fallback in both configurations and reading back `InfoflexPharmart.exe` and `Infoflex.exe`. Three tests
+  forbid rebuilding an executable path from `${PRODUCT_NAME}`.
+- **The static checker called a correct `!ifdef`/`!else` pair a redefinition.** Its duplicate-`!define` rule compared
+  every definition in the file without noticing that only one arm of a conditional is ever compiled, so the guarded
+  fallback this phase added was reported as an error. The rule now tracks the branch path — every enclosing conditional
+  and which side of its `!else` — so two defines conflict only when they could actually be compiled together. Three
+  tests hold both directions: different values in the two arms are allowed, and two different values in the *same* arm
+  are still an error. The dangerous fix here would have been to delete the guard from the script to satisfy the
+  checker; narrowing the rule is what keeps the guard.
 - **What this still does not prove, and the docs say so.** It produces a real `.exe`, and it still does not prove
   electron-builder's template agrees with us — page order, where `customInstall` runs, whether the payload lands in the
   right place. It does not prove anything runs correctly on Windows: the file has never been executed, because there

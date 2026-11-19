@@ -78,6 +78,29 @@ Unicode true
 ; electron-builder's template defines PRODUCT_NAME, APP_VERSION, PRODUCT_FILENAME and the icon bitmaps before
 ; including this file. Only the two values it cannot know are set here.
 
+; ------------------------------------------------------------------ the executable's real file name
+;
+; Every shortcut, the "Run now" checkbox and the autostart entry must point at the file electron-builder actually wrote.
+; This script used to assume that was "${PRODUCT_NAME}.exe". Usually it is, and that is why the assumption survived: it
+; is right for every name without a character Windows forbids in a filename. It is wrong for a name with one.
+;
+; `productName: "Infoflex:Pharmart"` produces the executable `InfoflexPharmart.exe` -- electron-builder sanitises the
+; name -- while `PRODUCT_NAME` stays "Infoflex:Pharmart". The installer would then create a desktop shortcut, a Start
+; menu shortcut, a finish-page "Run" target and an autostart registry value that all point at a file that does not
+; exist. The install would report success and every one of those would do nothing when clicked, which is the worst kind
+; of failure to diagnose from a customer's description.
+;
+; electron-builder passes the sanitised name as PRODUCT_FILENAME, and its own common.nsh already derives
+; APP_EXECUTABLE_FILENAME from it. That define is the authority, so it is used when present. The fallback keeps this
+; script compilable on its own by a harness, and matches what electron-builder would produce for a plain name.
+!ifndef APP_EXECUTABLE_FILENAME
+  !ifdef PRODUCT_FILENAME
+    !define APP_EXECUTABLE_FILENAME "${PRODUCT_FILENAME}.exe"
+  !else
+    !define APP_EXECUTABLE_FILENAME "${PRODUCT_NAME}.exe"
+  !endif
+!endif
+
 !ifndef INFOPLEX_OFFLINE
   !define INFOPLEX_OFFLINE 0
 !endif
@@ -193,7 +216,7 @@ Var PrereqExitCode
 !macro customFinishPage
   !define MUI_FINISHPAGE_TITLE "${PRODUCT_NAME} is installed"
   !define MUI_FINISHPAGE_TEXT "Currency: $CurrencyCodeOut - $CurrencyNameOut ($CurrencySymbolOut)$\r$\n$\r$\nThe Admin can use a phone by opening Mobile Access inside the app. Cashiers work on this computer.$\r$\n$\r$\nThe install log is beside the app in the folder you chose."
-  !define MUI_FINISHPAGE_RUN "$INSTDIR\${PRODUCT_NAME}.exe"
+  !define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
   !define MUI_FINISHPAGE_RUN_TEXT "Launch ${PRODUCT_NAME} now"
   !define MUI_FINISHPAGE_SHOWREADME "$INSTDIR\install.log"
   !define MUI_FINISHPAGE_SHOWREADME_TEXT "Open install log"
@@ -896,8 +919,8 @@ Function InstallApplication
     ${EndIf}
   ${EndIf}
 
-  CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}.lnk" "$INSTDIR\${PRODUCT_NAME}.exe"
-  CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\${PRODUCT_NAME}.exe"
+  CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}.lnk" "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
+  CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
 FunctionEnd
 
 Function ConfigureFirewall
@@ -911,7 +934,7 @@ FunctionEnd
 
 Function ConfigureStartup
   ${If} $StartupWanted == "1"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_NAME}" '"$INSTDIR\${PRODUCT_NAME}.exe" --hidden'
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_NAME}" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --hidden'
   ${Else}
     DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_NAME}"
   ${EndIf}

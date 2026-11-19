@@ -168,3 +168,44 @@ SectionEnd
     expect(missing.map((p) => p.message).join(' ')).toMatch(/CurrencyRow/u)
   })
 })
+
+describe('the redefinition rule still catches a genuine duplicate', () => {
+  it('flags two different values for one define in the same branch', () => {
+    // The rule was narrowed to allow `!ifdef`/`!else` pairs, where only one branch is ever compiled. That narrowing
+    // must not have made the rule blind: a real duplicate is still a compile error and still has to be reported.
+    const script = [
+      'OutFile "x.exe"',
+      '!define SAME_BRANCH "one"',
+      '!define SAME_BRANCH "two"',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    const problems = checkNsisScript(script)
+    expect(problems.some((problem) => /already defined/u.test(problem.message))).toBe(true)
+  })
+
+  it('allows the same value twice, which NSIS also allows', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '!define TWICE "same"',
+      '!define TWICE "same"',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).filter((p) => /already defined/u.test(p.message))).toEqual([])
+  })
+
+  it('allows different values in the two arms of an !ifdef, which is the pattern this was narrowed for', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '!ifdef MAYBE',
+      '  !define NAME "a"',
+      '!else',
+      '  !define NAME "b"',
+      '!endif',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).filter((p) => /already defined/u.test(p.message))).toEqual([])
+  })
+})

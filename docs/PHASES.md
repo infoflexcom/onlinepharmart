@@ -856,6 +856,11 @@ the test rather than the Output screen.
   real build supplies -- only the harness did, which is why the compile check never showed it. Now `!ifdef`-guarded, the
   harness no longer invents the value, and a test pins the harness's define list. The checklist now says to *supply*
   that file, which nobody was doing.
+- **Every shortcut pointed at a guessed executable name.** The desktop and Start menu shortcuts, the finish-page "Run
+  now" box and the autostart entry all used `"${PRODUCT_NAME}.exe"`; electron-builder writes
+  `"${PRODUCT_FILENAME}.exe"`, and a product name containing `:` or `/` makes those two different files. Correct today
+  only because "Infoflex" happens to need no sanitising. All four now use `APP_EXECUTABLE_FILENAME`, and tests forbid
+  rebuilding the path from the product name.
 - **Still not proven:** the real `npm run build` cannot run here (electron-builder downloads its NSIS from GitHub and
   needs plugin DLLs this sandbox lacks), so the template is read rather than executed. And the `.exe` has never been executed. There is no Windows and no Wine here. The shippable
   installer still comes from `npm run build` on a Windows machine with the NSIS target, and the manual checklist in

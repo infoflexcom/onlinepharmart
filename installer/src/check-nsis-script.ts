@@ -295,20 +295,53 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
   }
 
   // ---- defines that are redefined with a different value
-  const defines = new Map<string, { value: string; line: number }>()
+  //
+  // Only one branch of an `!ifdef`/`!else` chain is ever compiled, so a different value in the other branch is not a
+  // redefinition at all. Tracking which branch each `!define` sits in is what lets this rule stay useful: the pattern
+  //
+  //     !ifdef PRODUCT_FILENAME
+  //       !define NAME "${PRODUCT_FILENAME}.exe"
+  //     !else
+  //       !define NAME "${PRODUCT_NAME}.exe"
+  //     !endif
+  //
+  // is correct and ordinary, and flagging it would push people to delete the guard rather than write it. The key is the
+  // full branch path -- every enclosing conditional and which side of its `!else` -- so two defines conflict only when
+  // they could be compiled together.
+  const defines = new Map<string, { value: string; line: number; branch: string }>()
+  const branches: string[] = []
+  let branchOrdinal = 0
   for (const [index, raw] of strip.entries()) {
     const line = raw.trim()
+    const conditional = /^!(ifdef|ifndef|if|ifmacrodef|ifmacrondef|else|endif)\b(.*)$/u.exec(line)
+    if (conditional) {
+      const [, keyword, rest] = conditional
+      if (keyword === 'else') {
+        // Same depth, opposite side: a fresh path so nothing inside can collide with the branch before it.
+        branches[branches.length - 1] = `else${branchOrdinal++}`
+      } else if (keyword === 'endif') {
+        branches.pop()
+      } else {
+        branches.push(`${keyword}${branchOrdinal++}${(rest ?? '').trim()}`)
+      }
+      continue
+    }
     const match = /^!define\s+(\S+)\s*(.*)$/u.exec(line)
     if (!match) continue
     const [, name, value] = match
+    const branch = branches.join('>')
     const seen = defines.get(name!)
     if (!seen) {
-      defines.set(name!, { value: value ?? '', line: index + 1 })
-    } else if (seen.value !== (value ?? '')) {
+      defines.set(name!, { value: value ?? '', line: index + 1, branch })
+    } else if (seen.value !== (value ?? '') && seen.branch === branch) {
       problems.push({
         line: index + 1,
         message: `!define ${name} was already defined on line ${seen.line} with a different value.`,
       })
+    } else if (seen.value !== (value ?? '')) {
+      // Different branches: legal, and the last definition wins for the branch that is actually compiled. Record the
+      // later one so a genuine duplicate inside that same branch is still caught.
+      defines.set(name!, { value: value ?? '', line: index + 1, branch })
     }
   }
 

@@ -99,6 +99,44 @@ describe('the offline build includes a wrapper, and the wrapper is what gets com
   })
 })
 
+describe('shortcuts point at the executable electron-builder actually wrote', () => {
+  it('never builds an executable path from PRODUCT_NAME', () => {
+    // electron-builder sanitises the product name into a file name: `Infoflex:Pharmart` becomes `InfoflexPharmart.exe`
+    // while PRODUCT_NAME keeps the colon. A shortcut built from PRODUCT_NAME would therefore point at a file that does
+    // not exist -- for the desktop, the Start menu, the finish-page "Run" box and the autostart registry value alike.
+    // The install would succeed and every shortcut would silently do nothing.
+    const script = readFileSync('installer/nsis/installer.nsi', 'utf8')
+    // The one legitimate use is the fallback define itself, which only applies when electron-builder has supplied
+    // nothing at all. It is excluded by name rather than by "any line that defines something", so a shortcut that
+    // happened to be indented inside a block would still be caught.
+    const offenders = script
+      .split('\n')
+      .map((line, index) => ({ line, number: index + 1 }))
+      .filter(({ line }) => /\$\{PRODUCT_NAME\}\.exe/u.test(line) && !line.trimStart().startsWith(';'))
+      .filter(({ line }) => !/^\s*!define APP_EXECUTABLE_FILENAME "\$\{PRODUCT_NAME\}\.exe"$/u.test(line))
+    expect(
+      offenders.map(({ line, number }) => `${number}: ${line.trim()}`),
+      'these refer to an .exe named from PRODUCT_NAME instead of APP_EXECUTABLE_FILENAME',
+    ).toEqual([])
+  })
+
+  it('uses electron-builder’s APP_EXECUTABLE_FILENAME for every executable it points at', () => {
+    const script = readFileSync('installer/nsis/installer.nsi', 'utf8')
+    expect(script).toContain('CreateShortCut "$SMPROGRAMS\\${PRODUCT_NAME}.lnk" "$INSTDIR\\${APP_EXECUTABLE_FILENAME}"')
+    expect(script).toContain('CreateShortCut "$DESKTOP\\${PRODUCT_NAME}.lnk" "$INSTDIR\\${APP_EXECUTABLE_FILENAME}"')
+    expect(script).toContain('MUI_FINISHPAGE_RUN "$INSTDIR\\${APP_EXECUTABLE_FILENAME}"')
+    expect(script).toMatch(/CurrentVersion\\Run" "\$\{PRODUCT_NAME\}" '"\$INSTDIR\\\$\{APP_EXECUTABLE_FILENAME\}" --hidden'/u)
+  })
+
+  it('falls back only when electron-builder has not supplied the name', () => {
+    // The fallback keeps the script compilable standalone. It must be guarded by !ifndef, or the real build would use
+    // the guess instead of the value electron-builder passed.
+    const script = readFileSync('installer/nsis/installer.nsi', 'utf8')
+    const define = script.slice(script.indexOf('!ifndef APP_EXECUTABLE_FILENAME'), script.indexOf('!endif', script.indexOf('!ifndef APP_EXECUTABLE_FILENAME')))
+    expect(define).toContain('PRODUCT_FILENAME')
+  })
+})
+
 describe('the harness does not invent values the real build lacks', () => {
   it('defines no prerequisite path of its own', () => {
     // The harness used to define PREREQUISITE_VCREDIST so the offline branch's `File` command would resolve. Every real
