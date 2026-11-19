@@ -290,6 +290,7 @@ describe('the redefinition rule still catches a genuine duplicate', () => {
   })
 
   it('reports a password page with no silent equivalent, which /S walks straight past', () => {
+    // PasswordPageLeave must be capable of Abort for the gate to mean anything, and then .onInit must re-state it.
     const script = [
       'OutFile "x.exe"',
       '!macro pages',
@@ -301,12 +302,48 @@ describe('the redefinition rule still catches a genuine duplicate', () => {
       'FunctionEnd',
       'Function PasswordPageLeave',
       '  nsExec::ExecToStack \'"$PLUGINSDIR\\password-check.exe" a b c d\'',
+      '  ${If} $0 != "0"',
+      '    Abort',
+      '  ${EndIf}',
       'FunctionEnd',
       'Section',
       'SectionEnd',
     ].join('\n')
     const problems = checkNsisScript(script)
     expect(problems.some((problem) => /bypasses the password page/u.test(problem.message))).toBe(true)
+  })
+
+  it('reports a system-check page whose refusal is skipped by /S', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '  Page custom ChecksPageCreate ChecksPageLeave',
+      'Function .onInit',
+      '  ${If} ${Silent}',
+      '  ${EndIf}',
+      'FunctionEnd',
+      'Function ChecksPageLeave',
+      '  ${IfNot} ${AtLeastWin10}',
+      '    Abort',
+      '  ${EndIf}',
+      'FunctionEnd',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    const problems = checkNsisScript(script)
+    expect(problems.some((problem) => /skips the system check page/u.test(problem.message))).toBe(true)
+  })
+
+  it('ignores a Leave callback that cannot Abort, which gates nothing', () => {
+    const script = [
+      'OutFile "x.exe"',
+      '  Page custom ComponentsPageCreate ComponentsPageLeave',
+      'Function ComponentsPageLeave',
+      '  ${NSD_GetState} $x $y',
+      'FunctionEnd',
+      'Section',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).filter((p) => /silent branch|gate the install/u.test(p.message))).toEqual([])
   })
 
   it('accepts a silent branch that actually runs the checker', () => {
@@ -329,5 +366,28 @@ describe('the redefinition rule still catches a genuine duplicate', () => {
     // The rule is about this gate, not a general security review. A script without one is not a defect under it.
     const script = ['OutFile "x.exe"', 'Function .onInit', 'FunctionEnd', 'Section', 'SectionEnd'].join('\n')
     expect(checkNsisScript(script).filter((p) => /password/u.test(p.message))).toEqual([])
+  })
+
+  it('reads a semicolon inside a quoted message as data, not as a comment', () => {
+    // The comment stripper cut at the first `;` on the line, so a message containing one -- several do -- was
+    // truncated, and a MessageBox plainly ending in /SD IDOK was reported as having no /SD. A checker that mis-reads
+    // string data produces confident nonsense.
+    const script = [
+      'OutFile "x.exe"',
+      'Section',
+      '  MessageBox MB_ICONSTOP|MB_OK "Windows 10 needed; nothing was changed." /SD IDOK',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).filter((p) => /\/SD/u.test(p.message))).toEqual([])
+  })
+
+  it('still strips a genuine trailing comment', () => {
+    const script = [
+      'OutFile "x.exe"',
+      'Section',
+      '  MessageBox MB_ICONSTOP|MB_OK "boom" ; /SD IDOK in a comment does not count',
+      'SectionEnd',
+    ].join('\n')
+    expect(checkNsisScript(script).some((p) => /no "\/SD/u.test(p.message))).toBe(true)
   })
 })

@@ -198,6 +198,18 @@ describe('the vendor password gate cannot be skipped', () => {
     expect(password).toBeLessThan(currency)
   })
 
+  it('re-checks the OS and architecture, which /S would otherwise skip', () => {
+    // ChecksPageLeave is the only place these were enforced, and a silent run draws no pages. Without the silent
+    // re-check, /S on 32-bit Windows installs a 64-bit application that cannot start, and reports success.
+    const silentBlock = onInit.slice(onInit.indexOf('${Silent}'))
+    const currencyRead = silentBlock.indexOf('/CURRENCY=')
+    const beforeCurrency = silentBlock.slice(0, currencyRead)
+    expect(beforeCurrency).toMatch(/AtLeastWin10/u)
+    expect(beforeCurrency).toMatch(/RunningX64/u)
+    // Both must refuse, not merely mention.
+    expect(beforeCurrency.match(/Abort/gu)?.length ?? 0).toBeGreaterThanOrEqual(2)
+  })
+
   it('keeps the gate on the interactive page too, so the two paths agree', () => {
     const pageLeave = (() => {
       const start = script.indexOf('Function PasswordPageLeave')

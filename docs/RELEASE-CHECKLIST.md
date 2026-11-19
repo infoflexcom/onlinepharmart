@@ -126,6 +126,10 @@ for a hang, not for a message.
      Expected: it fails, says the password is not correct, and changes nothing.
    - `"Infoflex Setup.exe" /S /PASSWORD=<correct> /CURRENCY=XYZ` where XYZ is not a supported code.
      Expected: it fails and names XYZ.
+   - `"Infoflex Setup.exe" /S /PASSWORD=<correct>` on a **32-bit** Windows machine, or on Windows 8.1 or older.
+     Expected: it refuses and installs nothing. This check exists because the system-check page was the only place it
+     was enforced, so `/S` used to install a 64-bit app where it could not run. If you have no such machine, say so in
+     the record rather than ticking it.
    Be aware that the password you type appears in the process command line while it runs; this is a known and accepted
    cost of the silent path, not a defect to report.
 3. Uninstall silently via `"%PROGRAMFILES%\Infoflex\Uninstall Infoflex.exe" /S`.
@@ -162,6 +166,7 @@ for a hang, not for a message.
 | Silent install with NO password FAILS and installs nothing | ☐ pass ☐ fail | |
 | Silent install with a WRONG password fails and changes nothing | ☐ pass ☐ fail | |
 | Silent install with an invalid `/CURRENCY=` fails | ☐ pass ☐ fail | |
+| Silent install on 32-bit or pre-Win10 refuses | ☐ pass ☐ fail ☐ not tested (no machine) | |
 | Silent uninstall `/S` completes with no dialog, keeps data | ☐ pass ☐ fail | |
 | Upgrade does NOT ask the keep-data question | ☐ pass ☐ fail | |
 | Upgrade preserves products and skips first-run setup | ☐ pass ☐ fail | |

@@ -504,3 +504,24 @@ the file has — the first was a test matching its own comments. Both were found
 compiled and inspected, and the logic is the same helper the interactive path already uses, but "required" here means
 "the script says so and the checker enforces the script", not "observed on Windows". `docs/RELEASE-CHECKLIST.md` §1.5
 lists a silent install with a wrong password, with no password, and with the right one, each to be recorded.
+
+**The same hole was in the system check.** `ChecksPageLeave` refuses to leave the page on anything older than Windows 10
+or on 32-bit Windows — and it, too, is a Leave callback, so `/S` skipped it. A silent install on a 32-bit machine
+installed a 64-bit Electron application that cannot start, and every tool reported success. The silent branch now
+re-checks both and refuses with `SetErrorLevel 3`. The two gates are now stated twice, once as an explanation for a
+person looking at a window and once as a refusal for a script, which is the price of a wizard that also has to work
+unattended.
+
+**The general shape, since it cost two findings in one file.** A page callback is not a gate; it is a gate *for an
+interactive install*. Any refusal written only into a `PageLeave` function is optional for `/S`. The rule in the checker
+is therefore stated over the class rather than over the two instances: any Leave callback that can `Abort` must have its
+gate re-stated in `.onInit`'s silent branch. `ComponentsPageLeave` is exempt because it only records checkbox values and
+cannot Abort, which is the distinction that keeps the rule from demanding duplication everywhere.
+
+**A checker bug that had to be fixed to see any of this.** `stripComments` cut each line at the first `;` regardless of
+quoting. NSIS comments do begin at `;`, but a `;` inside a quoted string is data, and several messages here contain one.
+The practical effect: a `MessageBox` ending in `/SD IDOK` was reported as having no `/SD`, because the `/SD` sat after a
+semicolon inside the sentence. The stripper now tracks quotes and requires whitespace before a `;`, which is NSIS's own
+rule. Two tests hold both directions — a message with a semicolon is not truncated, and a real trailing comment is still
+stripped (so `; /SD IDOK` in a comment does not satisfy the rule).
+

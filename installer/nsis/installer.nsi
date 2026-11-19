@@ -269,6 +269,21 @@ Function .onInit
   ; `GetParameters` in memory only; neither is logged. It does appear in a process listing for the duration of the
   ; install, which is worth knowing and is stated in docs/DECISIONS.md rather than glossed over.
   ${If} ${Silent}
+    ; The same Windows-version and 64-bit checks that block the system-check page, because a silent run draws no pages
+    ; and ChecksPageLeave -- the only place they were enforced -- never runs. Without this, `/S` on a 32-bit machine
+    ; installs a 64-bit application that cannot start, and the deployment tool reports success. The page is still the
+    ; friendly explanation for an interactive install; this is the refusal for the unattended one.
+    ${IfNot} ${AtLeastWin10}
+      MessageBox MB_ICONSTOP|MB_OK "${PRODUCT_NAME} needs Windows 10 or later (64-bit). This is a silent install, so nothing was changed on this computer." /SD IDOK
+      SetErrorLevel 3
+      Abort
+    ${EndIf}
+    ${IfNot} ${RunningX64}
+      MessageBox MB_ICONSTOP|MB_OK "${PRODUCT_NAME} needs 64-bit Windows 10 or later; this computer is running 32-bit Windows. This is a silent install, so nothing was changed on this computer." /SD IDOK
+      SetErrorLevel 3
+      Abort
+    ${EndIf}
+
     ${GetParameters} $R0
     ${GetOptions} $R0 "/PASSWORD=" $PasswordValue
     ${If} ${Errors}

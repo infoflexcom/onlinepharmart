@@ -852,6 +852,15 @@ the test rather than the Output screen.
   macro and is therefore indented; the rule never executed, and a mutation deleting the whole silent password check was
   reported clean. This is the second check this phase written against the shape the author pictured rather than the
   shape the file has — the first was a test matching its own comments. Both were found by mutating.
+- **The system check was bypassed by `/S` in the same way.** `ChecksPageLeave` refuses to continue on 32-bit Windows or
+  anything older than Windows 10, and it too is a Leave callback — so a silent install on 32-bit Windows installed a
+  64-bit app that cannot start, and reported success. The silent branch now re-checks both and refuses. The checker rule
+  was generalised from "the password page" to "any Leave callback that can `Abort`", because two instances in one file
+  is a class, not a coincidence; `ComponentsPageLeave` is exempt since it only records checkbox values.
+- **The checker could not read its own input.** `stripComments` truncated each line at the first `;` regardless of
+  quoting, so a `MessageBox` whose message contained a semicolon lost everything after it — including its `/SD IDOK` —
+  and was reported as a silent-mode hazard that did not exist. NSIS starts a comment at a `;` outside quotes only; the
+  stripper now does the same, with a test in each direction.
 - **Still not proven:** that electron-builder's template agrees with our hooks, that the payload lands in the right
   place, or that anything behaves correctly on Windows.
 

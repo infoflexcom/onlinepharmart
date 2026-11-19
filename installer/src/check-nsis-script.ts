@@ -122,9 +122,27 @@ const BLOCK_CLOSERS: Array<[RegExp, string]> = [
   [/^\s*FunctionEnd\b/u, 'FunctionEnd'],
 ]
 
+/**
+ * Remove a trailing `;` comment, but only a real one.
+ *
+ * The first version cut at the first `;` anywhere on the line. NSIS comments do start at `;`, but a `;` inside a quoted
+ * string is data -- and several messages here contain one ("... later; this computer ..."). Truncating there made the
+ * checker report a MessageBox that plainly ends in `/SD IDOK` as having no `/SD`, because the `/SD` was past the
+ * semicolon. A checker that mis-reads strings produces confident nonsense, which is worse than silence.
+ *
+ * The rule is NSIS's own: a `;` starts a comment at the start of a line or after whitespace, and never inside quotes.
+ */
 function stripComments(line: string): string {
-  const index = line.indexOf(';')
-  return index >= 0 ? line.slice(0, index) : line
+  let quoted = false
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index]
+    if (character === '"') quoted = !quoted
+    if (quoted) continue
+    if (character !== ';') continue
+    const before = index === 0 ? ' ' : line[index - 1]!
+    if (/\s/u.test(before)) return line.slice(0, index)
+  }
+  return line
 }
 
 export interface CheckOptions {
@@ -347,22 +365,31 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
 
   // ---- a gate that only exists on a page
   //
-  // A page callback ("Page custom FooCreate FooLeave") does not run in a silent install, because no page is drawn. A
-  // check that lives only in a Leave callback is therefore optional for anyone who passes /S -- and the vendor password
-  // gate is exactly such a check, guarding the currency the shop installs with. It was real for a double-click and
-  // absent for a typed flag until this rule's absence made it visible.
+  // A page callback runs when a page is left, and a silent install draws no pages at all -- so a check written inside a
+  // Leave function is skipped by /S. That is not a theoretical flaw: the vendor password gate and the Windows-version
+  // and 64-bit checks both lived only in Leave callbacks, so `Setup.exe /S` installed without the password and installed
+  // a 64-bit app on 32-bit Windows, and every tool involved reported success.
   //
-  // The rule is narrow on purpose: it only fires when the script has a password check at all, and only when the silent
-  // branch of .onInit never runs a password checker. A script with no such gate is not a defect under this rule, which
-  // keeps it from pretending to be a general security review.
-  // Indentation matters here and cost this rule its first version: the page is inserted from inside a macro, so the
-  // line is `  Page custom PasswordPageCreate PasswordPageLeave` with leading whitespace. An anchored `^Page` matched
-  // nothing, the rule never ran, and a mutation that deleted the entire silent password check was reported clean.
-  const hasPasswordPage = /^\s*Page\s+custom\s+PasswordPageCreate\b/mu.test(strip.join('\n'))
-  if (hasPasswordPage) {
+  // The rule: any Leave callback that can Abort must have that gate re-stated in the silent branch of .onInit. Abort is
+  // the signal, because a callback that only records a checkbox value is not gating anything. The check on the silent
+  // side is deliberately loose -- it looks for evidence that .onInit refuses on its own terms -- because the two
+  // branches legitimately differ in wording; requiring identical text would force duplication to satisfy a checker.
+  const leaveGates: string[] = []
+  for (const [index, raw] of strip.entries()) {
+    const line = raw.trim()
+    const leave = /^Function\s+(\w+PageLeave)\s*$/u.exec(line)
+    if (!leave) continue
+    const end = strip.findIndex((candidate, position) => position > index && /^FunctionEnd\s*$/u.test(candidate.trim()))
+    const body = strip.slice(index, end === -1 ? undefined : end)
+    if (body.some((candidate) => /^\s*Abort\s*$/u.test(candidate))) leaveGates.push(leave[1]!)
+  }
+  if (leaveGates.length > 0) {
     const onInitStart = strip.findIndex((raw) => /^Function\s+\.onInit\s*$/u.test(raw.trim()))
     if (onInitStart === -1) {
-      problems.push({ line: 1, message: 'There is a password page but no .onInit, so nothing checks it silently.' })
+      problems.push({
+        line: 1,
+        message: `${leaveGates.join(', ')} can Abort, but there is no .onInit, so a silent install never runs those checks.`,
+      })
     } else {
       const onInitEnd = strip.findIndex((raw, index) => index > onInitStart && /^FunctionEnd\s*$/u.test(raw.trim()))
       const body = strip.slice(onInitStart, onInitEnd === -1 ? undefined : onInitEnd)
@@ -370,19 +397,25 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
       if (silentIndex === -1) {
         problems.push({
           line: onInitStart + 1,
-          message: 'The password page has no silent equivalent: a /S install skips every page and never checks it.',
+          message: `${leaveGates.join(', ')} gate the install, but .onInit has no silent branch, so /S skips them.`,
         })
       } else {
-        const silentBranch = body.slice(silentIndex)
-        // The INVOCATION, not merely the name. `File /oname=...password-check.exe` is a copy, not a check, and an
-        // earlier version of this rule accepted it -- so a script whose silent branch staged the helper and never ran
-        // it passed. Requiring the call is the difference between moving a file and checking a password.
-        const runsChecker = silentBranch.some((raw) => /ExecToStack|ExecToLog|ExecWait/u.test(raw) && /password-check\.exe/u.test(raw))
-        const asksForFlag = silentBranch.some((raw) => /\/PASSWORD=/u.test(raw))
-        if (!runsChecker || !asksForFlag) {
+        const silentBranch = body.slice(silentIndex).join('\n')
+        if (leaveGates.includes('PasswordPageLeave')) {
+          // The password gate is specific enough to name: it must read a flag AND invoke the checker. Accepting a bare
+          // `File /oname=...password-check.exe` would bless a script that stages the helper and never runs it.
+          const invokes = /(?:ExecToStack|ExecToLog|ExecWait)[^\n]*password-check\.exe/u.test(silentBranch)
+          if (!/\/PASSWORD=/u.test(silentBranch) || !invokes) {
+            problems.push({
+              line: onInitStart + silentIndex + 1,
+              message: 'The silent branch never verifies the vendor password, so /S bypasses the password page.',
+            })
+          }
+        }
+        if (/(?:Checks|System)PageLeave/.test(leaveGates.join(',')) && !/AtLeastWin\d+|RunningX64/u.test(silentBranch)) {
           problems.push({
             line: onInitStart + silentIndex + 1,
-            message: 'The silent branch never verifies the vendor password, so /S bypasses the password page.',
+            message: 'The silent branch never re-checks the OS or architecture, so /S skips the system check page.',
           })
         }
       }
