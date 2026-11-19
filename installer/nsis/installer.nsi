@@ -33,6 +33,9 @@ Unicode true
 ; checker in `installer/src/check-nsis-script.ts` verifies that every stdlib macro used here is backed by its header,
 ; so an include that quietly disappeared would fail the build rather than fail on a vendor's machine.
 !include "FileFunc.nsh"
+; The host allowlist check below uses ${StrContains}. electron-builder ships this header
+; (templates/nsis/include/StrContains.nsh) and its own assisted template includes it for the same kind of test.
+!include "StrContains.nsh"
 
 ; x64.nsh provides ${RunningX64}. WinVer.nsh does NOT define it, and the Windows-version check has to be written by
 ; hand for the same kind of reason: NSIS 3.x defines ${AtLeastWin11} and ${AtLeastWin8}, but never ${AtLeastWin10},
@@ -796,6 +799,36 @@ Function ComponentsPageLeave
   ${NSD_GetState} $CompTray $TrayWanted
 FunctionEnd
 
+; ==================================================================================== signature
+; The Authenticode check, in one place so the three paths that can run the redistributable cannot disagree.
+;
+; The checksum in ${VCREDIST_SHA256} proves the bytes are the ones the vendor pinned; it says nothing about who signed
+; them. The brief requires the signature AND the publisher to be verified before an executable is run, and this
+; installer did neither -- the whole check was missing, while three separate comments in this file and one label on the
+; download page said it was there ("checked before they are run", "held to the same checksum and publisher check").
+; ${VCREDIST_PUBLISHER} was generated for exactly this and never read.
+;
+; Returns "0" in $0 when the file carries a valid signature naming the pinned publisher, and anything else otherwise.
+; Every uncertain answer refuses: no PowerShell, no signature, no publisher, output that is not a single line.
+; Caller contract: push the file path, Call, Pop the verdict. "0" means verified; anything else means refuse.
+; `${VCREDIST_PUBLISHER}` is passed to the helper, which does the PowerShell quoting -- the doubling of a single quote
+; is in password-check.ts, matching buildstudio/src/authenticode.ts. Nothing from a path reaches the command line here
+; except as a quoted argument to our own helper.
+Function CheckRedistSignature
+  Exch $0
+  Push $1
+  Push $2
+  nsExec::ExecToStack '"$PLUGINSDIR\password-check.exe" --authenticode "${VCREDIST_PUBLISHER}" "$0"'
+  Pop $1
+  Pop $2
+  ; nsExec leaves "0" on a zero exit code and "error" / "timeout" otherwise -- all three are refusals except "0".
+  StrCpy $0 $1
+  ; Stack order: we pushed $1, $2, then nsExec's two values and popped both, so restore in reverse.
+  Pop $2
+  Pop $1
+  Exch $0
+FunctionEnd
+
 ; ==================================================================================== page 6: download
 Function DownloadPageCreate
   !insertmacro MUI_HEADER_TEXT "Downloading" "Getting the components this computer needs."
@@ -899,6 +932,15 @@ Function DownloadBrowseClicked
     MessageBox MB_ICONSTOP|MB_OK "The file you chose is not the one ${PRODUCT_NAME} expects, so it was not used. Nothing was changed." /SD IDOK
     Return
   ${EndIf}
+  ; The checksum above says the bytes are right; this says who signed them. The comment on this function has claimed
+  ; "the same checksum and publisher check as a download" since it was written, and neither path checked a publisher.
+  Push $0
+  Call CheckRedistSignature
+  Pop $1
+  ${If} $1 != "0"
+    MessageBox MB_ICONSTOP|MB_OK "The file you chose is not digitally signed by ${VCREDIST_PUBLISHER}, so it was not used. Nothing was changed." /SD IDOK
+    Return
+  ${EndIf}
   CopyFiles /SILENT "$0" "$PLUGINSDIR\vc_redist.x64.exe"
   StrCpy $DownloadFailed "0"
   Call ShowDownloadFallback
@@ -932,6 +974,41 @@ Function DownloadPageLeave
   ;
   ; This is also the reason there is no progress bar on this page: see the note in DownloadPageCreate.
   System::Call 'user32::UpdateWindow(p $HWNDPARENT)'
+
+  ; ---- the host allowlist, which was generated for this script and never read by it
+  ;
+  ; ${ALLOWED_HOST_1..3} are emitted by generate-installer-script.ts from ALLOWED_DOWNLOAD_HOSTS, and the TypeScript side
+  ; enforces the rule properly (download-allowlist.ts: resolveDownload takes an id, never a URL, so a caller cannot
+  ; even express "fetch this instead"). The installer does not go through that function -- it is NSIS, and it downloads
+  ; ${VCREDIST_URL} directly. So the allowlist was a rule on paper for this half of the system: any URL that reached
+  ; the generated header would be fetched from wherever it said.
+  ;
+  ; It is a compile-time constant today, so this is defence in depth rather than a live hole. It is also four lines,
+  ; and the failure it prevents -- a future edit, a build flag, a hand-patched .nsi sending a customer's machine to an
+  ; arbitrary host -- is exactly the one the brief names.
+  ${StrContains} $1 "${ALLOWED_HOST_1}" "${VCREDIST_URL}"
+  ${StrContains} $2 "${ALLOWED_HOST_2}" "${VCREDIST_URL}"
+  ${StrContains} $3 "${ALLOWED_HOST_3}" "${VCREDIST_URL}"
+  ${If} $1 == ""
+  ${AndIf} $2 == ""
+  ${AndIf} $3 == ""
+    ${NSD_SetText} $DownloadStatus "The download address is not an approved Microsoft address, so nothing was downloaded."
+    StrCpy $DownloadAttempts 3
+    StrCpy $DownloadFailed "1"
+    Call ShowDownloadFallback
+    Abort
+  ${EndIf}
+  ; ${StrContains} is a Function with a macro wrapper (!define StrContains '!insertmacro ...'), not a LogicLib test,
+  ; so it cannot appear inside ${IfNot}. It returns the needle when found and "" when not.
+  ${StrContains} $4 "https://" "${VCREDIST_URL}"
+  ${If} $4 == ""
+    ${NSD_SetText} $DownloadStatus "The download address is not secure (https), so nothing was downloaded."
+    StrCpy $DownloadAttempts 3
+    StrCpy $DownloadFailed "1"
+    Call ShowDownloadFallback
+    Abort
+  ${EndIf}
+
   InitPluginsDir
   NSISdl::download "${VCREDIST_URL}" "$PLUGINSDIR\vc_redist.x64.exe"
   Pop $0
@@ -977,7 +1054,23 @@ Function DownloadPageLeave
     Call ShowDownloadFallback
     Abort
   ${EndIf}
-  ${NSD_SetText} $DownloadStatus "The file is verified."
+  ; Checksum passed. Now the signature: the checksum proves the bytes, not the signer, and this file is about to be
+  ; EXECUTED. A pinned checksum cannot be forged without finding a SHA-256 collision, but the check the brief asks for
+  ; -- and the one the page's own wording promises -- is that the publisher is who it claims to be.
+  Push "$PLUGINSDIR\vc_redist.x64.exe"
+  Call CheckRedistSignature
+  Pop $1
+  ${If} $1 != "0"
+    Delete "$PLUGINSDIR\vc_redist.x64.exe"
+    StrCpy $DownloadFailed "1"
+    ; Not a flaky line: the file that arrived is correctly-hashed but not signed by Microsoft, which means either the
+    ; pinning is wrong or something upstream is. Stop offering Retry.
+    StrCpy $DownloadAttempts 3
+    ${NSD_SetText} $DownloadStatus "The downloaded file is not signed by ${VCREDIST_PUBLISHER}, so it was deleted and not run. Nothing was changed."
+    Call ShowDownloadFallback
+    Abort
+  ${EndIf}
+  ${NSD_SetText} $DownloadStatus "The file is verified and correctly signed."
 FunctionEnd
 
 ; ===================================================================================== page 7: install
@@ -989,6 +1082,7 @@ FunctionEnd
 !macro customInstall
   !insertmacro LogLine "Install directory: $INSTDIR"
   !insertmacro LogLine "Currency: $CurrencyCodeOut $CurrencySymbolOut ($CurrencyNameOut), custom=$CurrencyIsCustom"
+  !insertmacro LogLine "Vendor build version: ${INSTALLER_APP_VERSION} (packaging version ${APP_VERSION})"
   !insertmacro LogLine "Existing installation updated: $WasInstalled"
   !insertmacro LogLine "Prerequisite needed: $NeedsVcRuntime"
   !insertmacro LogLine "Firewall rule requested: $FirewallWanted"
@@ -1140,6 +1234,20 @@ Function InstallPrerequisites
     Return
   ${EndIf}
 
+  ; The signature check, at the last possible moment before ExecWait -- this is the line that actually runs the file,
+  ; so it is the one that must not trust anything upstream. Each of the three paths re-checks rather than sharing a
+  ; flag: a single "already verified" variable would have to be trusted across a page the customer can leave and
+  ; come back to, and the cost is one process launch.
+  Push "$PLUGINSDIR\vc_redist.x64.exe"
+  Call CheckRedistSignature
+  Pop $0
+  ${If} $0 != "0"
+    Delete "$PLUGINSDIR\vc_redist.x64.exe"
+    DetailPrint "The bundled Visual C++ runtime is not signed by ${VCREDIST_PUBLISHER}, so it was deleted and not run."
+    MessageBox MB_ICONEXCLAMATION|MB_OK "A supporting component (the Microsoft Visual C++ runtime) is not digitally signed by ${VCREDIST_PUBLISHER}, so it was not installed. ${PRODUCT_NAME} will ask for it the first time it needs it. Nothing else was affected." /SD IDOK
+    Return
+  ${EndIf}
+
   DetailPrint "Installing the Microsoft Visual C++ runtime."
   ExecWait '"$PLUGINSDIR\vc_redist.x64.exe" /install /quiet /norestart' $PrereqExitCode
 
@@ -1193,7 +1301,10 @@ Function InstallApplication
       ${Else}
         FileWrite $1 "  $\"installerKind$\": $\"online$\",$\r$\n"
       ${EndIf}
-      FileWrite $1 "  $\"appVersion$\": $\"${APP_VERSION}$\",$\r$\n"
+      ; ${INSTALLER_APP_VERSION} is the version the vendor built for; ${APP_VERSION} is electron-builder's. Until now
+      ; only the latter was written, so a build made for 2.3.4 recorded 0.1.0 -- and the define that carried the right
+      ; one was generated and never read.
+      FileWrite $1 "  $\"appVersion$\": $\"${INSTALLER_APP_VERSION}$\",$\r$\n"
       FileWrite $1 "  $\"currency$\": {$\r$\n"
       FileWrite $1 "    $\"code$\": $\"$CurrencyCodeJson$\",$\r$\n"
       FileWrite $1 "    $\"name$\": $\"$CurrencyNameJson$\",$\r$\n"

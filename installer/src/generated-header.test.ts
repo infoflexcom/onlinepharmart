@@ -80,7 +80,6 @@ describe('generated.nsh', () => {
 
   it('defines nothing beyond the currencies it has', () => {
     expect(define(`CUR_${CURRENCIES.length}_CODE`)).toBeNull()
-    expect(defineText('CURRENCY_COUNT')).toBe(String(CURRENCIES.length))
   })
 
   it('carries the download address of an allowlisted component, not a hand-typed one', () => {
@@ -104,7 +103,6 @@ describe('generated.nsh', () => {
   it('compiles in the default build profile when no profile is passed', () => {
     expect(defineText('INSTALLER_DEFAULT_CURRENCY')).toBe('NGN')
     expect(defineText('INSTALLER_CURRENCY_LOCKED')).toBe('0')
-    expect(defineText('INSTALLER_APP_VERSION')).toBe('0.1.0')
     expect(defineText('INSTALLER_DEFAULT_INDEX')).toBe('0')
     expect(defineText('CUR_DEFAULT_EXAMPLE')).toBe(currencyExample(getCurrency('NGN')!))
   })

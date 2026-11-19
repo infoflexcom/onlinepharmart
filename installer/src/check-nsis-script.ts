@@ -76,7 +76,10 @@ const NSD_OPERATIONS = new Set([
  */
 const NSIS_STDLIB_MACROS: Record<string, string> = {
   GetParameters: 'FileFunc.nsh', GetOptions: 'FileFunc.nsh', GetRoot: 'FileFunc.nsh', DriveSpace: 'FileFunc.nsh',
-  GetSize: 'FileFunc.nsh', GetTime: 'FileFunc.nsh', GetFileVersion: 'FileFunc.nsh', GetFileAttributes: 'FileFunc.nsh',
+  GetSize: 'FileFunc.nsh', GetTime: 'FileFunc.nsh',
+  // StrContains.nsh defines `${StrContains}` as a macro that calls its own Function, so it is only valid while the
+  // include is present -- the same rule as the FileFunc entries.
+  StrContains: 'StrContains.nsh', GetFileVersion: 'FileFunc.nsh', GetFileAttributes: 'FileFunc.nsh',
   GetExeName: 'FileFunc.nsh', GetExePath: 'FileFunc.nsh', GetParent: 'FileFunc.nsh', GetBaseName: 'FileFunc.nsh',
   GetDrives: 'FileFunc.nsh', GetFileTime: 'FileFunc.nsh', GetFileTimeL: 'FileFunc.nsh', BannerTrimPath: 'FileFunc.nsh',
   Locate: 'FileFunc.nsh', GetWinVer: 'WinVer.nsh', AtLeastWin10: 'WinVer.nsh', AtMostWin10: 'WinVer.nsh',
@@ -154,6 +157,11 @@ export interface CheckOptions {
    * most macro-heavy file in the project. Reading them means a name is accepted only if it is genuinely there.
    */
   companionScripts?: Record<string, string>
+  /**
+   * Names of the `!define`s the header generator emits. Supplying them turns on the "generated but unread" rule.
+   * Left optional so the many small fixtures in the tests do not have to satisfy it.
+   */
+  generatedDefines?: readonly string[]
 }
 
 export function checkNsisScript(text: string, options: CheckOptions = {}): ScriptProblem[] {
@@ -726,6 +734,29 @@ export function checkNsisScript(text: string, options: CheckOptions = {}): Scrip
           }
         }
       }
+    }
+  }
+
+  // ---- a generated define that nothing reads
+  //
+  // generate-installer-script.ts emits a block of `!define`s describing the allowlisted prerequisite:
+  // VCREDIST_URL, VCREDIST_PUBLISHER, VCREDIST_SIZE, ALLOWED_HOST_1..3. The script read only VCREDIST_URL and
+  // VCREDIST_SHA256, so the publisher was generated for a check that was never written and the host allowlist was a
+  // rule enforced only on the TypeScript side -- which the installer does not go through. A define nobody reads is
+  // either dead weight or, as here, the visible half of a promise the script does not keep.
+  //
+  // Scoped to the names the generator emits, read from the generator itself rather than a list kept here: a second
+  // list would drift, which is the same failure this rule is about.
+  if (options.generatedDefines) {
+    const code = strip.join('\n')
+    for (const name of options.generatedDefines) {
+      if (code.includes(`\${${name}}`)) continue
+      problems.push({
+        line: 1,
+        message:
+          `Generated define ${name} is never read by the script. Either the script should use it or the generator ` +
+          'should stop emitting it -- an unused define usually means the feature it describes was never wired up.',
+      })
     }
   }
 

@@ -59,10 +59,20 @@ for (const file of includeFiles) {
     // Reported by the presence check above.
   }
 }
+// The names the header generator emits, read from the generator rather than listed here. A hand-kept list would drift
+// away from the generator, which is the failure this rule exists to catch.
+const generatedDefines = [
+  ...readFileSync('installer/src/generate-installer-script.ts', 'utf8').matchAll(/^!define ([A-Z][A-Z0-9_]*)/gmu),
+].map((match) => match[1]!)
+
 for (const file of scriptFiles) {
   let problems: ScriptProblem[]
   try {
-    problems = checkNsisScript(readFileSync(file, 'utf8'), { companionScripts })
+    // The "generated but unread" rule applies only to the script that consumes generated.nsh, not to the includes.
+    const options = file === 'installer/nsis/installer.nsi'
+      ? { companionScripts, generatedDefines }
+      : { companionScripts }
+    problems = checkNsisScript(readFileSync(file, 'utf8'), options)
   } catch {
     fail(`${file} could not be read.`)
     continue

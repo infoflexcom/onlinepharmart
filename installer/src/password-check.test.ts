@@ -3,7 +3,7 @@ import { createHash, pbkdf2Sync, randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { fileMatchesSha256, runPasswordCheck, verifyPasswordAgainstHash } from './password-check'
+import { fileMatchesSha256, interpretAuthenticode, runPasswordCheck, verifyPasswordAgainstHash } from './password-check'
 import { INSTALLER_PASSWORD_HASH } from './installer-policy'
 
 /**
@@ -22,6 +22,49 @@ function hashOf(password: string): { salt: string; hash: string } {
   const hash = pbkdf2Sync(password, salt, 10_000, 32, 'sha256')
   return { salt: salt.toString('base64url'), hash: hash.toString('base64url') }
 }
+
+// The check the brief requires and the installer never performed: the checksum proves the bytes are the pinned ones,
+// it says nothing about who signed them, and this file is then EXECUTED. Everything here fails closed.
+describe('the Authenticode decision', () => {
+  it('accepts a valid single-line publisher subject', () => {
+    expect(interpretAuthenticode({ exitCode: 0, stdout: 'CN=Microsoft Corporation, O=Microsoft Corporation\r\n' }))
+      .toBe('CN=Microsoft Corporation, O=Microsoft Corporation')
+  })
+
+  it('refuses an unsigned file, which prints nothing', () => {
+    // Get-AuthenticodeSignature prints an empty string for an unsigned file. Treating that as "no publisher to
+    // compare" and carrying on is the exact mistake this check exists to prevent.
+    expect(interpretAuthenticode({ exitCode: 0, stdout: '' })).toBeNull()
+    expect(interpretAuthenticode({ exitCode: 0, stdout: '   \r\n ' })).toBeNull()
+  })
+
+  it('refuses a non-zero exit, which is how PowerShell reports a failure to read the file', () => {
+    expect(interpretAuthenticode({ exitCode: 1, stdout: 'CN=Microsoft Corporation' })).toBeNull()
+  })
+
+  it('refuses when the process never produced an exit code at all', () => {
+    // spawnSync gives status === null on a timeout or a signal. That is not a verification.
+    expect(interpretAuthenticode({ exitCode: null, stdout: 'CN=Microsoft Corporation' })).toBeNull()
+  })
+
+  it('refuses output that is not a single line', () => {
+    // Two subjects, or a warning followed by a subject, is not something to substring-match: the answer is ambiguous
+    // and the safe reading of an ambiguous security answer is no.
+    expect(interpretAuthenticode({ exitCode: 0, stdout: 'CN=A\nCN=B' })).toBeNull()
+  })
+})
+
+describe('the --authenticode argument handling', () => {
+  it('reports bad arguments rather than pretending to verify', () => {
+    expect(runPasswordCheck(['--authenticode']).code).toBe(2)
+    expect(runPasswordCheck(['--authenticode', 'Microsoft Corporation']).code).toBe(2)
+    expect(runPasswordCheck(['--authenticode', 'Microsoft Corporation', '/nonexistent/file.exe']).code).toBe(2)
+  })
+
+  it('mentions the check in its usage text, so a failure is diagnosable', () => {
+    expect(runPasswordCheck(['--authenticode']).message).toContain('--authenticode')
+  })
+})
 
 describe('the installer password checker', () => {
   it('matches the shipped hash with the shipped parameters', () => {

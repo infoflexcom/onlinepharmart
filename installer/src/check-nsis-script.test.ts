@@ -431,6 +431,26 @@ describe('the redefinition rule still catches a genuine duplicate', () => {
     expect(checkNsisScript(script).filter((p) => /prerequisite/u.test(p.message))).toEqual([])
   })
 
+  // The generator emits a block of defines; the script must read them, because a define nobody reads is either dead
+  // weight or the visible half of a promise the script does not keep -- which is what VCREDIST_PUBLISHER and the three
+  // ALLOWED_HOST_* values turned out to be.
+  it('reports a generated define the script never reads', () => {
+    const script = ['OutFile "x.exe"', 'Section', 'SectionEnd'].join('\n')
+    const problems = checkNsisScript(script, { generatedDefines: ['VCREDIST_URL', 'VCREDIST_PUBLISHER'] })
+    expect(problems.map((problem) => problem.message).join('\n')).toMatch(/VCREDIST_PUBLISHER is never read/u)
+  })
+
+  it('accepts a generated define the script reads', () => {
+    const script = ['OutFile "x.exe"', 'Section', '  DetailPrint "${VCREDIST_URL}"', 'SectionEnd'].join('\n')
+    const problems = checkNsisScript(script, { generatedDefines: ['VCREDIST_URL'] })
+    expect(problems.filter((problem) => /never read/u.test(problem.message))).toEqual([])
+  })
+
+  it('does not apply the rule when no generated defines are supplied, so small fixtures stay usable', () => {
+    const script = ['OutFile "x.exe"', 'Section', 'SectionEnd'].join('\n')
+    expect(checkNsisScript(script).filter((problem) => /never read/u.test(problem.message))).toEqual([])
+  })
+
   // electron-builder inserts customInstall AFTER it has copied the payload (installSection.nsh:67 then :82), so a
   // refusal here must undo what has already been done.
   it('reports a refusal inside customInstall that leaves the app half-installed', () => {

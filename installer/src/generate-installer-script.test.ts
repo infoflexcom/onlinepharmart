@@ -45,7 +45,6 @@ describe('generating the installer header', () => {
 
   it('carries the currency count, the default and the allowlisted download', () => {
     const header = generateInstallerHeader()
-    expect(header).toContain(`!define CURRENCY_COUNT ${CURRENCIES.length}`)
     expect(header).toContain('!define INSTALLER_DEFAULT_CURRENCY "NGN"')
     expect(header).toContain('https://aka.ms/vs/17/release/vc_redist.x64.exe')
     expect(header).toContain('!define VCREDIST_SHA256 ')

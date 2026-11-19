@@ -167,4 +167,126 @@ describe('an unpinned digest must not leave a usable install path', () => {
     const afterOfflineArm = missing.slice(missing.indexOf('${EndIf}', missing.indexOf('${INFOPLEX_OFFLINE} == 1')))
     expect(afterOfflineArm).toMatch(/Return/u)
   })
+
+// The signature check existed nowhere. download-allowlist.ts:121 said the read "is done by the NSIS side", the download
+// page told the customer the files were "checked before they are run", and DownloadBrowseClicked's comment claimed
+// "the same checksum and publisher check as a download". Only a SHA-256 comparison ever happened, and a checksum says
+// nothing about who signed the file that is about to be executed.
+describe('the redistributable is signature-checked on every path that can run it', () => {
+  const script = readFileSync('installer/nsis/installer.nsi', 'utf8')
+  const code = script
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith(';'))
+    .join('\n')
+  const fn = (name: string): string => {
+    const start = code.indexOf(`Function ${name}`)
+    if (start === -1) return ''
+    return code.slice(start, code.indexOf('FunctionEnd', start))
+  }
+
+  it('has exactly one implementation, so the three paths cannot disagree', () => {
+    const definitions = [...code.matchAll(/^Function CheckRedistSignature$/gmu)]
+    expect(definitions).toHaveLength(1)
+  })
+
+  it('passes the pinned publisher to the helper, not a value read from the file', () => {
+    // Comparing the file's own signature against itself would verify nothing.
+    expect(fn('CheckRedistSignature')).toContain('--authenticode "${VCREDIST_PUBLISHER}"')
+  })
+
+  it('checks the signature on the download path before the file is accepted', () => {
+    const leave = fn('DownloadPageLeave')
+    const checksum = leave.indexOf('--sha256')
+    const signature = leave.indexOf('Call CheckRedistSignature')
+    expect(signature).toBeGreaterThan(checksum)
+    // And the verified-badge text must not be reachable before the check.
+    expect(leave.indexOf('The file is verified and correctly signed')).toBeGreaterThan(signature)
+  })
+
+  it('checks the signature on the browse path, which never did', () => {
+    const browse = fn('DownloadBrowseClicked')
+    expect(browse.indexOf('--sha256')).toBeGreaterThanOrEqual(0)
+    expect(browse.indexOf('Call CheckRedistSignature')).toBeGreaterThan(browse.indexOf('--sha256'))
+  })
+
+  it('checks the signature immediately before the file is executed', () => {
+    // InstallPrerequisites is the path that actually runs the redistributable. It used to check the digest and nothing
+    // else -- the one unverified path being the one that executes.
+    const prerequisites = fn('InstallPrerequisites')
+    const signature = prerequisites.indexOf('Call CheckRedistSignature')
+    const execute = prerequisites.indexOf('ExecWait')
+    expect(signature).toBeGreaterThanOrEqual(0)
+    expect(signature).toBeLessThan(execute)
+  })
+
+  it('refuses rather than continuing when the signature check fails', () => {
+    for (const name of ['DownloadPageLeave', 'DownloadBrowseClicked', 'InstallPrerequisites']) {
+      const body = fn(name)
+      const check = body.indexOf('Call CheckRedistSignature')
+      expect(check, `${name} does not check the signature`).toBeGreaterThanOrEqual(0)
+      // Something must abort or return after a failed check, not fall through.
+      const after = body.slice(check)
+      expect(after, `${name} ignores a failed signature check`).toMatch(/Abort|Return/u)
+    }
+  })
+
+  it('deletes the file when the signature does not match', () => {
+    // A file that failed verification must not be left on disk for somebody to run by hand.
+    expect(fn('DownloadPageLeave')).toContain('Delete "$PLUGINSDIR\\vc_redist.x64.exe"')
+    expect(fn('InstallPrerequisites')).toContain('Delete "$PLUGINSDIR\\vc_redist.x64.exe"')
+  })
+})
+
+// The allowlist was generated into the script and never read by it: ${ALLOWED_HOST_1..3} came from
+// ALLOWED_DOWNLOAD_HOSTS and NSISdl::download was handed ${VCREDIST_URL} without asking where that was.
+describe('the download host is checked in the installer, not only in TypeScript', () => {
+  const script = readFileSync('installer/nsis/installer.nsi', 'utf8')
+  const code = script
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith(';'))
+    .join('\n')
+  const leave = code.slice(code.indexOf('Function DownloadPageLeave'))
+  const downloadAt = leave.indexOf('NSISdl::download')
+
+  it('reads the generated allowlist defines', () => {
+    for (const host of ['${ALLOWED_HOST_1}', '${ALLOWED_HOST_2}', '${ALLOWED_HOST_3}']) {
+      expect(code, `${host} is generated and never used`).toContain(host)
+    }
+  })
+
+  it('refuses before a socket is opened when the host is not on the list', () => {
+    const firstHostCheck = leave.indexOf('${ALLOWED_HOST_1}')
+    expect(firstHostCheck).toBeGreaterThanOrEqual(0)
+    expect(firstHostCheck).toBeLessThan(downloadAt)
+  })
+
+  it('requires https', () => {
+    const https = leave.indexOf('https://')
+    expect(https).toBeGreaterThanOrEqual(0)
+    expect(https).toBeLessThan(downloadAt)
+  })
+})
+
+// The header carried the vendor's build version and the installer wrote electron-builder's packaging version into
+// install-config.json instead -- so a build made for 2.3.4 recorded 0.1.0. The define existed for exactly this and was
+// read by nothing, which is how the mismatch survived. The existing build-profile-wiring test caught it only when the
+// define was temporarily deleted, which is what made it worth keeping rather than pruning.
+describe('the installer records the version the vendor built for', () => {
+  const script = readFileSync('installer/nsis/installer.nsi', 'utf8')
+  const code = script
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith(';'))
+    .join('\n')
+
+  it('writes INSTALLER_APP_VERSION, not the packaging APP_VERSION, into install-config.json', () => {
+    const line = code.split('\n').find((entry) => entry.includes('appVersion'))
+    expect(line, 'no appVersion is written at all').toBeDefined()
+    expect(line).toContain('${INSTALLER_APP_VERSION}')
+    expect(line).not.toContain('${APP_VERSION}')
+  })
+
+  it('names both versions in the install log, so a support call can tell them apart', () => {
+    expect(code).toContain('Vendor build version: ${INSTALLER_APP_VERSION}')
+  })
+})
 })

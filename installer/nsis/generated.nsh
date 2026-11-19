@@ -11,23 +11,25 @@
 !define INSTALLER_DEFAULT_CURRENCY "NGN"
 ; A locked build shows one currency, read-only; the installer's currency page branches on this.
 !define INSTALLER_CURRENCY_LOCKED 0
-!define INSTALLER_APP_VERSION "0.1.0"
 ; The row the dropdown opens on, and the example the locked page shows, both from the same table the app uses.
 !define INSTALLER_DEFAULT_INDEX 0
+; The vendor's build version, as entered in Build Studio. This is what install-config.json records as appVersion --
+; what the vendor shipped -- and it is NOT electron-builder's packaging version, which is a different value. It was
+; generated and read by nothing until this phase, so the file recorded the packaging version instead.
+!define INSTALLER_APP_VERSION "0.1.0"
 !define CUR_DEFAULT_EXAMPLE "₦1,234,567.50"
 !define INSTALLER_CONFIG_DIR "Infoflex"
 !define INSTALLER_CONFIG_FILE "install-config.json"
 !define MOBILE_PORT 43110
 
+; The three ALLOWED_HOST_* values are not decoration: the installer refuses to download from any other host, and
+; refuses a non-https URL, before NSISdl opens a socket. Until this phase they were generated and read by nothing.
 !define VCREDIST_URL "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 !define VCREDIST_PUBLISHER "Microsoft Corporation"
 !define VCREDIST_SHA256 "0000000000000000000000000000000000000000000000000000000000000000"
-!define VCREDIST_SIZE 25000000
 !define ALLOWED_HOST_1 "aka.ms"
 !define ALLOWED_HOST_2 "download.microsoft.com"
 !define ALLOWED_HOST_3 "download.visualstudio.microsoft.com"
-
-!define CURRENCY_COUNT 54
 
 ; One define per field per currency, indexed 0..53.
 !define CUR_0_CODE "NGN"

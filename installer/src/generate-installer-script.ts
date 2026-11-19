@@ -75,23 +75,25 @@ export function generateInstallerHeader(profile: BuildProfile = defaultBuildProf
 !define INSTALLER_DEFAULT_CURRENCY ${nsisString(defaultCurrency)}
 ; A locked build shows one currency, read-only; the installer's currency page branches on this.
 !define INSTALLER_CURRENCY_LOCKED ${profile.lockCurrency ? 1 : 0}
-!define INSTALLER_APP_VERSION ${nsisString(profile.appVersion)}
 ; The row the dropdown opens on, and the example the locked page shows, both from the same table the app uses.
 !define INSTALLER_DEFAULT_INDEX ${installerDefaultCurrencyIndex(profile, CURRENCIES)}
+; The vendor's build version, as entered in Build Studio. This is what install-config.json records as appVersion --
+; what the vendor shipped -- and it is NOT electron-builder's packaging version, which is a different value. It was
+; generated and read by nothing until this phase, so the file recorded the packaging version instead.
+!define INSTALLER_APP_VERSION ${nsisString(profile.appVersion)}
 !define CUR_DEFAULT_EXAMPLE ${nsisString(currencyExample(defaultCurrencyDefinition))}
 !define INSTALLER_CONFIG_DIR ${nsisString(INSTALL_CONFIG_DIRECTORY)}
 !define INSTALLER_CONFIG_FILE ${nsisString(INSTALL_CONFIG_FILENAME)}
 !define MOBILE_PORT 43110
 
+; The three ALLOWED_HOST_* values are not decoration: the installer refuses to download from any other host, and
+; refuses a non-https URL, before NSISdl opens a socket. Until this phase they were generated and read by nothing.
 !define VCREDIST_URL ${nsisString(component?.url ?? '')}
 !define VCREDIST_PUBLISHER ${nsisString(component?.publisher ?? '')}
 !define VCREDIST_SHA256 ${nsisString(component?.sha256 ?? '')}
-!define VCREDIST_SIZE ${component?.sizeBytes ?? 0}
 !define ALLOWED_HOST_1 ${nsisString(ALLOWED_DOWNLOAD_HOSTS[0] ?? '')}
 !define ALLOWED_HOST_2 ${nsisString(ALLOWED_DOWNLOAD_HOSTS[1] ?? '')}
 !define ALLOWED_HOST_3 ${nsisString(ALLOWED_DOWNLOAD_HOSTS[2] ?? '')}
-
-!define CURRENCY_COUNT ${CURRENCIES.length}${CURRENCIES.length === 0 ? '' : ''}
 
 ; One define per field per currency, indexed 0..${CURRENCIES.length - 1}.
 ${defines}

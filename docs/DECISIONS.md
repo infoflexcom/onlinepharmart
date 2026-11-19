@@ -832,3 +832,87 @@ either way; the rollback's job is to leave a *clean* machine rather than a broke
 release-checklist step asserted the previous version must still work, which is not something this installer can deliver
 — it was a checklist item that could only ever fail. It now checks the thing that genuinely can regress: that the shop's
 currency file survives a failed upgrade.
+
+## The Authenticode check was never implemented, on any path
+
+The brief requires that a downloaded executable have its checksum **and** its Authenticode signature and publisher
+verified before it runs. The installer verified the checksum and nothing else.
+
+The evidence was all present, which is why it survived: `download-allowlist.ts` documents the rule, implements
+`verifySignature` for it, and states at line 121 that reading the signature "is done by the NSIS side". The NSIS side
+did not read it. `VCREDIST_PUBLISHER` was generated into the header for exactly this check and referenced by nothing.
+`DownloadBrowseClicked` carried the comment "held to the same checksum **and publisher** check as a download" and
+performed only `--sha256`. The download page told the customer the files were "checked before they are run".
+
+So the same file was described as signature-checked in four places and was checked in none. This is the same class as the
+install log and the progress bar: the promise is written down, the mechanism is not, and every reader takes the comment
+as proof.
+
+**The fix.** `password-check.exe` gained a third mode:
+
+```
+password-check.exe --authenticode <expectedPublisher> <file>
+```
+
+It runs `Get-AuthenticodeSignature` through PowerShell, refuses unless `Status -eq "Valid"`, prints the signer's
+subject, and exits 0 only when that subject contains the pinned publisher. `interpretAuthenticode` is a separately
+tested decision (mirroring `buildstudio/src/authenticode.ts`, so the vendor's tool and the installer cannot disagree
+about what counts as verified) and fails closed on a non-zero exit, a missing exit code, empty output (an unsigned
+file), and output that is not a single line.
+
+`CheckRedistSignature` wraps it in NSIS and is called from all three paths that can reach the executable:
+
+| path | where the check sits |
+| --- | --- |
+| download | after the checksum passes, before "verified" is shown |
+| browse-for-file | after the checksum, before the file is copied into `$PLUGINSDIR` |
+| the run itself | immediately before `ExecWait` — the line that actually executes it |
+
+Each path re-checks rather than sharing an "already verified" flag. A single flag would have to survive a page the
+customer can leave and return to, and the cost is one process launch on a path that already launches one for the
+checksum. A failed check deletes the file and refuses: on the download paths by stopping the retry loop, on the run path
+by continuing without the runtime (which the app tolerates) rather than executing something unsigned.
+
+**Not proven.** That the PowerShell invocation works on a real Windows machine, that `Get-AuthenticodeSignature`
+resolves on the stripped images the installer may run on, or that Microsoft's signature subject contains the string
+"Microsoft Corporation". The last one is a real risk: the substring match is deliberately loose, but if the subject is
+formatted differently the check fails closed and the runtime is skipped — the installer still works, the prerequisite
+does not. `RELEASE-CHECKLIST.md` carries the step that would show it.
+
+## The host allowlist was generated and never read
+
+`generate-installer-script.ts` emits `${ALLOWED_HOST_1}`..`${ALLOWED_HOST_3}` from `ALLOWED_DOWNLOAD_HOSTS`. The script
+referenced none of them. `NSISdl::download "${VCREDIST_URL}"` was handed whatever URL the header contained.
+
+The TypeScript side is genuinely strict — `resolveDownload` takes an id and never a URL, so a caller cannot express
+"fetch this instead" — but the installer does not go through it. The rule was enforced on the half of the system that
+does not download, and unenforced on the half that does. It is a compile-time constant today, so this was defence in
+depth rather than a live hole; it is also four lines, and the failure it prevents (a future edit or a hand-patched
+`.nsi` sending a customer's machine to an arbitrary host) is precisely the one the brief names.
+
+The download now checks all three hosts and requires `https://`, refusing before `NSISdl` opens a socket.
+`${StrContains}` comes from electron-builder's own header of that name in `templates/nsis/include`, which the
+assisted template already includes for the same purpose.
+
+**A detail worth recording:** `${StrContains}` is a `Function` behind a `!define` macro wrapper, not a LogicLib test, so
+it cannot appear inside `${IfNot}`. The first version did, and the compile check rejected it — which is exactly what
+that check is for.
+
+## Dead generated defines, and the one that was not dead
+
+Six defines were emitted and never read. The new checker rule (fed the names by reading the generator, not by keeping a
+second list) reports any that remain. Three were removed:
+
+- `CURRENCY_COUNT` — the currency list is expanded at generation time, so the count is never needed at runtime.
+- `VCREDIST_SIZE` — was for a progress bar, which cannot exist on that page (see above).
+
+And one was **not** dead weight, which only mutation revealed. `INSTALLER_APP_VERSION` carries the version the vendor
+entered in Build Studio. Deleting it made `build-profile-wiring.test.ts` fail — *"carries the build version into both the
+installer and the app"* — a test that had been passing because the header mentioned the version somewhere, not because
+anything used it. The installer writes `install-config.json`'s `appVersion` from electron-builder's `${APP_VERSION}`, so
+a build made for 2.3.4 recorded 0.1.0 on the customer's machine and in the install log.
+
+That is the quiet sort of bug: the value exists, is validated, is carried into the installer, and is then not the value
+written down. The install-config writer already takes `appVersion` as a parameter and the reader already parses it —
+nothing had ever compared them to what the vendor asked for. The script now writes `${INSTALLER_APP_VERSION}` and logs
+both, so the two can be told apart in a support call.

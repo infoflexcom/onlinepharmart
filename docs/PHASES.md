@@ -980,3 +980,17 @@ the test rather than the Output screen.
   the `Abort`, which is in a called function), then collected called function *names* instead of their bodies, then
   over-reached onto the download page where "Nothing was installed" is true. Each version reported nothing, and only
   mutating the script revealed it.
+- **The Authenticode check was never implemented on any path.** Four places described it (`download-allowlist.ts`'s
+  comment saying the read "is done by the NSIS side", the generated `${VCREDIST_PUBLISHER}`, the browse handler's
+  "same checksum and publisher check", and the download page's own text); nothing performed it. The helper gained
+  `--authenticode`, `interpretAuthenticode` decides the result and fails closed, and `CheckRedistSignature` is called
+  from all three paths — download, browse, and immediately before `ExecWait`. Each re-checks rather than sharing a flag.
+- **The download host allowlist was generated and never read.** `${ALLOWED_HOST_1..3}` came from
+  `ALLOWED_DOWNLOAD_HOSTS` and the script used none of them, so the rule held on the TypeScript side only — which is the
+  half that does not download. The download now refuses any other host and any non-https URL before opening a socket.
+- **`install-config.json` recorded the wrong version.** It wrote electron-builder's `${APP_VERSION}` instead of
+  `${INSTALLER_APP_VERSION}`, the version the vendor built for, so a 2.3.4 build told the machine it was 0.1.0. Found by
+  deleting the "unused" define: the existing build-profile-wiring test then failed, revealing it was never dead weight,
+  only unread.
+- **New checker rule for dead generated defines**, fed its names by reading the generator rather than a hand-kept list.
+  Two genuinely dead defines removed (`CURRENCY_COUNT`, `VCREDIST_SIZE`).

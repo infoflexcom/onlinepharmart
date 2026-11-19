@@ -615,6 +615,23 @@ proves nothing about behaviour. The items below are that missing half, in the or
   running so the payload copy fails, or cancel at the point the wizard reports an error).
   - Expected: the error dialog names `$INSTDIR\install.log` and that file exists afterwards, ending with
     `Result: FAILED`. A log that only appears on success is useless, because the failures are when it is read.
+- [ ] **Confirm the runtime download is SIGNATURE-checked, not just checksum-checked.** Uninstall the VC++ runtime and
+  run the online installer with the network on.
+  - Expected on success: the status line ends *"The file is verified and correctly signed."* — the words "and correctly
+    signed" are new in this phase; if you see only "The file is verified.", the signature check was skipped.
+  - Then force a failure: temporarily point `VCREDIST_URL` at a file that hashes correctly but is unsigned, or rebuild
+    with a wrong `publisher` in `download-allowlist.ts`. The installer must delete the file and say it is not signed by
+    *Microsoft Corporation*, and must **not** run it. Check with `where /r %TEMP% vc_redist.x64.exe` that nothing is left.
+  - This is the step that proves the PowerShell invocation works on a real machine. If `Get-AuthenticodeSignature` is
+    unavailable or blocked by policy, the check fails closed and the runtime is skipped — the install should still
+    complete, so also confirm the app installs and runs without it.
+- [ ] **Confirm the download refuses a non-Microsoft host.** Rebuild with `VCREDIST_URL` pointing at any other host (for
+  example `https://example.com/vc_redist.x64.exe`), run the online installer with the runtime missing.
+  - Expected: nothing is downloaded, and the status line says the address is not an approved Microsoft address.
+    Previously the URL was fetched without the installer consulting the allowlist at all.
+- [ ] **Confirm the recorded version is the one that was built.** Install a build whose Build Studio profile says
+  `2.3.4`, then read `%ProgramData%\Infoflex\install-config.json`: `appVersion` must be **2.3.4**, not the
+  electron-builder packaging version. The install log's `Vendor build version:` line must agree.
 - [ ] **Confirm the offline build's missing-runtime refusal leaves no trace.** Build an offline installer without the
   bundled runtime (or rename it out of the payload), run it on a clean VM and let it reach the refusal.
   - Expected: the message says the app **will be removed again** — not "nothing was installed".
