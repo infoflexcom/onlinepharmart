@@ -134,8 +134,15 @@ function main(): void {
     collected.push({ file: to, bytes: statSync(to).size, sha256: sha256(to) })
   }
 
+  // The paths are relative to the repository root, not to release/, so the file is verified with
+  // `sha256sum -c release/SHA256SUMS.txt` from the root. A header line says so, because the obvious guess --
+  // changing into release/ and running `sha256sum -c SHA256SUMS.txt` -- fails on every entry, and a checksum file
+  // that appears broken is a checksum file nobody checks.
+  const header = '# Verify from the repository root: sha256sum -c release/SHA256SUMS.txt\n'
+    + '# On Windows: certutil -hashfile <file> SHA256, for each file below.\n'
+    + '# Paths are relative to the repository root.\n'
   const sums = collected.map((entry) => `${entry.sha256}  ${entry.file}`).join('\n')
-  writeFileSync(join(RELEASE, 'SHA256SUMS.txt'), `${sums}\n`, 'utf8')
+  writeFileSync(join(RELEASE, 'SHA256SUMS.txt'), `${header}${sums}\n`, 'utf8')
 
   const manifest = {
     format: 'infoflex-release-manifest',

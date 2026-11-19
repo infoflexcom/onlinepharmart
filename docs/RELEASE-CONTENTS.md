@@ -32,7 +32,7 @@ documented in `docs/RELEASE-CHECKLIST.md`.
 
 | Path | What it is |
 | --- | --- |
-| `release/SHA256SUMS.txt` | SHA-256 of every file listed below. Verify with `sha256sum -c` (Linux/macOS) or `certutil -hashfile <file> SHA256` (Windows). |
+| `release/SHA256SUMS.txt` | SHA-256 of every file listed below. The paths are relative to the repository root, so verify with `sha256sum -c release/SHA256SUMS.txt` **from the root** — running it from inside `release/` fails on every entry. On Windows, `certutil -hashfile <file> SHA256` per file. |
 | `release/MANIFEST.json` | Every deliverable, whether it is present, the commit it came from, and the reason for each absence. |
 | `release/installer-sources/` | The six NSIS files the installer is compiled from — `installer.nsi`, the two generated includes, `json-escaping.nsh`, the offline wrapper and the build profile. Copying these onto a Windows machine is enough to rebuild the installers without the rest of the repository. |
 | `tools/build-studio-bundle/` | The compiled Build Studio (`main.js`, `preload.js`, `ui.js`, `index.html`, `policy.html`) — everything `npm run dist:studio` would wrap into the `.exe`. On a Windows PC with Node installed, `npx electron tools/build-studio-bundle/main.js` runs the tool *without* packaging it. |

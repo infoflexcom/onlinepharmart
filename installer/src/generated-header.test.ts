@@ -159,3 +159,26 @@ describe('generated.nsh', () => {
     expect(suspicious, `unexpected control characters: ${JSON.stringify(suspicious)}`).toEqual([])
   })
 })
+
+describe('the silent /CURRENCY check covers the whole catalogue', () => {
+  it('has a validation branch for every currency the app knows', async () => {
+    // The bug this pins: the silent install path validated /CURRENCY= against a hand-written list of nine currencies
+    // while the app knows 54. `Infoflex Setup.exe /S /CURRENCY=UGX` aborted with "not a built-in currency" for a
+    // currency the app supports in full. Generating one branch per catalogue entry is what makes that impossible.
+    const { CURRENCIES } = await import('../../src/currency/catalog')
+    const header = generateInstallerHeader()
+    const macro = /!macro ValidateCurrencyCode([\s\S]*?)!macroend/u.exec(header)
+    expect(macro, 'the generated header has no ValidateCurrencyCode macro').not.toBeNull()
+
+    const found = [...macro![1]!.matchAll(/\$\{If\} \$0 == "([A-Z]{3})"/gu)].map((match) => match[1])
+    expect(found.length, 'the silent check covers only some currencies').toBe(CURRENCIES.length)
+    for (const currency of CURRENCIES) {
+      expect(found, `${currency.code} would be rejected by a silent install`).toContain(currency.code)
+    }
+  })
+
+  it('leaves the code empty on no match, so the caller can abort with a reason', () => {
+    const header = generateInstallerHeader()
+    expect(header).toMatch(/!macro ValidateCurrencyCode\s+StrCpy \$3 ""/u)
+  })
+})

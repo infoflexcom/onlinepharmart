@@ -95,6 +95,25 @@ export function generateInstallerHeader(profile: BuildProfile = defaultBuildProf
 
 ; One define per field per currency, indexed 0..${CURRENCIES.length - 1}.
 ${defines}
+
+; ==========================================================================================
+; ValidateCurrencyCode — used by silent installs to check a /CURRENCY= argument.
+;
+; Takes the code in $0. On a match, leaves the canonical code in $3 and its index in $2.
+; On no match, leaves $3 empty so the caller can abort with a reason.
+;
+; This is GENERATED rather than hand-written on purpose. The first version of the silent check was a hand-written
+; chain of nine ${'${If}'}s for nine popular currencies, so \`/CURRENCY=UGX\` -- a currency the app knows in full --
+; aborted a legitimate install. Generating one branch per catalogue entry means the silent path and the wizard's
+; dropdown can never disagree.
+; ==========================================================================================
+!macro ValidateCurrencyCode
+  StrCpy $3 ""
+${CURRENCIES.map((currency, index) => `  \${If} $0 == ${nsisString(currency.code)}
+    StrCpy $2 "${index}"
+    StrCpy $3 ${nsisString(currency.code)}
+  \${EndIf}`).join('\n')}
+!macroend
 `
 }
 

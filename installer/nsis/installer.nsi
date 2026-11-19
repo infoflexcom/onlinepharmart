@@ -209,27 +209,12 @@ Function .onInit
       ${EndIf}
       ; Validate against the generated table. A typo must fail the install with a reason, never silently
       ; install a shop in the wrong money.
-      StrCpy $2 "0"
-      StrCpy $3 ""
-      ${If} $1 == "NGN"
-        StrCpy $3 "NGN"
-      ${ElseIf} $1 == "USD"
-        StrCpy $3 "USD"
-      ${ElseIf} $1 == "EUR"
-        StrCpy $3 "EUR"
-      ${ElseIf} $1 == "GBP"
-        StrCpy $3 "GBP"
-      ${ElseIf} $1 == "GHS"
-        StrCpy $3 "GHS"
-      ${ElseIf} $1 == "KES"
-        StrCpy $3 "KES"
-      ${ElseIf} $1 == "ZAR"
-        StrCpy $3 "ZAR"
-      ${ElseIf} $1 == "JPY"
-        StrCpy $3 "JPY"
-      ${ElseIf} $1 == "KWD"
-        StrCpy $3 "KWD"
-      ${EndIf}
+      ;
+      ; The check is a generated macro, one branch per currency in the app's catalogue, so it cannot drift from the
+      ; wizard's dropdown. It used to be a hand-written chain of nine ${If}s for nine popular currencies, which
+      ; rejected `/CURRENCY=UGX` -- a currency the app supports in full -- and aborted a legitimate install.
+      StrCpy $0 $1
+      !insertmacro ValidateCurrencyCode
       ${If} $3 == ""
         MessageBox MB_ICONSTOP|MB_OK "/CURRENCY=$1 is not a built-in currency. Use an ISO code from the installer's list, for example /CURRENCY=GHS."
         SetErrorLevel 2

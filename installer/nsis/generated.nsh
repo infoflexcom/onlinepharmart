@@ -462,3 +462,234 @@
 !define CUR_53_THOUSANDS ","
 !define CUR_53_DECIMAL "."
 !define CUR_53_EXAMPLE "$$1,234,567.50"
+
+; ==========================================================================================
+; ValidateCurrencyCode — used by silent installs to check a /CURRENCY= argument.
+;
+; Takes the code in $0. On a match, leaves the canonical code in $3 and its index in $2.
+; On no match, leaves $3 empty so the caller can abort with a reason.
+;
+; This is GENERATED rather than hand-written on purpose. The first version of the silent check was a hand-written
+; chain of nine ${If}s for nine popular currencies, so `/CURRENCY=UGX` -- a currency the app knows in full --
+; aborted a legitimate install. Generating one branch per catalogue entry means the silent path and the wizard's
+; dropdown can never disagree.
+; ==========================================================================================
+!macro ValidateCurrencyCode
+  StrCpy $3 ""
+  ${If} $0 == "NGN"
+    StrCpy $2 "0"
+    StrCpy $3 "NGN"
+  ${EndIf}
+  ${If} $0 == "USD"
+    StrCpy $2 "1"
+    StrCpy $3 "USD"
+  ${EndIf}
+  ${If} $0 == "EUR"
+    StrCpy $2 "2"
+    StrCpy $3 "EUR"
+  ${EndIf}
+  ${If} $0 == "GBP"
+    StrCpy $2 "3"
+    StrCpy $3 "GBP"
+  ${EndIf}
+  ${If} $0 == "GHS"
+    StrCpy $2 "4"
+    StrCpy $3 "GHS"
+  ${EndIf}
+  ${If} $0 == "KES"
+    StrCpy $2 "5"
+    StrCpy $3 "KES"
+  ${EndIf}
+  ${If} $0 == "ZAR"
+    StrCpy $2 "6"
+    StrCpy $3 "ZAR"
+  ${EndIf}
+  ${If} $0 == "XOF"
+    StrCpy $2 "7"
+    StrCpy $3 "XOF"
+  ${EndIf}
+  ${If} $0 == "XAF"
+    StrCpy $2 "8"
+    StrCpy $3 "XAF"
+  ${EndIf}
+  ${If} $0 == "UGX"
+    StrCpy $2 "9"
+    StrCpy $3 "UGX"
+  ${EndIf}
+  ${If} $0 == "TZS"
+    StrCpy $2 "10"
+    StrCpy $3 "TZS"
+  ${EndIf}
+  ${If} $0 == "RWF"
+    StrCpy $2 "11"
+    StrCpy $3 "RWF"
+  ${EndIf}
+  ${If} $0 == "ETB"
+    StrCpy $2 "12"
+    StrCpy $3 "ETB"
+  ${EndIf}
+  ${If} $0 == "EGP"
+    StrCpy $2 "13"
+    StrCpy $3 "EGP"
+  ${EndIf}
+  ${If} $0 == "MAD"
+    StrCpy $2 "14"
+    StrCpy $3 "MAD"
+  ${EndIf}
+  ${If} $0 == "TND"
+    StrCpy $2 "15"
+    StrCpy $3 "TND"
+  ${EndIf}
+  ${If} $0 == "DZD"
+    StrCpy $2 "16"
+    StrCpy $3 "DZD"
+  ${EndIf}
+  ${If} $0 == "ZMW"
+    StrCpy $2 "17"
+    StrCpy $3 "ZMW"
+  ${EndIf}
+  ${If} $0 == "MWK"
+    StrCpy $2 "18"
+    StrCpy $3 "MWK"
+  ${EndIf}
+  ${If} $0 == "BWP"
+    StrCpy $2 "19"
+    StrCpy $3 "BWP"
+  ${EndIf}
+  ${If} $0 == "NAD"
+    StrCpy $2 "20"
+    StrCpy $3 "NAD"
+  ${EndIf}
+  ${If} $0 == "MZN"
+    StrCpy $2 "21"
+    StrCpy $3 "MZN"
+  ${EndIf}
+  ${If} $0 == "AOA"
+    StrCpy $2 "22"
+    StrCpy $3 "AOA"
+  ${EndIf}
+  ${If} $0 == "GMD"
+    StrCpy $2 "23"
+    StrCpy $3 "GMD"
+  ${EndIf}
+  ${If} $0 == "SLE"
+    StrCpy $2 "24"
+    StrCpy $3 "SLE"
+  ${EndIf}
+  ${If} $0 == "LRD"
+    StrCpy $2 "25"
+    StrCpy $3 "LRD"
+  ${EndIf}
+  ${If} $0 == "CDF"
+    StrCpy $2 "26"
+    StrCpy $3 "CDF"
+  ${EndIf}
+  ${If} $0 == "SDG"
+    StrCpy $2 "27"
+    StrCpy $3 "SDG"
+  ${EndIf}
+  ${If} $0 == "SSP"
+    StrCpy $2 "28"
+    StrCpy $3 "SSP"
+  ${EndIf}
+  ${If} $0 == "CAD"
+    StrCpy $2 "29"
+    StrCpy $3 "CAD"
+  ${EndIf}
+  ${If} $0 == "AUD"
+    StrCpy $2 "30"
+    StrCpy $3 "AUD"
+  ${EndIf}
+  ${If} $0 == "NZD"
+    StrCpy $2 "31"
+    StrCpy $3 "NZD"
+  ${EndIf}
+  ${If} $0 == "INR"
+    StrCpy $2 "32"
+    StrCpy $3 "INR"
+  ${EndIf}
+  ${If} $0 == "PKR"
+    StrCpy $2 "33"
+    StrCpy $3 "PKR"
+  ${EndIf}
+  ${If} $0 == "BDT"
+    StrCpy $2 "34"
+    StrCpy $3 "BDT"
+  ${EndIf}
+  ${If} $0 == "LKR"
+    StrCpy $2 "35"
+    StrCpy $3 "LKR"
+  ${EndIf}
+  ${If} $0 == "AED"
+    StrCpy $2 "36"
+    StrCpy $3 "AED"
+  ${EndIf}
+  ${If} $0 == "SAR"
+    StrCpy $2 "37"
+    StrCpy $3 "SAR"
+  ${EndIf}
+  ${If} $0 == "QAR"
+    StrCpy $2 "38"
+    StrCpy $3 "QAR"
+  ${EndIf}
+  ${If} $0 == "KWD"
+    StrCpy $2 "39"
+    StrCpy $3 "KWD"
+  ${EndIf}
+  ${If} $0 == "BHD"
+    StrCpy $2 "40"
+    StrCpy $3 "BHD"
+  ${EndIf}
+  ${If} $0 == "OMR"
+    StrCpy $2 "41"
+    StrCpy $3 "OMR"
+  ${EndIf}
+  ${If} $0 == "JOD"
+    StrCpy $2 "42"
+    StrCpy $3 "JOD"
+  ${EndIf}
+  ${If} $0 == "TRY"
+    StrCpy $2 "43"
+    StrCpy $3 "TRY"
+  ${EndIf}
+  ${If} $0 == "CNY"
+    StrCpy $2 "44"
+    StrCpy $3 "CNY"
+  ${EndIf}
+  ${If} $0 == "JPY"
+    StrCpy $2 "45"
+    StrCpy $3 "JPY"
+  ${EndIf}
+  ${If} $0 == "KRW"
+    StrCpy $2 "46"
+    StrCpy $3 "KRW"
+  ${EndIf}
+  ${If} $0 == "SGD"
+    StrCpy $2 "47"
+    StrCpy $3 "SGD"
+  ${EndIf}
+  ${If} $0 == "MYR"
+    StrCpy $2 "48"
+    StrCpy $3 "MYR"
+  ${EndIf}
+  ${If} $0 == "IDR"
+    StrCpy $2 "49"
+    StrCpy $3 "IDR"
+  ${EndIf}
+  ${If} $0 == "PHP"
+    StrCpy $2 "50"
+    StrCpy $3 "PHP"
+  ${EndIf}
+  ${If} $0 == "THB"
+    StrCpy $2 "51"
+    StrCpy $3 "THB"
+  ${EndIf}
+  ${If} $0 == "BRL"
+    StrCpy $2 "52"
+    StrCpy $3 "BRL"
+  ${EndIf}
+  ${If} $0 == "MXN"
+    StrCpy $2 "53"
+    StrCpy $3 "MXN"
+  ${EndIf}
+!macroend
