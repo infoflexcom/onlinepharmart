@@ -94,6 +94,15 @@ Var /GLOBAL launchLink
 ; ==========================================================================================
 !include "installer.nsi"
 
+; installer.nsi disables three warnings by number, because electron-builder builds with -WX and any warning is fatal
+; there. That is right for the real build and blind for this harness: warning 6010 is the only signal NSIS gives that it
+; threw a function body away, and silence on a page function is exactly how four custom pages went missing unnoticed.
+;
+; So the harness turns 6010 back on. The compile driver passes -WX, which makes any OTHER warning fatal, and re-enables
+; nothing else. 6020 (no WriteUninstaller in this harness) and 6001 (template-owned variables) stay suppressed: they
+; are artefacts of compiling a fragment rather than the whole installer, and neither can hide a missing page.
+!pragma warning enable 6010
+
 ; ---- pages -----------------------------------------------------------------------------------------------
 ;
 ; These mirror electron-builder's insertion points exactly (assistedInstaller.nsh lines 9, 43 and 48), and the hooks

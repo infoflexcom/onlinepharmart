@@ -830,6 +830,17 @@ the test rather than the Output screen.
 - **`ChangeUI` still cannot be restored**, and the docs now say why: with real stubs in place, `ChangeUI all` fails
   with `Can't find IDD_LICENSE (102) in the custom UI` because it edits dialog resources, which needs a Windows
   resource compiler. That is a genuine limit, not a missing stub.
-- **Still not proven:** the `.exe` has never been executed. There is no Windows and no Wine here. The shippable
+- **The check was weaker than the real build: `-WX` was missing.** electron-builder passes "warnings as errors", so a
+  single warning stops `npm run build` — and the compile check did not, meaning both builds passed here while the real
+  build would have failed. `installer.nsi` now suppresses the three codes it provokes on purpose, by number, so every
+  other warning stays fatal; the check passes `-WX`; and the harness re-enables 6010 so a discarded function body is
+  still reported. Five tests pin it.
+- **The hook contract is checked against electron-builder's own template**, not against our belief about it. Every hook
+  sits behind `!ifmacrodef`, so a misspelled macro name is silently skipped and the installer builds without the
+  password page. Six tests read the template from `node_modules`: no orphan macros, every relied-on hook still present,
+  page order preserved, and `customInstall`/`customUnInstall` still on the right side of the payload copy and the file
+  delete.
+- **Still not proven:** the real `npm run build` cannot run here (electron-builder downloads its NSIS from GitHub and
+  needs plugin DLLs this sandbox lacks), so the template is read rather than executed. And the `.exe` has never been executed. There is no Windows and no Wine here. The shippable
   installer still comes from `npm run build` on a Windows machine with the NSIS target, and the manual checklist in
   `RELEASE-CHECKLIST.md` is still the only thing that will tell us the pages behave.

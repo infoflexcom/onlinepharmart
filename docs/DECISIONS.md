@@ -251,9 +251,27 @@ could not have been built at all had anyone run the build:
   placeholder. They are commented out in a private copy of the NSIS tree with a marker at each site; nothing in the
   repository is touched. Re-tested with the real stubs: restoring `ChangeUI` still fails with
   `Can't find IDD_LICENSE (102) in the custom UI`, so the patch is not a stand-in for a missing stub.
+- **The build was missing electron-builder's `-WX`, so the check was easier than the real thing.** electron-builder runs
+  makensis with "warnings as errors" unless the config says otherwise, and this project does not say otherwise. The
+  compile check did not pass `-WX`, so both builds passed here while `npm run build` would have stopped on the first
+  warning. That is the worst shape of a check: it agrees with the harness and not with the build it stands in for. The
+  check now passes `-WX`, and `installer.nsi` disables the three codes it provokes on purpose — 6020 (this file is an
+  `include`; the template calls `WriteUninstaller`), 6010 (documented per-build omissions) and 6001 (variables the
+  template owns) — **by number, never `disable all`**, so any other warning is still fatal. The harness then re-enables
+  6010, because that warning is the only signal NSIS gives that it discarded a function body, and silence there is how
+  four custom pages went missing once already. A test pins all four of those facts.
+- **The hooks now match electron-builder's real template, read from `node_modules`.** Every hook is inserted behind
+  `!ifmacrodef`, so a misspelled macro name is not an error — the hook is skipped, the installer builds, and the
+  password page or the currency write simply never happens, with nothing in any log to say so. The harness cannot catch
+  that by construction: it defines the same macros, so if both are wrong both agree.
+  `installer/src/electron-builder-template.test.ts` therefore checks against the shipped template itself: every macro we define is one the template calls (catching a
+  typo on our side), every hook we rely on still exists, the four page hooks keep their page order, `customInstall` still
+  runs after the payload and shortcuts, and `customUnInstall` still runs before the files are deleted. Renaming
+  `customInstall` to `customInstal` now fails two tests by name.
 - **What this still does not prove, and the docs say so.** It produces a real `.exe`, and it still does not prove
   electron-builder's template agrees with us — page order, where `customInstall` runs, whether the payload lands in the
   right place. It does not prove anything runs correctly on Windows: the file has never been executed, because there
-  is no Windows and no Wine here. The full electron-builder build (`npm run build` with the NSIS target) is the only
-  thing that will produce the shippable installer, and that needs a Windows machine. `installer:check` no longer
+  is no Windows and no Wine here. The real `npm run build` still cannot run here — electron-builder downloads its own
+  NSIS distribution from GitHub at build time, and the plugin DLLs it needs do not exist in this sandbox — so the
+  hook contract is checked by reading its template rather than by running it. `installer:check` no longer
   claims that compiling "needs Windows or Wine", because that stopped being true.

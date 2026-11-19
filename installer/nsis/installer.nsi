@@ -50,6 +50,29 @@ Unicode true
 !include "generated.nsh"
 !include "currency-ui.nsh"
 
+; ------------------------------------------------------------------ warnings that are deliberate
+;
+; electron-builder runs makensis with -WX by default (`warningsAsErrors: false` is the only way to turn it off), so a
+; single warning fails `npm run build` on the vendor's machine. The compiler check does not pass -WX, which is why this
+; went unnoticed: the harness built cleanly while the real build would have stopped.
+;
+; Each code below is one this script provokes on purpose. They are disabled by number rather than by turning -WX off,
+; so every OTHER warning -- including ones written after this file -- is still fatal, which is the point of -WX.
+;
+;   6020  "Uninstaller script code found but WriteUninstaller never used". This file is an `include`: it defines
+;         uninstall-time functions and the `customUnInstall` macro, and electron-builder's template, not this file,
+;         calls WriteUninstaller. Warning appears in the harness only.
+;   6010  "function not referenced - zeroing code". The currency page's default-loader is referenced only by the
+;         currency-locked build, and the download page exists only in the online build. `npm run installer:compile`
+;         holds each build to the exact list of functions it may drop, so this is a known omission, not a silent one.
+;   6001  "Variable not referenced or never set". Several variables are set by the template or read only on one branch
+;         (for example $appExe and $launchLink are the template's own).
+;
+; Written as separate pragmas rather than `disable all`, which would also silence the warnings that matter.
+!pragma warning disable 6020
+!pragma warning disable 6010
+!pragma warning disable 6001
+
 ; ------------------------------------------------------------------ compile-time configuration
 ;
 ; electron-builder's template defines PRODUCT_NAME, APP_VERSION, PRODUCT_FILENAME and the icon bitmaps before

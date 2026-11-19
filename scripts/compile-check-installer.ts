@@ -325,6 +325,11 @@ function compile(label: string, defines: string[]): Result {
       // -V2 is not cosmetic: without it makensis prints errors and still exits 0, so execFileSync never throws and a
       // compile failure looks like success. This is the difference between a check and a decoration.
       '-V2',
+      // -WX is what electron-builder actually passes, and it was missing here for a whole phase. Without it this check
+      // built cleanly while the real `npm run build` would have stopped on the first warning -- the harness agreeing
+      // with itself rather than with the build it is supposed to stand in for. Any warning is now fatal, exactly as on
+      // the vendor's machine, so the warning suppressions in installer.nsi are exercised rather than assumed.
+      '-WX',
       '-INPUTCHARSET', 'UTF8',
       `-DHARNESS_OUTFILE=${expected}`,
       '-X!addincludedir ' + join(root, 'installer/nsis'),

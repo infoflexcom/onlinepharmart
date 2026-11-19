@@ -97,6 +97,10 @@ Each of these is now covered by a test that fails if the defect returns.
 - The doc-accuracy tests, which verify every file path mentioned in the documentation actually exists.
 - `npm run release:scan` — with deliberately planted leaks to prove it detects them, then clean on the tree.
 - `npm run installer:check` — 19 shipped installer files, static analysis only.
+- **The build's own `-WX` flag and electron-builder's NSIS template are now checked**, not assumed. The compile check
+  originally omitted `-WX`, so it passed where the real build would have failed; it now passes it, `installer.nsi`
+  suppresses only the three warning codes it provokes deliberately, and eleven tests pin that plus the hook contract
+  against the template electron-builder actually ships.
 - `npm run installer:compile` — **a real makensis, built from NSIS source in this sandbox, producing a real installer
   for both the online and the offline build.** Not a parse: the stubs are cross-compiled from NSIS's own sources with
   Zig, so makensis writes a complete 111 KB i386 executable, and the check verifies the result from its own PE header
