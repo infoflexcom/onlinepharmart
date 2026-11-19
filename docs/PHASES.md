@@ -1043,3 +1043,30 @@ a downloader and a signer rather than producing a genuinely mis-signed file. The
 `npm run release:prerequisite` on a networked machine is the first time that path meets Microsoft's actual bytes;
 `docs/RELEASE-CHECKLIST.md` now asks for the digest and version to be written in by hand and compared against
 `certutil` output on a real PC, so that first run is verified by a person, not assumed.
+
+## Phase 15 (continued) — a real digest is not the same as the right file
+
+The gate added above proves the pinned digest is not the all-zeros placeholder. It says nothing about the bytes sitting
+in `installer/cache/`, and those two facts come apart in ordinary ways: a cache left over from the previous release, a
+file swapped while testing something, a fetch interrupted after the profile was written. In every one of those cases the
+offline installer bundles bytes that its own `${VCREDIST_SHA256}` check refuses — so the release succeeds here and the
+customer's install fails there, which is the worst place for a checksum to discover a mistake.
+
+`verifyCachedPrerequisite` closes it. It re-reads the file the release is about to bundle and compares its size, its
+SHA-256 **and** its signature against the pin, throwing a sentence that names the fix rather than a stack trace.
+`release:assemble` calls it after the pin check; `release:prerequisite -- --check` calls it too, so the check a build box
+runs is the same one.
+
+**Why it re-reads rather than trusting the fetch.** A fetch that trusts its own earlier result is not a check. The pin in
+the profile is a claim about a file; this is the comparison that makes it true at the moment it matters.
+
+**Why the signature is re-read when the digest already matched.** A matching digest proves the bytes are the ones that
+were hashed. It proves nothing about who made them. A pin recorded on a machine where the signature check was skipped
+would otherwise be trusted forever, which is exactly the kind of one-time gap that survives every later release.
+
+**What is proven.** Executed by hand against the real script, each with the plain-English message recorded: a matching
+cache (passes and prints the signer), a stale cache with the same length and different bytes (refuses, showing both
+digests), a wrong-size file (refuses before hashing), a missing file (refuses and names the missing path), and a file
+with no valid signature (refuses). Both mutations of the new function — disabling the digest comparison, and disabling
+the signature comparison — were caught by the tests that exist for them. Still not proven: none of these ran against a
+real Microsoft binary, for the same reasons as the section above.

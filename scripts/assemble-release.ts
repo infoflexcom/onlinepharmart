@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { assertReleasePin, isDigestPinned, UNPINNED_SHA256 } from '../installer/src/prerequisite-release'
+import { assertReleasePin, UNPINNED_SHA256, verifyCachedPrerequisite } from '../installer/src/prerequisite-release'
 import { BUILD_PROFILE_FILENAME, parseBuildProfile } from '../installer/src/build-profile'
 
 /**
@@ -163,6 +163,10 @@ function main(): void {
     // as if it were the release refusing -- a crash dressed as a decision.
     if (pin) {
       assertReleasePin(pin.sha256)
+      // The pin is real; now prove the FILE is the one it describes. A release folder is copied to a USB stick, and an
+      // offline installer bundling a stale cache would refuse its own payload on the customer's machine.
+      const verified = verifyCachedPrerequisite({ pin })
+      console.log(`Prerequisite verified on disk: ${verified.sha256.slice(0, 16)}..., signed by ${verified.signerSubject}.`)
       prerequisite = { sha256: pin.sha256, microsoftVersion: pin.microsoftVersion, sizeBytes: pin.sizeBytes, url: pin.url, fetchedAt: pin.fetchedAt }
     }
   } catch (error) {

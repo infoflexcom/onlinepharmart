@@ -271,6 +271,74 @@ function shellReadSigner(path: string): string | null {
 }
 
 /** What a release writes down about the prerequisite, for `release/` and the checklist. */
+/**
+ * The gate that closes the gap between "the pin is real" and "the file is the pinned one".
+ *
+ * `assertReleasePin` proves the digest is not the placeholder. It says nothing about the bytes in `installer/cache/`,
+ * and those two facts come apart in ways that are easy to reach in practice:
+ *
+ *   - the cache directory survived from a previous release, so the file on disk is an older Microsoft build while the
+ *     profile carries a newer digest;
+ *   - somebody replaced the file to test something and forgot to remove it;
+ *   - the fetch was interrupted after the profile was written.
+ *
+ * In every one of those cases the offline installer would bundle bytes whose own `${VCREDIST_SHA256}` check refuses
+ * them at install time -- the installer failing on the customer's machine over a mistake made on the build machine. So
+ * the release re-reads the file it is about to bundle and compares its digest, size and signature with the pin.
+ *
+ * This is the release half of the rule the installer already enforces on the customer's machine: verify before use. It
+ * is deliberately a separate function from the fetch, because a fetch that trusts its own earlier result is not a check.
+ */
+export function verifyCachedPrerequisite(options: {
+  directory?: string
+  pin: { sha256: string; sizeBytes: number }
+  readSigner?: (path: string) => string | null
+}): { path: string; sha256: string; sizeBytes: number; signerSubject: string } {
+  const directory = options.directory ?? defaultPrerequisiteDirectory()
+  const path = join(directory, 'vc_redist.x64.exe')
+  const readSigner = options.readSigner ?? shellReadSigner
+
+  if (!existsSync(path)) {
+    throw new Error(
+      `The pinned prerequisite is not in the cache: ${path} does not exist. The profile says this build pins ` +
+        `${options.pin.sha256.slice(0, 16)}..., but the file it describes is missing, so the offline installer would ` +
+        'carry no runtime at all. Run `npm run release:prerequisite` to fetch and verify it again.',
+    )
+  }
+
+  const bytes = readFileSync(path)
+  if (bytes.byteLength !== options.pin.sizeBytes) {
+    throw new Error(
+      `The cached prerequisite is ${bytes.byteLength.toLocaleString('en-GB')} bytes but the pin says ` +
+        `${options.pin.sizeBytes.toLocaleString('en-GB')}. This is the wrong file -- most likely a leftover from a ` +
+        'previous release. Delete it and run `npm run release:prerequisite` to fetch the pinned one.',
+    )
+  }
+
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  if (sha256 !== options.pin.sha256) {
+    throw new Error(
+      `The cached prerequisite does not match the pinned SHA-256.\n\n  pinned:   ${options.pin.sha256}\n  on disk:  ` +
+        `${sha256}\n\nThe offline installer would bundle a file its own checksum refuses at install time -- it would ` +
+        'fail on the customer\'s machine instead of here. Delete installer/cache and run `npm run release:prerequisite`.',
+    )
+  }
+
+  // Re-read the signature as well. A digest match proves the bytes are the ones hashed; it does not prove they carry
+  // Microsoft's signature, and a pin written on a machine where the check was skipped would otherwise be trusted
+  // forever after. Cheap, so it is done on every release rather than once.
+  const signer = readSigner(path)
+  const publisher = releaseComponent().publisher
+  if (signer === null || !signer.includes(publisher)) {
+    throw new Error(
+      `The cached prerequisite does not carry a valid signature from ${publisher}, so it cannot be bundled. ` +
+        'Delete installer/cache and run `npm run release:prerequisite` to fetch it again from Microsoft.',
+    )
+  }
+
+  return { path, sha256, sizeBytes: bytes.byteLength, signerSubject: signer }
+}
+
 export interface PrerequisiteRecord {
   component: string
   url: string
@@ -307,3 +375,14 @@ export function pinnedComponent(fetched: FetchedPrerequisite): AllowlistedCompon
 
 /** The environment variable the offline build reads to know where the file is. Named to match the NSIS define. */
 export const PREREQUISITE_PATH_ENV = 'INFOFLEX_PREREQUISITE_VCREDIST'
+
+/**
+ * The real signature reader, for callers that need to re-verify a file rather than fetch one.
+ *
+ * Returns the signer's subject when the signature is valid AND the publisher matches the allowlist, and `null`
+ * otherwise. `null` is the only failure value: a caller that confuses "no signature" with "could not read" would treat
+ * an unreadable file as safe.
+ */
+export function readSignerSubject(path: string): string | null {
+  return shellReadSigner(path)
+}

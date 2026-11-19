@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import {
   assertReleasePin, fetchPrerequisite, fileVersionFromWindowsResource, isDigestPinned, pinnedComponent,
-  prerequisiteRecord, UNPINNED_SHA256,
+  prerequisiteRecord, UNPINNED_SHA256, verifyCachedPrerequisite,
 } from './prerequisite-release'
 import { componentForProfile, generateInstallerHeader, generatePrerequisiteInclude } from './generate-installer-script'
 import { defaultBuildProfile, parseBuildProfile, serializeBuildProfile, type BuildProfile } from './build-profile'
@@ -291,5 +291,84 @@ describe('a development build may be unshippable; a release may not', () => {
     }
     expect(generateInstallerHeader(profile)).toContain(`!define VCREDIST_SHA256 "${digestOf(PAYLOAD)}"`)
     expect(() => assertReleasePin(profile.prerequisite!.sha256)).not.toThrow()
+  })
+})
+
+
+/**
+ * The gate that a pinned digest alone does not provide.
+ *
+ * `assertReleasePin` says the digest is real. It cannot say the FILE is the one it describes, and the two come apart in
+ * ways that are ordinary rather than exotic: a cache left over from last release, a file swapped while testing, a fetch
+ * interrupted after the profile was written. Every one of those ships an offline installer bundling bytes that its own
+ * `${VCREDIST_SHA256}` check refuses -- the failure lands on the customer instead of on the build machine.
+ *
+ * Each case below was also run by hand against the real script, and the plain-English message is what the operator
+ * actually sees.
+ */
+describe('the release verifies the cached file, not just the pin', () => {
+  const SIGNER = 'CN=Microsoft Corporation, O=Microsoft Corporation'
+
+  function cached(payload: Buffer = PAYLOAD, signer: string | null = SIGNER) {
+    const directory = mkdtempSync(join(scratch, 'cache-'))
+    mkdirSync(directory, { recursive: true })
+    writeFileSync(join(directory, 'vc_redist.x64.exe'), payload)
+    return {
+      directory,
+      pin: { sha256: digestOf(payload), sizeBytes: payload.byteLength },
+      readSigner: () => signer,
+    }
+  }
+
+  it('accepts a cache that matches the pin and is signed by Microsoft', () => {
+    const { directory, pin, readSigner } = cached()
+    const result = verifyCachedPrerequisite({ directory, pin, readSigner })
+    expect(result.sha256).toBe(pin.sha256)
+    expect(result.signerSubject).toContain('Microsoft Corporation')
+  })
+
+  it('stops on a cache left over from a previous release', () => {
+    // The pin is real and current; the bytes are last month's build. Nothing about the profile looks wrong.
+    const { directory, pin } = cached()
+    // Same LENGTH, different bytes: a genuine older Microsoft build is the same size within a version line, so a
+    // replacement of different length would be caught by the size check and would not exercise the digest comparison.
+    const previousBuild = Buffer.from(PAYLOAD)
+    previousBuild[0] ^= 0xff
+    writeFileSync(join(directory, 'vc_redist.x64.exe'), previousBuild)
+    expect(() => verifyCachedPrerequisite({ directory, pin, readSigner: () => SIGNER }))
+      .toThrow(/does not match the pinned SHA-256/u)
+  })
+
+  it('stops on a file of the wrong size before it even hashes it', () => {
+    const { directory, pin, readSigner } = cached()
+    expect(() => verifyCachedPrerequisite({ directory, pin: { ...pin, sizeBytes: 1 }, readSigner }))
+      .toThrow(/bytes but the pin says/u)
+  })
+
+  it('stops when the pinned file is not there at all', () => {
+    const { directory, pin, readSigner } = cached()
+    rmSync(join(directory, 'vc_redist.x64.exe'))
+    expect(() => verifyCachedPrerequisite({ directory, pin, readSigner }))
+      .toThrow(/not in the cache/u)
+  })
+
+  it('stops when the cached bytes have no valid signature, even at the right digest', () => {
+    // The digest matching proves the bytes are the ones that were hashed. It does not prove who made them. A pin
+    // recorded on a machine where the signature check was skipped would otherwise be trusted forever.
+    const { directory, pin } = cached(PAYLOAD, null)
+    expect(() => verifyCachedPrerequisite({ directory, pin, readSigner: () => null }))
+      .toThrow(/does not carry a valid signature/u)
+  })
+
+  it('stops when somebody else signed it', () => {
+    const { directory, pin } = cached()
+    expect(() => verifyCachedPrerequisite({ directory, pin, readSigner: () => 'CN=Example Ltd' }))
+      .toThrow(/Microsoft Corporation/u)
+  })
+
+  it('names the fix in every failure, because a reader needs the next command', () => {
+    const { directory, pin } = cached()
+    expect(() => verifyCachedPrerequisite({ directory, pin, readSigner: () => null }))
+      .toThrow(/release:prerequisite/u)
   })
 })

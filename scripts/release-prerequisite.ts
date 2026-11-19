@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  assertReleasePin, fetchPrerequisite, isDigestPinned, prerequisiteRecord, PREREQUISITE_PATH_ENV,
+  assertReleasePin, fetchPrerequisite, isDigestPinned, prerequisiteRecord, readSignerSubject, PREREQUISITE_PATH_ENV,
+  verifyCachedPrerequisite,
   type FetchedPrerequisite,
 } from '../installer/src/prerequisite-release'
 import { BUILD_PROFILE_FILENAME, defaultBuildProfile, parseBuildProfile, type BuildProfile } from '../installer/src/build-profile'
@@ -72,12 +73,26 @@ function main(): void {
     }
     assertReleasePin(sha256)
     const pin = profile.prerequisite!
-    console.log('Release prerequisite is pinned:')
+    // A real digest is necessary and not sufficient: the file about to be bundled must BE that file. Without this the
+    // check passes on a stale cache and the offline installer ships bytes its own checksum refuses.
+    // Every failure of this function is a release-stopping fact, and each one already carries a plain-English message
+    // naming the fix. Route it through `fail` so the operator sees the sentence rather than a stack trace -- the first
+    // run of this printed `throw new Error` with a Node call frame, which reads like a bug in the tool rather than a
+    // statement about the build.
+    let verified: ReturnType<typeof verifyCachedPrerequisite>
+    try {
+      verified = verifyCachedPrerequisite({ pin, readSigner: readSignerSubject })
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error))
+    }
+    console.log('Release prerequisite is pinned, and the cached file matches it:')
     console.log(`  SHA-256:  ${pin.sha256}`)
     console.log(`  Version:  ${pin.microsoftVersion}`)
     console.log(`  Size:     ${pin.sizeBytes.toLocaleString('en-GB')} bytes`)
     console.log(`  Fetched:  ${pin.fetchedAt}`)
     console.log(`  From:     ${pin.url}`)
+    console.log(`  On disk:  ${verified.path} (digest re-read and matched)`)
+    console.log(`  Signed:   ${verified.signerSubject}`)
     return
   }
 

@@ -593,6 +593,10 @@ proves nothing about behaviour. The items below are that missing half, in the or
     plain-English sentence and **writes nothing**. It never falls back to the all-zeros digest.
   - `npm run release:assemble` refuses to finish while the digest is zeros — it prints `RELEASE STOPPED` and exits
     non-zero. A development build may keep the zeros (it fails closed, on purpose); a release may not.
+  - It also refuses when the cached **file** does not match the pin — a stale cache from a previous release, the wrong
+    size, a missing file, or bytes with no valid Microsoft signature. The message names which of those it found and
+    the command that fixes it. This matters because the offline installer bundles the cached file: if the two disagree,
+    the installer refuses its own payload on the customer's machine.
 
   **Record these two values here, and compare them on a real PC:**
 
