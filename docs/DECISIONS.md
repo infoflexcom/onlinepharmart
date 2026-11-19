@@ -284,6 +284,23 @@ could not have been built at all had anyone run the build:
   redefinition as a hard error, and the harness no longer pre-defines `INFOPLEX_OFFLINE` — `installer.nsi` already
   defaults it, so the value now always comes from the file under test rather than from a harness that agreed with
   itself. The wrapper's output is byte-identical to the offline build's, which is the point of it.
+- **The prerequisite was executed without being verified, and the safety measure guarded the wrong path.** The online
+  download page checks the redistributable's SHA-256 and publisher, and "Browse for the file myself" checks the digest
+  too. `InstallPrerequisites` — the function that actually runs the file — checked nothing and called `ExecWait` on it.
+  Because the shipped digest is all zeros until a release pins it, the verified paths *refused every download* while
+  the unverified path was the one that still ran the binary. A guard on everything except the dangerous step is worse
+  than no guard, because it reads as diligence. The execution path now compares `${VCREDIST_SHA256}` with the same
+  bundled helper before `ExecWait`, deletes a mismatch, says so, and continues the install without that component rather
+  than running it. Six tests hold every `ExecWait` in the script to having a digest check earlier in its own function.
+- **The offline build could not compile, and the harness was why nobody knew.** `installer.nsi`'s offline branch does
+  `File ... "${PREREQUISITE_VCREDIST}"`, and nothing in the real build defined `PREREQUISITE_VCREDIST` — only the
+  harness did, with a path to a placeholder. So `npm run installer:offline` would have stopped at
+  `File: "${PREREQUISITE_VCREDIST}" -> no files found` on line 786, while the compile check built happily. This is the
+  same shape as the `-WX` gap: the harness supplying a value the build lacked made the harness agree with itself. The
+  command is now `!ifdef`-guarded, so a build without the file still produces an installer; the harness no longer
+  defines the variable at all; and a test pins the harness's list of defines so it cannot quietly grow a new
+  substitute for a value the real build is missing. The release checklist now says plainly that the checklist item is
+  to **supply** that file, not merely to pin its checksum.
 - **What this still does not prove, and the docs say so.** It produces a real `.exe`, and it still does not prove
   electron-builder's template agrees with us — page order, where `customInstall` runs, whether the payload lands in the
   right place. It does not prove anything runs correctly on Windows: the file has never been executed, because there

@@ -99,6 +99,25 @@ describe('the offline build includes a wrapper, and the wrapper is what gets com
   })
 })
 
+describe('the harness does not invent values the real build lacks', () => {
+  it('defines no prerequisite path of its own', () => {
+    // The harness used to define PREREQUISITE_VCREDIST so the offline branch's `File` command would resolve. Every real
+    // offline build failed at that line, and the harness could never show it because the harness was the thing supplying
+    // the missing value. A harness that fills in a gap is testing itself.
+    const harness = readFileSync('installer/nsis/harness/harness.nsi', 'utf8')
+    const definitions = [...harness.matchAll(/^\s*!define ([A-Z_0-9]+)/gmu)].map((match) => match[1]!)
+    // These are the values electron-builder genuinely passes on its makensis command line, or that the harness must own
+    // because they describe the harness itself. Anything else is a gap being papered over.
+    const legitimate = new Set([
+      'PRODUCT_NAME', 'PRODUCT_VERSION', 'APP_VERSION', 'APP_PACKAGE_NAME', 'INSTALL_MODE_PER_ALL_USERS',
+      'BUILD_RESOURCES_DIR', 'HARNESS_OUTFILE', 'HARNESS_ENTRY',
+      'MUI_UI', 'MUI_UI_HEADERIMAGE', 'MUI_UI_COMPONENTSPAGE_SMALLDESC', 'MUI_UI_COMPONENTSPAGE_NODESC',
+    ])
+    const invented = definitions.filter((name) => !legitimate.has(name))
+    expect(invented, 'the harness defines values the real build does not, which can hide a build failure').toEqual([])
+  })
+})
+
 describe.skipIf(!available)('the one-click claim is taken from electron-builder’s own templates', () => {
   it('confirms that only the assisted template inserts our page hooks', () => {
     // If a future electron-builder taught oneClick.nsh to call these hooks, the hard requirement above would relax --

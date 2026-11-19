@@ -783,10 +783,43 @@ Function InstallPrerequisites
   ${EndIf}
 
   ${If} ${INFOPLEX_OFFLINE} == 1
-    File /oname=$PLUGINSDIR\vc_redist.x64.exe "${PREREQUISITE_VCREDIST}"
+    ; The offline build carries the redistributable instead of downloading it, so the path to it must be supplied at
+    ; compile time. Nothing supplied it: ${PREREQUISITE_VCREDIST} was defined only by the harness, and the real offline
+    ; build failed with `File: "${PREREQUISITE_VCREDIST}" -> no files found`. The harness defines it too, which is
+    ; exactly why this was invisible -- the harness supplied a value the build never had.
+    ;
+    ; It is now a !ifdef, so a build that forgets to supply the file produces an installer that downloads the runtime
+    ; when it can rather than one that will not compile or one that silently ships without a prerequisite it promised.
+    ; electron-builder passes -DPREREQUISITE_VCREDIST=... (see electron-builder.installer-offline.json); the release
+    ; checklist pins the checksum and places the file.
+    !ifdef PREREQUISITE_VCREDIST
+      File /oname=$PLUGINSDIR\vc_redist.x64.exe "${PREREQUISITE_VCREDIST}"
+    !endif
   ${EndIf}
   ${IfNot} ${FileExists} "$PLUGINSDIR\vc_redist.x64.exe"
     DetailPrint "The runtime file is missing; skipping it. Infoflex will ask for it when needed."
+    Return
+  ${EndIf}
+
+  ; Verify BEFORE running it. This check used to be missing, and the omission pointed the wrong way: the download page
+  ; verifies the digest, the "browse for the file myself" path verifies the digest, and this path -- the one that
+  ; actually executes the file -- checked nothing. Because the shipped digest is all zeros until a release pins it, the
+  ; verified paths refused every file while this unverified path was the one that still ran it. A safety measure that
+  ; guards everything except the dangerous step is worse than none, because it reads as diligence.
+  ;
+  ; The digest is the same ${VCREDIST_SHA256} the download page uses, compared by the same bundled helper, so the three
+  ; paths cannot disagree about which file is acceptable. It costs one process launch.
+  DetailPrint "Checking the Microsoft Visual C++ runtime before installing it."
+  nsExec::ExecToStack '"$PLUGINSDIR\password-check.exe" --sha256 "${VCREDIST_SHA256}" "$PLUGINSDIR\vc_redist.x64.exe"'
+  Pop $0
+  Pop $1
+  ${If} $0 != "0"
+    Delete "$PLUGINSDIR\vc_redist.x64.exe"
+    ; Delete it, say so, and continue the install without it: the application still installs and runs, and will ask for
+    ; the runtime itself if it is ever needed. Refusing the whole install would strand a shop over a component the app
+    ; can live without. What must NOT happen is running the file.
+    DetailPrint "The bundled Visual C++ runtime did not match its expected digest, so it was deleted and not run."
+    MessageBox MB_ICONEXCLAMATION|MB_OK "A supporting component (the Microsoft Visual C++ runtime) did not match the copy ${PRODUCT_NAME} expects, so it was not installed. ${PRODUCT_NAME} will ask for it the first time it needs it. Nothing else was affected."
     Return
   ${EndIf}
 

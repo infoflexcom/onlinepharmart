@@ -30,9 +30,11 @@
 ; so the online build needs nothing; and offline-include.nsh sets it to 1, which is what makes the wrapper compile here
 ; as its own build. Leaving the define alone means the value always comes from the file under test rather than from a
 ; harness that happened to agree with itself -- the distinction that hid every defect this phase found.
-!ifndef PREREQUISITE_VCREDIST
-  !define PREREQUISITE_VCREDIST "/tmp/infoflex-harness-resources/password-check.exe"
-!endif
+; PREREQUISITE_VCREDIST is deliberately NOT defined here. The harness used to define it so the offline branch's `File`
+; command would resolve -- and that is precisely why nobody noticed that no real build defined it either. The offline
+; installer failed to compile with `File: "${PREREQUISITE_VCREDIST}" -> no files found` while this harness built happily.
+; installer.nsi now guards the command with !ifdef, so the offline branch compiles here the way it compiles for real:
+; without the file, and without a define this harness invented.
 
 ; electron-builder sets these. The harness points BUILD_RESOURCES_DIR at a folder holding placeholders for the two files
 ; our script references, because NSIS checks that a `File` source exists at compile time -- a check worth keeping, since

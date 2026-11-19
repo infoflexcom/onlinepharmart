@@ -848,6 +848,14 @@ the test rather than the Output screen.
 - **The offline wrapper had never been compiled.** The shipping offline build includes `offline-include.nsh`, not
   `installer.nsi`; the check had been simulating that build with a command-line define and leaving the wrapper untested.
   It is now a third build, and its output is byte-identical to the offline build's.
+- **The prerequisite was run without being verified.** `InstallPrerequisites` called `ExecWait` on
+  `vc_redist.x64.exe` with no checksum check, while the download page and the file-picker both verified it. Worse, the
+  shipped all-zero digest made the *verified* paths refuse the file and left the unverified one as the only way through.
+  The execution path now verifies first, deletes a mismatch, and installs without that component rather than running it.
+- **The offline build could not compile.** Its offline branch does `File ... "${PREREQUISITE_VCREDIST}"`, a define no
+  real build supplies -- only the harness did, which is why the compile check never showed it. Now `!ifdef`-guarded, the
+  harness no longer invents the value, and a test pins the harness's define list. The checklist now says to *supply*
+  that file, which nobody was doing.
 - **Still not proven:** the real `npm run build` cannot run here (electron-builder downloads its NSIS from GitHub and
   needs plugin DLLs this sandbox lacks), so the template is read rather than executed. And the `.exe` has never been executed. There is no Windows and no Wine here. The shippable
   installer still comes from `npm run build` on a Windows machine with the NSIS target, and the manual checklist in
