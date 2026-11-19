@@ -123,4 +123,5 @@ if (failures.length > 0) {
   console.error(`\n${failures.length} installer problem${failures.length === 1 ? '' : 's'} found.`)
   process.exit(1)
 }
-console.log('\nInstaller sources are consistent. Compiling them still needs Windows or Wine — see docs/PHASES.md.')
+console.log('\nInstaller sources are consistent. This is the STATIC check only -- it does not compile the script.')
+console.log('Run `npm run installer:compile` for that: it builds makensis from source and compiles both builds for real.')

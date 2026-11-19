@@ -34,6 +34,18 @@ Unicode true
 ; so an include that quietly disappeared would fail the build rather than fail on a vendor's machine.
 !include "FileFunc.nsh"
 
+; x64.nsh provides ${RunningX64}. WinVer.nsh does NOT define it, and the Windows-version check has to be written by
+; hand for the same kind of reason: NSIS 3.x defines ${AtLeastWin11} and ${AtLeastWin8}, but never ${AtLeastWin10},
+; because there was no separate Windows 10 major version to name. Windows 10 and 11 both report major 10, so the
+; honest test is the Windows 10 build number (10240). Both of these were missing and the installer did not compile.
+; The static checker's macro map claimed both came from WinVer.nsh, which is why it passed.
+!include "x64.nsh"
+
+!ifndef AtLeastWin10
+  ; 10240 is the first Windows 10 build. `U>=` is WinVer's own unsigned comparison against WinVer::GetWinVer's output.
+  !define AtLeastWin10 'U>= WinVer_BuildNumCheck 10240'
+!endif
+
 !include "json-escaping.nsh"
 !include "generated.nsh"
 !include "currency-ui.nsh"
@@ -314,7 +326,7 @@ Function CurrencyPageCreate
     Pop $CurrencyList
     !insertmacro FillCurrencyList
     ; Open on the build's currency, not on row 0 — a build made for Ghana must show Cedis first.
-    ${NSD_LB_SetCurSel} $CurrencyList ${INSTALLER_DEFAULT_INDEX}
+    ${NSD_LB_SetSelectionIndex} $CurrencyList ${INSTALLER_DEFAULT_INDEX}
     Call RefreshCurrencyExample
     ${NSD_CreateLabel} 0 118u 100% 12u ""
     Pop $CurrencyExample
@@ -338,7 +350,7 @@ Function LoadDefaultCurrencyFields
 FunctionEnd
 
 Function RefreshCurrencyExample
-  ${NSD_LB_GetCurSel} $CurrencyList $0
+  ${NSD_LB_GetSelectionIndex} $CurrencyList $0
   ${If} $0 < 0
     StrCpy $0 "0"
   ${EndIf}
@@ -434,7 +446,7 @@ Function CurrencyPageLeave
     Return
   ${EndIf}
 
-  ${NSD_LB_GetCurSel} $CurrencyList $R0
+  ${NSD_LB_GetSelectionIndex} $CurrencyList $R0
   !insertmacro SetCurrencyFromIndex
 FunctionEnd
 
@@ -520,12 +532,14 @@ Function ComponentsPageCreate
   ${NSD_CreateCheckbox} 0 0 100% 12u "Install ${PRODUCT_NAME} (required)"
   Pop $0
   ${NSD_Check} $0
-  ${NSD_DisableWindow} $0
+  ; Greys the checkbox and keeps it ticked. nsDialogs has no DisableWindow macro, so this is the WM_ENABLE message
+  ; that one would have sent.
+  SendMessage $0 ${WM_ENABLE} 0 0
 
   ${NSD_CreateCheckbox} 0 18u 100% 12u "Install the Microsoft Visual C++ runtime if it is missing (required)"
   Pop $0
   ${NSD_Check} $0
-  ${NSD_DisableWindow} $0
+  SendMessage $0 ${WM_ENABLE} 0 0
 
   ${NSD_CreateCheckbox} 0 38u 100% 12u "Add the Admin phone firewall rule (private networks only)"
   Pop $CompFirewall
@@ -697,8 +711,11 @@ Function DownloadPageLeave
   ${EndIf}
 
   ; Verify the SHA-256 before the file is allowed to run. A mismatch deletes it.
-  ${GetFileSize} "$PLUGINSDIR\vc_redist.x64.exe" $1
-  ${If} $1 == ""
+  ; GetSize (FileFunc.nsh) is the macro that exists -- there is no GetFileSize. It clears the error flag on success and
+  ; returns the size in bytes in $1; the error flag is what tells a missing file from an empty one.
+  ClearErrors
+  ${GetSize} "$PLUGINSDIR" "/M=vc_redist.x64.exe /S=0K /G=1" $0 $1 $2
+  ${If} ${Errors}
     Delete "$PLUGINSDIR\vc_redist.x64.exe"
     StrCpy $DownloadFailed "1"
     StrCpy $DownloadAttempts 3

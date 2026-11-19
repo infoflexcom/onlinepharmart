@@ -39,7 +39,7 @@ Function EscapeJson
       StrCpy $3 '$3$\"$\"'
       Goto escape_loop
 
-    ; \ becomes \\
+    ; A backslash doubles
     StrCmp $1 '\' 0 +3
       StrCpy $3 '$3\\'
       Goto escape_loop

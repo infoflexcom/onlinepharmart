@@ -35,6 +35,9 @@ const RUNTIME_FILES = new Set([
   'config.php', '.manifest.json', 'build-profile.json',
   // Written into the project by a build, beside build-profile.json.
   'buildprofile.generated.json',
+  // NSIS's own standard headers. They are part of the makensis installation, not of this repository, and the docs name
+  // them to explain which header defines which macro -- the distinction that cost six compile failures.
+  'x64.nsh', 'WinVer.nsh', 'FileFunc.nsh', 'LogicLib.nsh', 'nsDialogs.nsh', 'MUI2.nsh',
 ])
 
 /** Files produced by a build rather than committed; `build-studio.ts` copies or writes each of them. */

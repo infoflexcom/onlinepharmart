@@ -30,10 +30,22 @@ const EXTERNAL_LIBRARY_MACROS = new Set([
   'MUI_UNPAGE_FINISH', 'MUI_HEADER_TEXT', 'MUI_PAGE_CUSTOMFUNCTION_PRE', 'MUI_PAGE_CUSTOMFUNCTION_SHOW',
   'MUI_PAGE_CUSTOMFUNCTION_LEAVE', 'MUI_STARTMENU_WRITE_BEGIN', 'MUI_STARTMENU_WRITE_END',
   'MUI_FINISHPAGE_RUN', 'MUI_FINISHPAGE_SHOWREADME',
-  'NSD_CreateLabel', 'NSD_CreateText', 'NSD_CreatePassword', 'NSD_CreateCheckbox', 'NSD_CreateListBox',
-  'NSD_CreateProgressBar', 'NSD_CreateDirRequest', 'NSD_CreateLink', 'NSD_LB_AddString', 'NSD_LB_SetCurSel',
-  'NSD_LB_GetCurSel', 'NSD_GetText', 'NSD_SetText', 'NSD_GetState', 'NSD_Check', 'NSD_DisableWindow', 'NSD_OnClick',
-  'NSD_CreateButton', 'NSD_EnableWindow', 'GetFileSize', 'NSD_ShowWindow',
+  // ---------------------------------------------------------------------------------------------------------------
+  // Everything below was WRONG in the first version of this list, and each wrong name cost a compile failure that
+  // this checker reported as fine: NSD_LB_GetCurSel, NSD_LB_SetCurSel, NSD_DisableWindow and GetFileSize do not exist
+  // in any NSIS header. A hand-maintained allowlist of other people's macro names is only as good as the care taken
+  // copying them, and this one was written from memory. The names here are now the ones nsDialogs.nsh, LogicLib.nsh,
+  // FileFunc.nsh and x64.nsh actually define, verified by compiling the script for real (see
+  // scripts/compile-check-installer.ts and docs/DECISIONS.md).
+  // ---------------------------------------------------------------------------------------------------------------
+  // nsDialogs controls, from __NSD_DefineControl.
+  'NSD_CreateLabel', 'NSD_CreateText', 'NSD_CreatePassword', 'NSD_CreateCheckbox', 'NSD_CreateCheckBox',
+  'NSD_CreateListBox', 'NSD_CreateProgressBar', 'NSD_CreateDirRequest', 'NSD_CreateLink', 'NSD_CreateButton',
+  // nsDialogs actions, from the !define lines in nsDialogs.nsh.
+  'NSD_LB_AddString', 'NSD_LB_SetSelectionIndex', 'NSD_LB_GetSelectionIndex', 'NSD_GetText', 'NSD_SetText',
+  'NSD_GetState', 'NSD_Check', 'NSD_OnClick', 'NSD_ShowWindow',
+  // FileFunc.nsh. GetSize is the size macro; there is no GetFileSize.
+  'GetSize',
 ])
 
 /**

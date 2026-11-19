@@ -505,6 +505,7 @@ things it had been missing:
 | `npm run check:phase13` | All of the above, plus generating the installer includes and running `installer:check`. |
 | `npm run check:phase14` | Typecheck, the whole suite, and bundling the Build Studio window. |
 | `npm run check:phase15` | Everything, plus the secret scan and assembling `/release`, `/tools` and `/cloud-package` (current phase bundle). |
+| `npm run installer:compile` | **Builds makensis from source and compiles both installers for real.** Proves every page, function, macro and instruction resolves. Stops at the final write because the stub is a placeholder -- see DECISIONS.md for what that does and does not prove. |
 | `npm run release:scan` | Searches source, builds, cloud package and installer sources for the master password (plain, base64, hex, punctuation-stripped) and for private-key material. **Plants both first and refuses to report unless it finds them**, so a clean result means something. |
 | `npm run release:assemble` | Copies the deliverables into `release/`, `tools/` and `cloud-package/`, writes `release/SHA256SUMS.txt`, and names every missing artefact with its reason in the release manifest. |
 | `npm run studio` | Bundles and starts Build Studio. **Needs a display and an Electron runtime that can open a window.** |
@@ -788,3 +789,23 @@ the test rather than the Output screen.
 - **Three documentation claims were wrong and were corrected against the code:** the vendor guide said an unknown
   `/CURRENCY` falls back to the default (it aborts with exit code 2); the backup retention and the licence grace period
   were checked rather than assumed.
+
+## Phase 15 (continued) — the installer compiles, and did not
+
+- **`makensis` is buildable here after all.** Previous phases recorded "cannot compile" as an environment fact. It was
+  half true: no `makensis` was installed and no root existed to install one, but NSIS builds from source with the gcc
+  that was always present. `scripts/compile-check-installer.ts` now does it — zlib and NSIS from source, SCons from
+  PyPI — and compiles both builds.
+- **Six compile-blocking defects came out of the first real compile**, none of which any test had caught:
+  `${NSD_LB_SetCurSel}` and `${NSD_LB_GetCurSel}` (not nsDialogs macros), `${NSD_DisableWindow}` (does not exist),
+  `${RunningX64}` without `x64.nsh`, `${AtLeastWin10}` (never defined by WinVer.nsh), and `${GetFileSize}`
+  (it is `${GetSize}`). Plus a comment ending in a backslash that silently swallowed the following line.
+- **The static checker had been blessing all of them**, because its allowlist of macro names contained the four names
+  that do not exist. It was written from memory. A test now pins the names, and the allowlist was rebuilt from the
+  headers.
+- **The compile check itself failed three times before it worked**, each time reporting success while compiling
+  nothing: the error was on stderr and only stdout was read; `makensis` exits 0 on script errors without `-V2`; and
+  the regex patching MUI lacked the `m` flag so it silently matched nothing. It now demands positive proof of a full
+  compile and treats "no compile output" as failure.
+- **Still not proven:** that electron-builder's template agrees with our hooks, that the payload lands in the right
+  place, or that anything behaves correctly on Windows. No `.exe` was produced.

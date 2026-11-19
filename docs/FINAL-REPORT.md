@@ -14,8 +14,13 @@ installer sources are consistent and pass their own checks. The cloud package bu
 Both secret scans come back clean with a scan that proves itself first.
 
 **No `.exe` was produced.** Not because of the code — because this build environment cannot reach the host that serves
-the Windows Electron runtime, has no `makensis`, and has no Wine. Details in §5. This is the single most important
-thing in this report, and it is why several items below are marked "could not test" rather than "passed".
+the Windows Electron runtime and has no Wine. Details in §5. This is the single most important thing in this report,
+and it is why several items below are marked "could not test" rather than "passed".
+
+**But the installer script now compiles.** `makensis` turned out to be buildable from source with the gcc that was
+here all along, and `npm run installer:compile` now builds it and compiles both the online and the offline installer.
+The first successful compile found **six defects, every one of them a hard failure** that would have stopped the
+installer being built at all. See §3.
 
 **Nothing has run on Windows. Nothing has run on a real phone. No receipt has been printed by a real thermal
 printer.** Wherever this report says a feature "works", it means the logic is covered by automated tests that run on
@@ -55,7 +60,13 @@ any test in the suite**, and `npm run installer:check` passed both before and af
    problem. **Neither installer config could ever have been built.** Removed, and the offline flag now travels through
    a two-line include wrapper instead.
 
-3. **`installer.nsi` was never wired into the build.** electron-builder would have compiled its own stock wizard, so
+3. **Six compile-blocking defects in `installer.nsi` itself**, found the moment a real `makensis` was put in front of
+   it: `${NSD_LB_SetCurSel}` and `${NSD_LB_GetCurSel}` are not nsDialogs macros; `${NSD_DisableWindow}` exists
+   nowhere; `${RunningX64}` needs `x64.nsh`, which was never included; `${AtLeastWin10}` is never defined by
+   `WinVer.nsh`; and `${GetFileSize}` is really `${GetSize}`. There was also a comment ending in a backslash, which
+   NSIS treats as a line continuation — it silently deleted the backslash-escaping branch of `EscapeJson`, so any
+   Windows path written into `install-config.json` would have produced invalid JSON.
+4. **`installer.nsi` was never wired into the build.** electron-builder would have compiled its own stock wizard, so
    the password gate, the Region and Currency page and the install-config write would not have existed in the shipped
    `.exe` at all. Worse, the script was written as a *standalone* installer: it created desktop and Start Menu
    shortcuts and added a firewall rule, but never copied the application. Had it been wired in as `script`, those
@@ -64,12 +75,12 @@ any test in the suite**, and `npm run installer:check` passed both before and af
 
 Two further defects found while writing the tooling for this phase:
 
-4. **The silent `/CURRENCY=` check accepted only 9 of the app's 54 currencies.** `Infoflex Setup.exe /S
+5. **The silent `/CURRENCY=` check accepted only 9 of the app's 54 currencies.** `Infoflex Setup.exe /S
    /CURRENCY=UGX` aborted with "not a built-in currency" for a currency the app supports in full. The check is now
    generated one-branch-per-currency from the same catalogue the wizard's dropdown uses, with a test asserting a branch
    exists for every currency.
 
-5. **The secret scanner was broken four different ways, and every break looked like a clean result.** A stray separator
+6. **The secret scanner was broken four different ways, and every break looked like a clean result.** A stray separator
    in the assembled password (searching for a string that does not exist), dotfiles skipped, `.pem` excluded as
    non-text, and a threshold that missed key bodies wrapped at 64 columns. It now plants both secrets and refuses to
    report unless it finds them; ten tests pin each leak form and each legitimate base64 it must not flag.
@@ -86,12 +97,17 @@ Each of these is now covered by a test that fails if the defect returns.
 - The doc-accuracy tests, which verify every file path mentioned in the documentation actually exists.
 - `npm run release:scan` — with deliberately planted leaks to prove it detects them, then clean on the tree.
 - `npm run installer:check` — 19 shipped installer files, static analysis only.
+- `npm run installer:compile` — **a real makensis, built from NSIS source in this sandbox, compiling both the online
+  and the offline installer.** Every page, function, macro and instruction resolves. It stops at the final write only
+  because the installer stub is a one-byte placeholder; the check was itself verified by planting two of the six
+  defects above and confirming it rejects them.
 - Build Studio's bundle, the web build, the mobile PWA build, the Electron bundle, the cloud package zip.
 
 **Not tested, and cannot be tested here:**
-- **No Windows computer was used.** The installers have never been built, never been run, never been seen. The
-  password gate, the currency page, the prerequisite check, the firewall rule, the shortcuts and the uninstaller are
-  all unexercised.
+- **No Windows computer was used.** The installers have never been run, never been seen. The script now *compiles* for
+  both builds, which proves the pages, macros and instructions resolve — it does not prove a single one of them
+  behaves. The password gate, the currency page, the prerequisite check, the firewall rule, the shortcuts and the
+  uninstaller are all unexercised.
 - **No real phone.** Pairing, certificate acceptance on iOS and Android, "Add to Home Screen", the hotspot path and
   the relay path have never run on a device. The pairing and TLS logic is covered by tests against a real local HTTPS
   listener, which is not the same thing.
@@ -110,6 +126,10 @@ The full clean-machine checklist is in `docs/RELEASE-CHECKLIST.md`; it is the sc
 
 Three independent walls, in the order they are hit:
 
+0. **The installer *script* is no longer a blocker.** `makensis` builds from source here (zlib from source, SCons
+   from PyPI, `scons SKIPSTUBS=all`), and `npm run installer:compile` proves both builds compile. What is still missing
+   is a Windows resource compiler for the UI and the installer stub, which is what the `.exe` needs — and that is a
+   smaller problem than it was, because the script's own correctness is no longer unknown.
 1. **electron-builder must download the Electron runtime.** It fetches the Windows Electron runtime (version 45.3.3, win32-x64) from
    `github.com/electron/electron/releases/download/…`, which redirects to `objects.githubusercontent.com`. That host
    is unreachable from here — a direct request returns nothing. `github.com` itself resolves and returns 200, which is
@@ -177,7 +197,8 @@ look.
 
 ## 7. Suggested improvements, in the order I would do them
 
-1. **Run the clean-machine checklist on real Windows hardware.** Nothing in this report substitutes for it, and every
+1. **Run the clean-machine checklist on real Windows hardware.** The compile check now proves the script is sound;
+   only a real install can prove the installer works. Nothing in this report substitutes for it, and every
    one of the three installer defects found this phase would have been found in the first ten minutes of a real
    install. This is not a documentation task; it is the difference between "built" and "works".
 2. **Add a CI job that builds the installers on a Windows runner.** The absence of one is why the defects in §3
@@ -228,4 +249,9 @@ first step is impossible here.
 
 The installer fixes in §3 are the most valuable output of this phase, and the most uncomfortable: a product that had
 passed every automated check for four phases was, until this session, incapable of producing an installer that
-installed the application.
+installed the application — and once a real compiler was finally pointed at the script, it did not compile at all.
+Six separate defects. The checker had been agreeing with all six, because its allowlist of macro names had itself been
+written from memory and contained the four names that do not exist.
+
+The lesson is worth more than the fixes: **a check that cannot fail is not a check.** This phase produced three of
+those before it produced one that works, and each looked like a clean result.

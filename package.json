@@ -46,7 +46,8 @@
     "artefacts:verify": "tsx scripts/verify-artefacts.ts",
     "release:assemble": "tsx scripts/assemble-release.ts",
     "release:scan": "tsx scripts/release-scan.ts",
-    "check:phase15": "npm run typecheck && npm test && npm run installer:script && npm run installer:check && npm run build:studio && npm run cloud:package && npm run release:scan && npm run release:assemble && npm run build:web && npm run build:mobile && npm run build"
+    "check:phase15": "npm run typecheck && npm test && npm run installer:script && npm run installer:check && npm run installer:compile && npm run build:studio && npm run cloud:package && npm run release:scan && npm run release:assemble && npm run build:web && npm run build:mobile && npm run build",
+    "installer:compile": "tsx scripts/compile-check-installer.ts"
   },
   "dependencies": {
     "@fastify/websocket": "^11.3.7",

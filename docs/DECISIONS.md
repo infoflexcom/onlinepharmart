@@ -189,3 +189,54 @@ The full npm audit currently reports the new GHSA-fc5q-39xc-vjpf / CVE-2026-1123
 - **The documentation states the licence system's real limit rather than implying it has none.** An on-site licence is verified on the customer's own machine, so the master password is known to whoever issues those licences, and the build profile's maximum on-site period is the actual control on what a leaked password is worth. `VENDOR_GUIDE.md` says this plainly and recommends the lowest cap the customers will tolerate, because that number is the difference between a leak costing a year or costing ten.
 - **The receipt's ISO-code fallback is documented as the answer to a missing glyph, not as a workaround.** Thermal printers commonly lack ₦, GH₵, KSh and the CFA franc, and Settings already allows the code to be shown instead of the symbol. It is a display preference that stays editable after the currency locks, because it changes how amounts are *written*, not what they *are*.
 - **Documentation claims were checked against the code, and three were wrong.** The vendor guide initially said an unknown `/CURRENCY` falls back to the default (it aborts); the customer guide's backup retention of thirty was verified at `backup-service.ts`; the licence grace period of up to thirty days was verified in `license-manager.ts`. Where a claim could not be checked here it is marked as depending on configuration rather than stated flatly.
+
+## Phase 15 (continued) — the installer finally compiled, and it did not
+
+`installer.nsi` had never been through `makensis`. Every previous phase said so and moved on, because the sandbox has
+no `makensis` and no root to install one. That was true when it was written and it is no longer true: NSIS can be
+built from source with the gcc that was here all along, and `scripts/compile-check-installer.ts` now does exactly
+that — zlib from source, SCons from PyPI, `scons SKIPSTUBS=all` for the compiler alone, then both builds compiled.
+
+**Six defects came out of the first successful compile, and every one of them was a hard failure.** The installer
+could not have been built at all had anyone run the build:
+
+1. `${NSD_LB_SetCurSel}` — not an nsDialogs macro. The real one is `NSD_LB_SetSelectionIndex`.
+2. `${NSD_LB_GetCurSel}` — likewise; `NSD_LB_GetSelectionIndex`.
+3. `${NSD_DisableWindow}` — exists nowhere. It is now the `WM_ENABLE` message that such a macro would have sent.
+4. `${ElseIfNot} ${RunningX64}` — `RunningX64` comes from `x64.nsh`, which was never included.
+5. `${AtLeastWin10}` — `WinVer.nsh` defines `AtLeastWin8` and `AtLeastWin11` and never `AtLeastWin10`, because
+   Windows 10 and 11 both report major version 10. It is now defined in the installer against build 10240.
+6. `${GetFileSize}` — not a FileFunc macro; the real one is `GetSize`, with a different signature.
+
+- **The static checker was the reason none of this was caught, and the cause was its own allowlist.** `installer:check`
+  carries a list of macro names it accepts without a definition. That list had been written from memory and contained
+  `NSD_LB_GetCurSel`, `NSD_LB_SetCurSel`, `NSD_DisableWindow` and `GetFileSize` — the exact four names that do not
+  exist. It therefore blessed the precise calls that would fail, and a checker that agrees with a mistake is worse than
+  no checker, because it is evidence. The list now holds names verified against the headers, and a test asserts that
+  every macro the installer uses is in it, that the four invented names are gone from both, and that `x64.nsh` is
+  included and `AtLeastWin10` defined.
+- **A comment ending in a backslash silently deleted the next line.** `json-escaping.nsh` had `; \ becomes \\` above
+  `StrCmp $1 '\'`, and a trailing backslash escapes the newline in NSIS — so the entire backslash-doubling branch was
+  discarded (warning 6050). Any Windows path written into `install-config.json` would have produced invalid JSON. The
+  comment is reworded, and a test now fails on any comment line ending in a backslash.
+- **A check that cannot fail is not a check, and this script was one three times before it worked.** It first reported
+  success while `makensis` was failing at start-up, because (a) the error went to stderr and only stdout was read,
+  (b) `makensis` exits 0 on script errors unless `-V2` is passed, so the throw never happened, and (c) the regex that
+  patched MUI's `ChangeUI` lines lacked the `m` flag, so it silently matched nothing and the build failed on a MUI
+  error instead. Each of those made a broken run look clean. The script now requires positive proof of a full compile
+  — the dummy stub failing at the final write is the signal that everything before it resolved — and reports
+  "produced no compile output at all" as a failure rather than a pass.
+- **The harness inserts the page hooks, because without them four functions are never compiled.** `customPageAfterChangeDir`
+  registers the four custom `Page` commands; a harness that omits it leaves those functions unreferenced, NSIS emits
+  "warning 6010 ... zeroing code", and their bodies — the currency page's entire read-back logic — are thrown away
+  unexamined. A planted `${NSD_LB_BogusMacro}` on the currency page went undetected until the hooks were inserted at
+  the same points electron-builder uses (assistedInstaller.nsh lines 9, 43, 48).
+- **Two things are stubbed, and only two.** MUI2's `ChangeUI` and `InstProgressFlags` open the installer's own UI
+  `.exe` and rewrite its dialog resources, which needs a Windows resource compiler. They are cosmetic and unrelated to
+  the file under test, so they are commented out in a private copy of the NSIS tree with a marker at each site;
+  nothing in the repository is touched. A one-byte stub and hand-built plugin DLLs stand in for artefacts NSIS only
+  reads when writing the final file.
+- **What this still does not prove, and the docs say so.** It does not prove electron-builder's template agrees with
+  us — page order, where `customInstall` runs, whether the payload lands in the right place. It does not produce an
+  installer. It does not prove anything runs correctly on Windows. `installer:check` no longer claims that compiling
+  "needs Windows or Wine", because that stopped being true.
