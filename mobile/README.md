@@ -1,0 +1,32 @@
+# Infoflex Admin Mobile PWA
+
+This is the installable mobile companion served by the desktop host. It contains an Admin-only accounting summary/PDF view and a pending-return approval screen. It does not expose POS, inventory, customer lookup, user management, or general shop settings.
+
+## How to enable it
+
+1. Use a valid license with the **Local network (LAN)** mobile feature and sign in to Infoflex on the shop computer as an active, unlocked Admin.
+2. Open **Mobile Access** in the desktop app and choose **Enable mobile access**. The listener starts only after an Admin requests it; it stops on desktop shutdown, when the private network address changes, or when the license/LAN feature becomes unusable.
+3. On the desktop, export `infoflex-mobile-root-ca.crt`. Transfer it to the phone using a trusted method. Compare the certificate’s SHA-256 fingerprint with the value shown in Infoflex before trusting it.
+   - **iPhone/iPad:** install the downloaded certificate profile from Settings, then enable full trust in Certificate Trust Settings.
+   - **Android:** install it as a CA certificate from Security / Encryption & credentials. Menu names vary by device and OS version.
+4. On the desktop, choose **Pair an Admin phone**. Open the displayed `https://<private-host-ip>:43871/` URL on the same Wi-Fi/LAN phone and enter the eight-digit code before its five-minute expiry. The code is single-use; the host checks the licensed phone limit again in the SQLite registration transaction.
+5. Optionally install the PWA from the browser’s **Add to Home Screen** / **Install app** menu. Android uses the web manifest (`standalone`, maskable icon), while iOS uses `apple-touch-icon` plus `apple-mobile-web-app-capable`, so the installed app opens without Safari chrome and with the Infoflex icon. Keep the desktop app running and both devices on the same trusted LAN.
+
+Each phone must trust the root CA, including phones paired later. The desktop's “installed” acknowledgement is a reminder only; it cannot inspect or enforce trust settings on a phone. If the certificate is regenerated, install and trust the new root on every phone before reconnecting.
+
+## Sessions and privacy
+
+- Pairing returns an opaque 15-minute access credential and a 90-day refresh credential. Only SHA-256 hashes are stored in SQLite; refresh credentials are device-bound, single-use, and rotated. Reuse of a rotated refresh credential revokes that paired device.
+- The PWA keeps its session in the phone browser’s IndexedDB. Before pairing, it confirms that browser storage is writable and disables pairing if it is unavailable. IndexedDB is browser-managed origin storage, not a separate OS-keyed vault; use a trusted, screen-locked phone, sign out when finished, and promptly revoke a lost phone from the desktop. If token rotation cannot be persisted, the PWA attempts to revoke the new session; if the host is unreachable, an Admin should revoke the device before it is paired again.
+- The PWA coalesces overlapping requests (tab switches, pull-to-refresh, returning to the app) into a single in-flight load, and overlapping `401`s into a single refresh rotation. Because refresh credentials are single-use, a second concurrent rotation would replay an already-rotated token; the host treats that as theft and revokes the phone, so this coalescing is a security requirement rather than an optimisation.
+- Sign-out, desktop revocation, Admin password reset/deactivation, refresh expiry/reuse, or an invalidated Admin account revokes the device session. The Admin-phone license slot is released on revocation.
+- The root and server private keys are encrypted by Electron `safeStorage`; raw private keys are never exported. The root CA PEM exported for installation is public certificate material, not a private key. If secure OS storage is unavailable (including Linux `basic_text` fallback), startup fails closed.
+- The service worker caches only the static app shell. It does not cache API requests, reports, returns, or credentials for offline use. When offline, only a page navigation may fall back to the cached HTML shell; a script, style, icon, or manifest request fails instead of receiving HTML in its place. Current financial data requires the host.
+- `npm run build:mobile` stamps the built worker: the pre-cache list gains the content-hashed entry script and stylesheet (so the installed app can still start when the host is unreachable), and the cache name is derived from the shell content. A fixed cache name would have kept the first cached build on an installed phone and hidden later fixes indefinitely; the derived name is unchanged for identical content and changes when the shell changes. Reinstall/refresh the app after a host upgrade to pick up the new build.
+- The Electron listener is LAN-only even if a license also includes an Internet entitlement. It binds to the host’s network interfaces, but a request from a non-private socket address is denied. Do not port-forward the port, use a public Wi-Fi network, or bypass the certificate warning. Pairing is accepted only from a local/private address.
+
+## Development
+
+`npm run build:mobile` builds the standalone PWA into `out/mobile`. `npm run dev` and `npm run build` build the PWA before starting/building Electron; the packaged desktop bundle includes `out/mobile`. Browser preview mode cannot create a phone listener, TLS certificate, or real pairing session.
+
+Automated tests cover HTTPS certificate generation/validation with a trusted root, listener start/stop on address or entitlement changes, refusal of non-private socket peers for both API and PWA assets without trusting forwarded headers, the insecure `basic_text` safe-storage backend, writable IndexedDB session persistence, pairing/session expiry and rotation/reuse detection, bounded failure throttling, licensed capacity enforcement, account/device revocation, static PWA headers and static-only service-worker caching, and migration compatibility. One end-to-end test (`src/services/mobile-access-integration.test.ts`) drives the real TLS listener with the actual report, return, and device services: it pairs a phone, reads the Admin summary, approves a pending return with the `MOBILE` channel, rotates and then replays a refresh credential to prove device revocation, and signs out through the API. A physical iPhone/Android certificate-installation and Add-to-Home-Screen check, actual Windows DPAPI/installer behavior, and Wi-Fi/firewall testing remain required before customer release.

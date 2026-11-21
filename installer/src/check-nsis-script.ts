@@ -1,0 +1,803 @@
+import { readFileSync } from 'node:fs'
+
+/**
+ * A static check for the `.nsi` script.
+ *
+ * `makensis` cannot run in this build environment (no Wine, no compiler, and the Windows toolchain cannot be
+ * downloaded here), so the script that produces the actual deliverable would otherwise ship completely
+ * unexamined. That is not acceptable for a file this important, so this checks the classes of mistake that are
+ * both common in NSIS and mechanically detectable:
+ *
+ *  - a `Call` to a function that is never declared (the mistake actually made while writing it);
+ *  - a `${Define}`/`${EndIf}`/`${Do}`/`${Loop}`/`Function`/`Section` block left open or closed twice;
+ *  - a custom page macro that is defined but never inserted, or inserted but never defined, which in NSIS means
+ *    the page silently does not appear;
+ *  - a shebang-style `!define` that is redefined with a different value.
+ *
+ * It cannot prove the script compiles, and it does not pretend to: `docs/PHASES.md` records that compiling it
+ * needs a Windows machine or Wine. What it does prove is that the specific errors a human makes in this language
+ * are caught before the build machine ever sees the file.
+ */
+
+/**
+ * Macros the electron-builder template inserts for us (`!ifmacrodef customWelcomePage → !insertmacro …`).
+ * Defining them is the supported way to add a page, so "not inserted here" is correct rather than a fault.
+ */
+/** Macros provided by NSIS itself or by the MUI2 include, which this file legitimately inserts. */
+const EXTERNAL_LIBRARY_MACROS = new Set([
+  'MUI_PAGE_WELCOME', 'MUI_PAGE_FINISH', 'MUI_PAGE_DIRECTORY', 'MUI_PAGE_INSTFILES', 'MUI_PAGE_LICENSE',
+  'MUI_PAGE_COMPONENTS', 'MUI_PAGE_STARTMENU', 'MUI_UNPAGE_WELCOME', 'MUI_UNPAGE_CONFIRM', 'MUI_UNPAGE_INSTFILES',
+  'MUI_UNPAGE_FINISH', 'MUI_HEADER_TEXT', 'MUI_PAGE_CUSTOMFUNCTION_PRE', 'MUI_PAGE_CUSTOMFUNCTION_SHOW',
+  'MUI_PAGE_CUSTOMFUNCTION_LEAVE', 'MUI_STARTMENU_WRITE_BEGIN', 'MUI_STARTMENU_WRITE_END',
+  'MUI_FINISHPAGE_RUN', 'MUI_FINISHPAGE_SHOWREADME',
+  // ---------------------------------------------------------------------------------------------------------------
+  // Everything below was WRONG in the first version of this list, and each wrong name cost a compile failure that
+  // this checker reported as fine: NSD_LB_GetCurSel, NSD_LB_SetCurSel, NSD_DisableWindow and GetFileSize do not exist
+  // in any NSIS header. A hand-maintained allowlist of other people's macro names is only as good as the care taken
+  // copying them, and this one was written from memory. The names here are now the ones nsDialogs.nsh, LogicLib.nsh,
+  // FileFunc.nsh and x64.nsh actually define, verified by compiling the script for real (see
+  // scripts/compile-check-installer.ts and docs/DECISIONS.md).
+  // ---------------------------------------------------------------------------------------------------------------
+  // nsDialogs controls, from __NSD_DefineControl.
+  'NSD_CreateLabel', 'NSD_CreateText', 'NSD_CreatePassword', 'NSD_CreateCheckbox', 'NSD_CreateCheckBox',
+  'NSD_CreateListBox', 'NSD_CreateProgressBar', 'NSD_CreateDirRequest', 'NSD_CreateLink', 'NSD_CreateButton',
+  // nsDialogs actions, from the !define lines in nsDialogs.nsh.
+  'NSD_LB_AddString', 'NSD_LB_SetSelectionIndex', 'NSD_LB_GetSelectionIndex', 'NSD_GetText', 'NSD_SetText',
+  'NSD_GetState', 'NSD_Check', 'NSD_OnClick', 'NSD_ShowWindow',
+  // FileFunc.nsh. GetSize is the size macro; there is no GetFileSize.
+  'GetSize',
+])
+
+/**
+ * The nsDialogs macros that exist, split into what a control is called and what can be done to it.
+ *
+ * An earlier version accepted any name starting with `NSD_`, which meant a typo such as `${NSD_CreateButon}` —
+ * exactly the mistake this checker exists for — passed silently and would only fail on a Windows build machine.
+ * Listing the vocabulary catches the typo; the lists are from nsDialogs' own documentation, not from this script.
+ */
+const NSD_CONTROLS = new Set([
+  'Label', 'Icon', 'Bitmap', 'Link', 'Button', 'GroupBox', 'Checkbox', 'RadioButton', 'Text', 'Password',
+  'Number', 'FileRequest', 'DirRequest', 'ComboBox', 'DropList', 'ListBox', 'ListBoxEx', 'ProgressBar', 'HLine', 'VLine',
+])
+const NSD_OPERATIONS = new Set([
+  'CreateButton', 'CreateLabel', 'CreateIcon', 'CreateBitmap', 'CreateLink', 'CreateGroupBox', 'CreateCheckbox',
+  'CreateRadioButton', 'CreateText', 'CreatePassword', 'CreateNumber', 'CreateFileRequest', 'CreateDirRequest',
+  'CreateComboBox', 'CreateDropList', 'CreateListBox', 'CreateListBoxEx', 'CreateProgressBar', 'CreateHLine',
+  'CreateVLine', 'CreateLine', 'AddString', 'InsertString', 'DeleteString', 'FindString', 'ResetContent',
+  'GetCurSel', 'SetCurSel', 'GetText', 'SetText', 'GetState', 'SetState', 'Check', 'OnClick', 'OnChange',
+  'OnSelChange', 'DisableWindow', 'EnableWindow', 'ShowWindow', 'SetFocus', 'GetTextLength', 'SetLimitText',
+  'AddStyle', 'SelectFileDialog', 'SelectFolderDialog',
+])
+/**
+ * Macros from the NSIS standard headers, and the header each one lives in.
+ *
+ * A `${GetRoot}` is only valid because `FileFunc.nsh` is included; if somebody removes that include the script
+ * stops compiling, and the checker should notice that rather than accept the macro from a list on faith.
+ */
+const NSIS_STDLIB_MACROS: Record<string, string> = {
+  GetParameters: 'FileFunc.nsh', GetOptions: 'FileFunc.nsh', GetRoot: 'FileFunc.nsh', DriveSpace: 'FileFunc.nsh',
+  GetSize: 'FileFunc.nsh', GetTime: 'FileFunc.nsh',
+  // StrContains.nsh defines `${StrContains}` as a macro that calls its own Function, so it is only valid while the
+  // include is present -- the same rule as the FileFunc entries.
+  StrContains: 'StrContains.nsh', GetFileVersion: 'FileFunc.nsh', GetFileAttributes: 'FileFunc.nsh',
+  GetExeName: 'FileFunc.nsh', GetExePath: 'FileFunc.nsh', GetParent: 'FileFunc.nsh', GetBaseName: 'FileFunc.nsh',
+  GetDrives: 'FileFunc.nsh', GetFileTime: 'FileFunc.nsh', GetFileTimeL: 'FileFunc.nsh', BannerTrimPath: 'FileFunc.nsh',
+  Locate: 'FileFunc.nsh', GetWinVer: 'WinVer.nsh', AtLeastWin10: 'WinVer.nsh', AtMostWin10: 'WinVer.nsh',
+  AtLeastWin11: 'WinVer.nsh', AtLeastWin8: 'WinVer.nsh', AtLeastWin7: 'WinVer.nsh', AtMostWin7: 'WinVer.nsh',
+  AtLeastWinVista: 'WinVer.nsh', AtMostWinVista: 'WinVer.nsh', AtLeastWinXP: 'WinVer.nsh', AtMostWinXP: 'WinVer.nsh',
+}
+
+function isStdlibMacro(name: string, includesHeader: (header: string) => boolean): boolean {
+  const header = NSIS_STDLIB_MACROS[name]
+  return header !== undefined && includesHeader(header)
+}
+
+function isNsDialogsMacro(name: string): boolean {
+  const match = /^NSD_(?:LB_|CB_|G_)?(\w+)$/u.exec(name)
+  if (!match) return false
+  const operation = match[1]!
+  return NSD_OPERATIONS.has(operation) || NSD_CONTROLS.has(operation)
+}
+
+/** Macros that is allowed to be inserted from a *companion generated include rather than from this file. */
+const COMPANION_INCLUDES = ['generated.nsh', 'currency-ui.nsh', 'json-escaping.nsh']
+
+const EXTERNALLY_INSERTED_MACROS = new Set([
+  'customWelcomePage', 'customFinishPage', 'customPageAfterChangeDir', 'customHeader', 'customInit',
+  'customInstall', 'customUnInstall', 'customUnInit', 'licensePage', 'customUninstallPage', 'customInstallMode',
+])
+
+export interface ScriptProblem {
+  line: number
+  message: string
+}
+
+const BLOCK_OPENERS: Array<[RegExp, string]> = [
+  [/^\s*\$\{If(Not)?\b/u, 'If'],
+  [/^\s*\$\{Do(While)?\b/u, 'Do'],
+  [/^\s*Function\s+\S+/u, 'Function'],
+  [/^\s*Section\b/u, 'Section'],
+  [/^\s*SectionEnd\b/u, 'SectionEnd'],
+]
+const BLOCK_CLOSERS: Array<[RegExp, string]> = [
+  [/^\s*\$\{EndIf\}/u, 'EndIf'],
+  [/^\s*\$\{Loop\}/u, 'Loop'],
+  [/^\s*FunctionEnd\b/u, 'FunctionEnd'],
+]
+
+/**
+ * Remove a trailing `;` comment, but only a real one.
+ *
+ * The first version cut at the first `;` anywhere on the line. NSIS comments do start at `;`, but a `;` inside a quoted
+ * string is data -- and several messages here contain one ("... later; this computer ..."). Truncating there made the
+ * checker report a MessageBox that plainly ends in `/SD IDOK` as having no `/SD`, because the `/SD` was past the
+ * semicolon. A checker that mis-reads strings produces confident nonsense, which is worse than silence.
+ *
+ * The rule is NSIS's own: a `;` starts a comment at the start of a line or after whitespace, and never inside quotes.
+ */
+function stripComments(line: string): string {
+  let quoted = false
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index]
+    if (character === '"') quoted = !quoted
+    if (quoted) continue
+    if (character !== ';') continue
+    const before = index === 0 ? ' ' : line[index - 1]!
+    if (/\s/u.test(before)) return line.slice(0, index)
+  }
+  return line
+}
+
+export interface CheckOptions {
+  /**
+   * The text of companion files this script `!include`s, keyed by their `!include` name.
+   *
+   * Without these the checker could not tell an unknown macro from one a generated include supplies, and the
+   * cheap way out is to skip the check whenever an include exists — which silently stops catching typos in the
+   * most macro-heavy file in the project. Reading them means a name is accepted only if it is genuinely there.
+   */
+  companionScripts?: Record<string, string>
+  /**
+   * Names of the `!define`s the header generator emits. Supplying them turns on the "generated but unread" rule.
+   * Left optional so the many small fixtures in the tests do not have to satisfy it.
+   */
+  generatedDefines?: readonly string[]
+}
+
+export function checkNsisScript(text: string, options: CheckOptions = {}): ScriptProblem[] {
+  const problems: ScriptProblem[] = []
+  const lines = text.split('\n')
+  const strip = lines.map(stripComments)
+
+  // Every !define name, so a `!define Readme` used as `${Readme}` is not mistaken for a missing macro.
+  const defineNames = new Set<string>()
+  for (const raw of strip) {
+    const definition = /^!define\s+(\S+)/u.exec(raw.trim())
+    if (definition) defineNames.add(definition[1]!)
+  }
+  const isPlainDefine = (name: string): boolean => defineNames.has(name)
+  // Everything the script includes and the caller supplied: macros AND functions. A companion include may define
+  // `EscapeJson`, and a `Call EscapeJson` is correct if so — but only then, which is why the files are read rather
+  // than assumed.
+  const includedNames = COMPANION_INCLUDES.filter((name) =>
+    new RegExp(`^!include\\s+"?${name.replace('.', '\\.')}"?$`, 'mu').test(text))
+  const companionMacros = new Set<string>()
+  const companionFunctions = new Set<string>()
+  for (const [name, companionText] of Object.entries(options.companionScripts ?? {})) {
+    if (!includedNames.includes(name)) continue
+    for (const raw of companionText.split('\n')) {
+      const macro = /^!macro\s+(\S+)/u.exec(raw.trim())
+      if (macro) companionMacros.add(macro[1]!)
+      const fn = /^Function\s+(?:un\.)?(\S+)/u.exec(raw.trim())
+      if (fn) companionFunctions.add(fn[1]!)
+    }
+  }
+  const unreadableCompanion = includedNames.some((name) => options.companionScripts?.[name] === undefined)
+  const includesHeader = (header: string): boolean =>
+    new RegExp(`^!include\\s+"?${header.replace('.', '\\.')}"?\\s*$`, 'mu').test(text)
+
+  // ---- declared functions
+  const declared = new Set<string>()
+  const called = new Map<string, number>()
+  for (const [index, raw] of strip.entries()) {
+    const line = raw.trim()
+    const declaration = /^Function\s+(?:un\.)?(\S+)/u.exec(line)
+    if (declaration) declared.add(declaration[1]!)
+    const call = /^Call\s+(?:un\.)?(\S+)/u.exec(line)
+    if (call) called.set(call[1]!, index + 1)
+  }
+  for (const [name, line] of called) {
+    if (!declared.has(name) && !companionFunctions.has(name) && !unreadableCompanion) {
+      problems.push({ line, message: `Call to "${name}", which is never declared with Function.` })
+    }
+  }
+
+  // ---- block balance
+  const stack: Array<{ kind: string; line: number }> = []
+  for (const [index, raw] of strip.entries()) {
+    const line = raw.trim()
+    if (!line) continue
+    if (/^\s*\$\{Else(If)?\b/u.test(line)) {
+      // Else/ElseIf share the If's block rather than opening a new one.
+      const top = stack[stack.length - 1]
+      if (!top || top.kind !== 'If') {
+        problems.push({ line: index + 1, message: 'Else or ElseIf without a matching ${If}.' })
+      }
+      continue
+    }
+    if (/^\s*FunctionEnd\b/u.test(line) || /^\s*SectionEnd\b/u.test(line)) {
+      const closer = /^\s*FunctionEnd\b/u.test(line) ? 'FunctionEnd' : 'SectionEnd'
+      const top = stack.pop()
+      const expected = closer === 'FunctionEnd' ? 'Function' : 'Section'
+      if (!top || top.kind !== expected) {
+        problems.push({
+          line: index + 1,
+          message: `${closer} does not match ${top ? `the ${top.kind} opened on line ${top.line}` : 'anything'}.`,
+        })
+      }
+      continue
+    }
+    if (BLOCK_CLOSERS.some(([pattern]) => pattern.test(line))) {
+      const top = stack.pop()
+      const isEndIf = /^\s*\$\{EndIf\}/u.test(line)
+      const isLoop = /^\s*\$\{Loop\}/u.test(line)
+      const expected = isEndIf ? 'If' : isLoop ? 'Do' : null
+      if (expected && (!top || top.kind !== expected)) {
+        problems.push({
+          line: index + 1,
+          message: `${isEndIf ? '${EndIf}' : '${Loop}'} does not match ${top ? `the ${top.kind} opened on line ${top.line}` : 'anything'}.`,
+        })
+      }
+      continue
+    }
+    for (const [pattern, kind] of BLOCK_OPENERS) {
+      if (pattern.test(line)) {
+        stack.push({ kind, line: index + 1 })
+        break
+      }
+    }
+  }
+  for (const open of stack) {
+    problems.push({ line: open.line, message: `${open.kind} is never closed.` })
+  }
+
+  const isIncludeFile = !/^\s*(Function|Section|Page|!include)\b/mu.test(text) && /^!macro\b/mu.test(text)
+
+  // ---- custom MUI pages: defined but not inserted (page silently missing), inserted but not defined.
+  //
+  // electron-builder's own template inserts these three macros itself, so a script that merely *defines* them is
+  // correct — they are the supported extension points. Everything else must be inserted by this script.
+  const defined = new Map<string, number>()
+  const inserted = new Map<string, number>()
+  for (const [index, raw] of strip.entries()) {
+    const line = raw.trim()
+    // Every macro counts, not just the custom* ones: a helper macro defined and never inserted is dead code,
+    // and a page macro of any name that nobody inserts is a silently missing page.
+    const definition = /^!macro\s+(\S+)/u.exec(line)
+    if (definition) defined.set(definition[1]!, index + 1)
+    const insertion = /^!insertmacro\s+(\S+)/u.exec(line)
+    if (insertion) inserted.set(insertion[1]!, index + 1)
+  }
+  for (const [name, line] of defined) {
+    if (inserted.has(name)) continue
+    if (EXTERNALLY_INSERTED_MACROS.has(name)) continue
+    // An include file is inserted by its host script, not by itself.
+    if (isIncludeFile) continue
+    problems.push({ line, message: `!macro ${name} is defined but never inserted, so that page never appears.` })
+  }
+
+  for (const [name, line] of inserted) {
+    if (defined.has(name) || EXTERNAL_LIBRARY_MACROS.has(name) || isNsDialogsMacro(name)) continue
+    if (companionMacros.has(name)) continue
+    if (unreadableCompanion) continue
+    problems.push({ line, message: `!insertmacro ${name} is used but never defined, which fails at compile time.` })
+  }
+
+  // ---- macros invoked in ${...} form
+  //
+  // This is how almost every macro is actually used (${NSD_CreateButton}, ${GetFileSize}, ${If}...), and it went
+  // unchecked for a while, so a misspelt control name would have reached the Windows build machine and failed
+  // there instead of here. Only invocations at the start of a statement are examined: a `${VAR}` in the middle of
+  // a string is a define reference, not a macro call, and flagging those would produce noise rather than findings.
+  const LOGIC_MACROS = new Set([
+    'If', 'IfNot', 'Else', 'ElseIf', 'ElseIfNot', 'EndIf', 'Do', 'DoWhile', 'Loop', 'While', 'Switch', 'Case',
+    'Default', 'EndSwitch', 'Select', 'EndSelect', 'Break', 'Continue', 'ExitDo', 'AndIf', 'OrIf', 'EndWhile',
+  ])
+  for (const [index, raw] of strip.entries()) {
+    const line = raw.trim()
+    const invocation = /^\$\{(\w+)(?:\s|\}|$)/u.exec(line)
+    if (!invocation) continue
+    const name = invocation[1]!
+    if (LOGIC_MACROS.has(name) || defined.has(name) || EXTERNAL_LIBRARY_MACROS.has(name)) continue
+    if (isNsDialogsMacro(name) || companionMacros.has(name)) continue
+    if (isStdlibMacro(name, includesHeader)) continue
+    // A define used as ${NAME} at the start of a line is a constant reference, not a macro call.
+    if (isPlainDefine(name)) continue
+    if (unreadableCompanion) continue
+    problems.push({
+      line: index + 1,
+      message: `\${${name}} is used but is not a macro defined in this script, a known LogicLib/nsDialogs/macros macro, or a !define.`,
+    })
+  }
+
+  // ---- defines that are redefined with a different value
+  //
+  // Only one branch of an `!ifdef`/`!else` chain is ever compiled, so a different value in the other branch is not a
+  // redefinition at all. Tracking which branch each `!define` sits in is what lets this rule stay useful: the pattern
+  //
+  //     !ifdef PRODUCT_FILENAME
+  //       !define NAME "${PRODUCT_FILENAME}.exe"
+  //     !else
+  //       !define NAME "${PRODUCT_NAME}.exe"
+  //     !endif
+  //
+  // is correct and ordinary, and flagging it would push people to delete the guard rather than write it. The key is the
+  // full branch path -- every enclosing conditional and which side of its `!else` -- so two defines conflict only when
+  // they could be compiled together.
+  const defines = new Map<string, { value: string; line: number; branch: string }>()
+  const branches: string[] = []
+  let branchOrdinal = 0
+  for (const [index, raw] of strip.entries()) {
+    const line = raw.trim()
+    const conditional = /^!(ifdef|ifndef|if|ifmacrodef|ifmacrondef|else|endif)\b(.*)$/u.exec(line)
+    if (conditional) {
+      const [, keyword, rest] = conditional
+      if (keyword === 'else') {
+        // Same depth, opposite side: a fresh path so nothing inside can collide with the branch before it.
+        branches[branches.length - 1] = `else${branchOrdinal++}`
+      } else if (keyword === 'endif') {
+        branches.pop()
+      } else {
+        branches.push(`${keyword}${branchOrdinal++}${(rest ?? '').trim()}`)
+      }
+      continue
+    }
+    const match = /^!define\s+(\S+)\s*(.*)$/u.exec(line)
+    if (!match) continue
+    const [, name, value] = match
+    const branch = branches.join('>')
+    const seen = defines.get(name!)
+    if (!seen) {
+      defines.set(name!, { value: value ?? '', line: index + 1, branch })
+    } else if (seen.value !== (value ?? '') && seen.branch === branch) {
+      problems.push({
+        line: index + 1,
+        message: `!define ${name} was already defined on line ${seen.line} with a different value.`,
+      })
+    } else if (seen.value !== (value ?? '')) {
+      // Different branches: legal, and the last definition wins for the branch that is actually compiled. Record the
+      // later one so a genuine duplicate inside that same branch is still caught.
+      defines.set(name!, { value: value ?? '', line: index + 1, branch })
+    }
+  }
+
+  // ---- a gate that only exists on a page
+  //
+  // A page callback runs when a page is left, and a silent install draws no pages at all -- so a check written inside a
+  // Leave function is skipped by /S. That is not a theoretical flaw: the vendor password gate and the Windows-version
+  // and 64-bit checks both lived only in Leave callbacks, so `Setup.exe /S` installed without the password and installed
+  // a 64-bit app on 32-bit Windows, and every tool involved reported success.
+  //
+  // The rule: any Leave callback that can Abort must have that gate re-stated in the silent branch of .onInit. Abort is
+  // the signal, because a callback that only records a checkbox value is not gating anything. The check on the silent
+  // side is deliberately loose -- it looks for evidence that .onInit refuses on its own terms -- because the two
+  // branches legitimately differ in wording; requiring identical text would force duplication to satisfy a checker.
+  // A page callback is skipped entirely by /S, whether it creates the page or leaves it -- so a value computed only in
+  // a Create callback is missing too. That is what happened to $NeedsVcRuntime: it was set in ChecksPageCreate, so a
+  // silent install left it "0" and the prerequisite was never installed. Both halves are therefore searched, and only
+  // the Leave half is required to contain Abort (a Create callback that cannot refuse is not a gate, it is a
+  // presentation concern -- the VC++ case is caught by the requirement below that .onInit run the detector).
+  const leaveGates: string[] = []
+  let computesPrerequisite = false
+  for (const [index, raw] of strip.entries()) {
+    const line = raw.trim()
+    const leave = /^Function\s+(\w+Page(?:Leave|Create))\s*$/u.exec(line)
+    if (!leave) continue
+    const end = strip.findIndex((candidate, position) => position > index && /^FunctionEnd\s*$/u.test(candidate.trim()))
+    const body = strip.slice(index, end === -1 ? undefined : end)
+    const leaves = leave[1]!.endsWith('PageLeave')
+    if (/NeedsVcRuntime/u.test(body.join('\n'))) computesPrerequisite = true
+    if (leaves && body.some((candidate) => /^\s*Abort\s*$/u.test(candidate))) leaveGates.push(leave[1]!)
+  }
+  if (leaveGates.length > 0 || computesPrerequisite) {
+    const onInitStart = strip.findIndex((raw) => /^Function\s+\.onInit\s*$/u.test(raw.trim()))
+    if (onInitStart === -1) {
+      problems.push({
+        line: 1,
+        message: `${leaveGates.join(', ')} can Abort, but there is no .onInit, so a silent install never runs those checks.`,
+      })
+    } else {
+      const onInitEnd = strip.findIndex((raw, index) => index > onInitStart && /^FunctionEnd\s*$/u.test(raw.trim()))
+      const body = strip.slice(onInitStart, onInitEnd === -1 ? undefined : onInitEnd)
+      const silentIndex = body.findIndex((raw) => raw.includes('${Silent}'))
+      if (silentIndex === -1) {
+        problems.push({
+          line: onInitStart + 1,
+          message: `${leaveGates.join(', ')} gate the install, but .onInit has no silent branch, so /S skips them.`,
+        })
+      } else {
+        const silentBranch = body.slice(silentIndex).join('\n')
+        if (leaveGates.includes('PasswordPageLeave')) {
+          // The password gate is specific enough to name: it must read a flag AND invoke the checker. Accepting a bare
+          // `File /oname=...password-check.exe` would bless a script that stages the helper and never runs it.
+          const invokes = /(?:ExecToStack|ExecToLog|ExecWait)[^\n]*password-check\.exe/u.test(silentBranch)
+          if (!/\/PASSWORD=/u.test(silentBranch) || !invokes) {
+            problems.push({
+              line: onInitStart + silentIndex + 1,
+              message: 'The silent branch never verifies the vendor password, so /S bypasses the password page.',
+            })
+          }
+        }
+        // `leaveGates` holds function NAMES, so testing it for a variable name never matches -- that is how the first
+        // version of this rule silently did nothing. What is being asked is whether any page computes the
+        // prerequisite; ask the flag that recorded it.
+        if (computesPrerequisite && !/DetectVcRuntime|NeedsVcRuntime/u.test(silentBranch)) {
+          problems.push({
+            line: onInitStart + silentIndex + 1,
+            message: 'The silent branch never detects the missing prerequisite, so /S installs without it.',
+          })
+        }
+        if (/(?:Checks|System)Page(?:Leave|Create)/.test(leaveGates.join(',')) && !/AtLeastWin\d+|RunningX64/u.test(silentBranch)) {
+          problems.push({
+            line: onInitStart + silentIndex + 1,
+            message: 'The silent branch never re-checks the OS or architecture, so /S skips the system check page.',
+          })
+        }
+      }
+    }
+  }
+
+  // ---- a file the installer advertises but never writes
+  //
+  // `$INSTDIR\install.log` was named in the finish page's "Open install log" button, in the finish-page text, and in the
+  // failure message -- and written by nothing. Clicking the button gave a "cannot find the file" error at the moment
+  // the customer was looking for help, which is worse than offering no button at all.
+  //
+  // The rule is deliberately narrow: it looks only for a `.log` file named in this script and requires a FileWrite to
+  // that same name somewhere. It is not a general "every path mentioned exists" analysis, which would need the whole
+  // filesystem; it is the specific shape of a promise the script makes about its own output.
+  {
+    const text = strip.join('\n')
+    const advertised = new Set<string>()
+    for (const match of text.matchAll(/\$INSTDIR\\([A-Za-z0-9_.-]+\.log)\b/gu)) advertised.add(match[1]!)
+    for (const name of advertised) {
+      const escaped = name.replace('.', '\\.')
+      // The DESTINATION, not any mention. `FileWrite $h "Infoflex install.log"` writes text that HAPPENS to name the
+      // file into a handle pointed elsewhere; it is not a write of that file. The first version of this rule matched
+      // any line containing the name, so deleting both the FileOpen and the CopyFiles still passed -- the header string
+      // alone satisfied it. Two things count as writing it: a handle opened on that path, or a CopyFiles whose
+      // destination is that path.
+      // A handle opened on a temp path is not enough: the three messages all name `$INSTDIR`. What satisfies the
+      // promise is a file that ENDS UP at that path -- a FileOpen on it, or, in this script's design, a CopyFiles whose
+      // destination is it. `writesFile` alone was satisfied by a log opened in $PLUGINSDIR and never moved, which is
+      // a file the customer cannot reach at the path they were told.
+      const opensAtDestination = new RegExp(`FileOpen\\s+\\$[A-Za-z0-9_]+[^\\n]*\\$INSTDIR\\\\${escaped}`, 'u').test(text)
+      const copiesToDestination = new RegExp(`CopyFiles[^\\n]*\\$INSTDIR\\\\${escaped}"`, 'u').test(text) ||
+        new RegExp(`CopyFiles[^\\n]*\\$INSTDIR\\\\${escaped}\s`, 'u').test(text)
+      const writesFile = opensAtDestination || copiesToDestination
+      const copiesFile = copiesToDestination
+      if (!writesFile && !copiesFile) {
+        problems.push({
+          line: 1,
+          message: `The script advertises "$INSTDIR\\${name}" but nothing writes or copies a file of that name.`,
+        })
+      }
+    }
+  }
+
+  // ---- a MessageBox that will block a silent run
+  //
+  // NSIS suppresses a MessageBox in silent mode only when the command carries `/SD <button>`; without one it shows the
+  // box and waits (Source/exehead/util.c:138-141 in NSIS's own runtime). That turns a silent install or a silent
+  // uninstall into a process hanging on a dialog nobody is watching -- an unattended deployment stalls, and during an
+  // upgrade the box appears over an installer the user did not ask a question of.
+  //
+  // This is a property of one line, which is exactly what a static checker is good at. It cannot know whether a given
+  // box is *reachable* in silent mode; the rule is deliberately unconditional because the safe answer is the same
+  // everywhere, and a conditional rule would need the checker to model control flow it does not have.
+  for (const [index, raw] of strip.entries()) {
+    const line = raw.trim()
+    if (!/^MessageBox\s/u.test(line)) continue
+    if (/\/SD\s+ID[A-Z]+/u.test(line)) continue
+    problems.push({
+      line: index + 1,
+      message: 'MessageBox has no "/SD <button>", so it will block a silent install or uninstall.',
+    })
+  }
+
+  // ---- a function declared twice
+  //
+  // NSIS refuses the second definition outright -- `Function named "un.onInit" already exists` -- and it refuses it at
+  // the end of the compile, so the error names a line that may be far from the mistake. This script declared
+  // `un.onInit`, which electron-builder's own uninstaller.nsh also defines; because this file is layered into that
+  // template, the pair was fatal and the uninstaller pass could not build.
+  //
+  // A checker reading this file alone cannot see the template. What it CAN see is a name declared twice *here*, which
+  // is the same mistake one level in, and the same reasoning about branches applies: two declarations under opposite
+  // arms of an `!ifdef` are never compiled together and are not a conflict.
+  const functions = new Map<string, { line: number; branch: string }>()
+  {
+    const functionBranches: string[] = []
+    let functionBranchOrdinal = 0
+    for (const [index, raw] of strip.entries()) {
+      const line = raw.trim()
+      const conditional = /^!(ifdef|ifndef|if|ifmacrodef|ifmacrondef|else|endif)\b(.*)$/u.exec(line)
+      if (conditional) {
+        const [, keyword, rest] = conditional
+        if (keyword === 'else') {
+          functionBranches[functionBranches.length - 1] = `else${functionBranchOrdinal++}`
+        } else if (keyword === 'endif') {
+          functionBranches.pop()
+        } else {
+          functionBranches.push(`${keyword}${functionBranchOrdinal++}${(rest ?? '').trim()}`)
+        }
+        continue
+      }
+      const declaration = /^Function\s+(un\.)?(\S+)\s*$/u.exec(line)
+      if (!declaration) continue
+      const [, unPrefix, name] = declaration
+      const branch = functionBranches.join('>')
+      const seen = functions.get(name!)
+      if (!seen) {
+        functions.set(name!, { line: index + 1, branch })
+      } else if (seen.branch === branch) {
+        problems.push({
+          line: index + 1,
+          message: `Function ${unPrefix ?? ''}${name} was already declared on line ${seen.line}.`,
+        })
+      }
+    }
+  }
+
+  // ---- a finish-page "run" that MUI executes with its own elevated token
+  //
+  // `MUI_FINISHPAGE_RUN "<path>"` looks like the obvious way to offer "Launch the application", and it is what this
+  // script did. But the finish page only wraps the target in a function when MUI_FINISHPAGE_RUN_FUNCTION is also
+  // defined; otherwise it emits `Exec "<path>"` (Contrib/Modern UI 2/Pages/Finish.nsh:482-486). Exec is
+  // CreateProcess (Source/exehead/util.c:87-92), which inherits the caller's token -- and a perMachine installer has
+  // elevated by then. The result is that "Launch now" starts the application as Administrator, which makes the
+  // per-user parts of the app (its data directory, its DPAPI-protected settings) Administrator-owned.
+  //
+  // So: a NON-EMPTY MUI_FINISHPAGE_RUN is the defect, whether or not a _FUNCTION is present -- if a function exists
+  // MUI ignores the value and it is misleading; if one does not, the value is executed elevated. The empty form plus
+  // a function is the only correct combination.
+  {
+    const runDefines = [...text.matchAll(/^[ \t]*!define[ \t]+MUI_FINISHPAGE_RUN(?!_)([ \t]+(.*))?$/gmu)]
+    for (const match of runDefines) {
+      const value = stripComments(match[2] ?? '').trim()
+      if (value !== '') {
+        problems.push({
+          line: lineOf(text, new RegExp(`!define[ \\t]+MUI_FINISHPAGE_RUN(?!_)[ \\t]+${escapeRegExp(value)}`, 'u')),
+          message:
+            `MUI_FINISHPAGE_RUN is set to ${value}, so the finish page launches the application elevated ` +
+            '(MUI runs this value with Exec). Define it empty and put the launch in MUI_FINISHPAGE_RUN_FUNCTION.',
+        })
+      }
+    }
+  }
+
+  // ---- a control the customer can change that nothing reads, and a progress bar nothing moves
+  //
+  // Three of these shipped at once, all in the same shape: the page offered an input and the installer ignored it.
+  //   * `${NSD_CreateDirRequest} ... "$INSTDIR"` then `Pop $0` and never read -- an editable install folder that did
+  //     not set the install folder ($INSTDIR is owned by MUI_PAGE_DIRECTORY, which runs earlier).
+  //   * a `${NSD_CreateProgressBar}` that no NSD_ProgressBar_SetPos/StepIt ever touched. It cannot be driven at all:
+  //     NSISdl paints the wizard's stock bar (GetDlgItem 1004/1006) and cannot see nsDialogs' 1200+ IDs.
+  //   * `Var`s declared and never used, which is how `$LaunchWanted` and friends survived.
+  //
+  // The rule is narrow on purpose: it only reports a nsDialogs control whose variable is never read after the line
+  // that Populates it, and a progress bar with no SetPos/StepIt anywhere.
+  {
+    // A control whose value the installer needs must be Pop'ped into a NAMED variable. `Pop $0` cannot be audited --
+    // $0 is reused by every label on the page -- and that is exactly how the editable install-folder box went
+    // unnoticed: it popped to $0 and $INSTDIR was never assigned from it. So: every nsDialogs control that can carry
+    // an answer (everything except Label, Link, Icon and the buttons, which are decorations) must have a name.
+    // Controls whose value IS the answer. A register cannot be audited for these, because every label on the page
+    // reuses $0..$9, so a `Pop $0` here means the value is gone -- which is precisely what happened to the editable
+    // install-folder box (DirRequest -> $0, $INSTDIR never assigned).
+    const MUST_BE_NAMED = new Set(['DirRequest', 'FileRequest', 'ProgressBar'])
+    // Controls read explicitly by NSD_GetText/NSD_GetState. A text field popped into a register is fine when the
+    // script later does `${NSD_GetText} $2 $CurrencyCodeOut`; that is a read, and the rule can see it.
+    const READ_BY_GETTER = new Set(['Text', 'Password', 'Edit', 'ComboBox', 'DropList', 'ListBox', 'Checkbox'])
+    // strip, not the raw `text` parameter: the script's own comments explain this rule and name the variables it
+    // is about, so counting uses in the raw text made every flagged variable look used. (That is also how this rule
+    // passed the mutation test on its first attempt when it should not have.)
+    const code = strip.join('\n')
+    const controlCreate = new RegExp(
+      '\\$\\{NSD_Create(\\w+)\\}[^\\n]*\\n\\s*Pop\\s+\\$(\\w+)',
+      'gu',
+    )
+    for (const match of code.matchAll(controlCreate)) {
+      const kind = match[1]!
+      const name = match[2]!
+      if (/^\d+$/u.test(name)) {
+        const readBack =
+          new RegExp(`\\$\\{NSD_(?:GetText|GetState)\\}\\s+\\$${name}\\b[^\\n]*\\$\\w+`, 'u').test(code) ||
+          new RegExp(`\\$\\{NSD_GetText\\}\\s+\\$${name}\\b`, 'u').test(code)
+        // A control that is then disabled cannot be changed, so it states a fact rather than collecting an answer.
+        // The two prerequisite checkboxes use exactly that: ticked, greyed, and never read.
+        const disabled = new RegExp(`\\$\\{NSD_Check\\}\\s+\\$${name}\\b[\\s\\S]{0,120}?WM_ENABLE\\} 0`, 'u').test(code)
+        if (MUST_BE_NAMED.has(kind) || (READ_BY_GETTER.has(kind) && !readBack && !disabled)) {
+          problems.push({
+            line: lineOf(code, new RegExp(`Pop\\s+\\$${name}\\b`, 'u')),
+            message:
+              `Creates a ${kind} control into register $${name} with nothing reading it back. An answer goes into a ` +
+              'named Var; a register is reused by every other control on the page, so the value is lost.',
+          })
+        }
+        continue
+      }
+      // Named and therefore auditable: it must be read somewhere beyond the Pop.
+      const uses = [...code.matchAll(new RegExp(`\\$${name}\\b`, 'gu'))].length
+      if (uses > 1) continue
+      problems.push({
+        line: lineOf(code, new RegExp(`Pop\\s+\\$${name}\\b`, 'u')),
+        message:
+          kind === 'ProgressBar'
+            ? `Creates progress bar $${name} and never sets its position. NSISdl cannot drive a nsDialogs progress bar, ` +
+              'so a bar here can only sit at zero -- remove it rather than show one that never moves.'
+            : `Creates a ${kind} control whose value goes into $${name}, which nothing ever reads.`,
+      })
+    }
+  }
+
+  // ---- a Var that is declared and never used
+  //
+  // `Var LaunchWanted` / `StrCpy $LaunchWanted "1"` was the shape: an option that a page used to offer, whose state
+  // was initialised on every run and never read by anything. Four of these survived at once (CompLaunch, CompDesktop,
+  // LaunchWanted, DesktopWanted) because NSIS does not warn about them and no test looked.
+  {
+    const code = strip.join('\n')
+    for (const match of code.matchAll(/^[ \t]*Var[ \t]+(\w+)[ \t]*$/gmu)) {
+      const name = match[1]!
+      const uses = [...code.matchAll(new RegExp(`\\$${name}\\b`, 'gu'))].length
+      if (uses > 0) continue
+      problems.push({
+        line: lineOf(code, new RegExp(`Var[ \\t]+${name}[ \\t]*$`, 'mu')),
+        message: `Declares Var ${name} and never uses it. A variable nothing reads is an option the page no longer honours.`,
+      })
+    }
+  }
+
+  // ---- a refusal that fires after the payload is already on disk
+  //
+  // electron-builder's install section copies the application (installApplicationFiles), writes the uninstall registry
+  // entry, creates the shortcuts and generates the uninstaller, and only THEN inserts customInstall
+  // (installSection.nsh:67 then :82). So anything in customInstall that Aborts leaves a half-installed application
+  // behind. The offline build's "the runtime I was built to carry is missing" refusal did exactly that while telling
+  // the customer "Nothing was installed" -- false, and the Start Menu entry was on screen while it said so.
+  //
+  // The rule: inside customInstall, an Abort must be preceded by a call that undoes the install, and any claim that
+  // nothing was installed must be too. It cannot know whether the rollback is correct; it can know that one exists.
+  {
+    const code = strip.join('\n')
+    const start = code.indexOf('!macro customInstall')
+    if (start !== -1) {
+      const end = code.indexOf('!macroend', start)
+      const body = code.slice(start, end === -1 ? undefined : end)
+      // The Abort is not necessarily lexically inside the macro: the offline refusal lives in InstallPrerequisites,
+      // which customInstall Calls. Follow the calls, transitively, or the rule reports nothing on the exact script
+      // that carries the defect -- which is how its first version passed the mutation test.
+      const seen = new Set<string>()
+      const called: string[] = []
+      const queue = [...body.matchAll(/\bCall\s+(\w+)/gu)].map((match) => match[1]!)
+      while (queue.length > 0) {
+        const name = queue.pop()!
+        if (seen.has(name)) continue
+        seen.add(name)
+        const fnStart = code.indexOf(`Function ${name}\n`)
+        if (fnStart === -1) continue
+        const fnEnd = code.indexOf('FunctionEnd', fnStart)
+        const fnBody = code.slice(fnStart, fnEnd === -1 ? undefined : fnEnd)
+        // Collect the BODY, not the name. The first version of this collected names into a Set and then joined the
+        // Set, so `bodies` contained function names rather than their code and the rule could never see the Abort it
+        // was written for. It reported nothing on the script carrying the defect, and the mutation test "passed"
+        // because the rule was already reporting nothing.
+        called.push(fnBody)
+        for (const match of fnBody.matchAll(/\bCall\s+(\w+)/gu)) queue.push(match[1]!)
+      }
+      const bodies = [body, ...called].join('\n')
+      const aborts = bodies.includes('Abort')
+      const rollsBack = /Call\s+RollBackPartialInstall\b/u.test(bodies)
+      if (aborts && !rollsBack) {
+        problems.push({
+          line: lineOf(code, /^!macro customInstall/mu),
+          message:
+            'customInstall (or a function it calls) Aborts after electron-builder has already copied the application, ' +
+            'with no rollback. The customer is left with a half-installed app, shortcuts and an Apps & features entry.',
+        })
+      }
+      if (rollsBack) {
+        // The claim must come AFTER the rollback in the same function, or it describes a machine that is still
+        // half-installed when the sentence is on screen.
+        //
+        // Scoped to functions that actually reach an Abort: the download page also says "Nothing was installed.
+        // Nothing on this computer was changed.", and there it is TRUE -- that page runs before the install section,
+        // so no payload exists yet. A rule that flagged every occurrence would force honest text to be deleted to
+        // quiet a checker, which is the failure mode this file's ${PREREQUISITE_VCREDIST} note is about.
+        for (const fnName of seen) {
+          const fnStart = code.indexOf(`Function ${fnName}\n`)
+          if (fnStart === -1) continue
+          const fnEnd = code.indexOf('FunctionEnd', fnStart)
+          const fnBody = code.slice(fnStart, fnEnd === -1 ? undefined : fnEnd)
+          if (!/\bAbort\b/u.test(fnBody)) continue
+          const claimAt = fnBody.indexOf('Nothing was installed')
+          if (claimAt === -1) continue
+          const rollbackAt = fnBody.indexOf('Call RollBackPartialInstall')
+          if (rollbackAt === -1 || rollbackAt > claimAt) {
+            problems.push({
+              line: lineOf(code, /Nothing was installed/u),
+              message:
+                `Function ${fnName} claims "Nothing was installed" before rolling the partial install back. The ` +
+                'payload, the shortcuts and the uninstall key are already on disk at that point.',
+            })
+          }
+        }
+      }
+    }
+  }
+
+  // ---- a generated define that nothing reads
+  //
+  // generate-installer-script.ts emits a block of `!define`s describing the allowlisted prerequisite:
+  // VCREDIST_URL, VCREDIST_PUBLISHER, VCREDIST_SIZE, ALLOWED_HOST_1..3. The script read only VCREDIST_URL and
+  // VCREDIST_SHA256, so the publisher was generated for a check that was never written and the host allowlist was a
+  // rule enforced only on the TypeScript side -- which the installer does not go through. A define nobody reads is
+  // either dead weight or, as here, the visible half of a promise the script does not keep.
+  //
+  // Scoped to the names the generator emits, read from the generator itself rather than a list kept here: a second
+  // list would drift, which is the same failure this rule is about.
+  if (options.generatedDefines) {
+    const code = strip.join('\n')
+    for (const name of options.generatedDefines) {
+      if (code.includes(`\${${name}}`)) continue
+      problems.push({
+        line: 1,
+        message:
+          `Generated define ${name} is never read by the script. Either the script should use it or the generator ` +
+          'should stop emitting it -- an unused define usually means the feature it describes was never wired up.',
+      })
+    }
+  }
+
+  // ---- the installer must install the application
+  //
+  // This file is an electron-builder *include*: electron-builder's own template copies the payload, so the rule is
+  // that this script must not try to do it itself (a `File /r` of the payload would duplicate or misplace it), and
+  // must not define a Section whose name collides with electron-builder's own Install section. The defect that
+  // prompted this rule was the reverse: a standalone `Section "Install"` with no payload copy at all, which would
+  // have shipped a wizard that created shortcuts to an application it never installed.
+  if (/^\s*Section\s+"Install"/mu.test(text)) {
+    problems.push({
+      line: lineOf(text, /^\s*Section\s+"Install"/mu),
+      message: 'Defines its own Section "Install", which collides with electron-builder\'s. Use !macro customInstall.',
+    })
+  }
+  const hookingInstall = /!macro\s+customInstall/mu.test(text)
+  if (hookingInstall && !/!include\s+"installer\.nsi"/mu.test(text) && !/electron-builder/iu.test(text.slice(0, 2000))) {
+    // Only a file that is neither the include nor its wrapper should be defining these macros.
+    problems.push({
+      line: lineOf(text, /!macro\s+customInstall/mu),
+      message: 'Defines customInstall but is not the installer include electron-builder loads.',
+    })
+  }
+
+  // ---- a ${If} inside a function must reach an ${EndIf} before FunctionEnd; covered by the stack above.
+  return problems
+}
+
+/** Escapes a literal string for use inside a RegExp. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+}
+
+/** The 1-based line number of the first match, for reporting. */
+function lineOf(text: string, pattern: RegExp): number {
+  const match = pattern.exec(text)
+  if (!match) return 1
+  return text.slice(0, match.index).split('\n').length
+}
+
+export function checkNsisFile(path: string): ScriptProblem[] {
+  return checkNsisScript(readFileSync(path, 'utf8'))
+}

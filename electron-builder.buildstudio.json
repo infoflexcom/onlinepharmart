@@ -1,0 +1,36 @@
+{
+  "extends": null,
+  "appId": "com.infoflex.buildstudio",
+  "productName": "Infoflex Build Studio",
+  "npmRebuild": false,
+  "files": [
+    "buildstudio/out/**/*"
+  ],
+  "extraMetadata": {
+    "main": "buildstudio/out/main.js"
+  },
+  "directories": {
+    "buildResources": "build",
+    "output": "dist/buildstudio"
+  },
+  "win": {
+    "icon": "build/icon.ico",
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ]
+  },
+  "nsis": {
+    "oneClick": true,
+    "perMachine": true,
+    "allowElevation": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Infoflex Build Studio",
+    "artifactName": "Infoflex Build Studio Setup.${ext}"
+  }
+}

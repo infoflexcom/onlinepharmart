@@ -1,0 +1,37 @@
+node_modules/
+out/
+dist/
+src/renderer/dist/
+release/
+coverage/
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+buildstudio/out/
+installer/nsis/build-profile.json
+# The ROOT `build-profile.json` is NOT ignored, and the negation below is the point. `installer/nsis/build-profile.json`
+# above is a generated copy that `installer:script` rewrites on every run; the root file is where `release:prerequisite`
+# records the pin, and a release that loses it cannot prove which binary it carried. It holds no secret -- a currency
+# code, a licence URL, and a public digest.
+#
+# The pattern is ANCHORED with a leading slash on purpose. A bare `!build-profile.json` matches the generated copy under
+# installer/nsis/ as well, and git's last-match-wins rule then un-ignores it -- so the copy gets committed, shows as
+# modified after every build, and eventually gets committed again by somebody tidying up. Anchoring keeps the negation
+# to the one file it is meant for. A test in scripts/assemble-release.test.ts checks both halves.
+!/build-profile.json
+# The fetched VC++ redistributable. ~25 MB, published by Microsoft, and it changes when they revise it -- so it is
+# fetched and verified by `npm run release:prerequisite` rather than committed. This comment used to claim that the
+# digest "travels in build-profile.json, which IS in the tree". It did not: the root profile was not ignored but was also
+# never tracked, so a release was committed with no record of the binary it carried. The `!build-profile.json` negation
+# below is what makes the sentence true.
+installer/cache/
+
+# Compiled installer output. A build artefact, never a source file: it is produced by `npm run build` (or, for the
+# harness, by `npm run installer:compile`) and would go stale in the tree the moment the script changed.
+*.exe

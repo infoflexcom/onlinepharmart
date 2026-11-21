@@ -1,0 +1,143 @@
+{
+  "name": "infoflex-pharmart",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Infoflex Pharm and Infoflex Mart desktop foundation",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "npm run build:mobile && electron-vite dev",
+    "dev:web": "vite --config vite.config.ts --host 0.0.0.0",
+    "build:mobile": "vite build --config mobile/vite.config.ts && tsx scripts/stamp-mobile-shell-cache.ts",
+    "build": "npm run build:mobile && electron-vite build",
+    "build:web": "vite build --config vite.config.ts",
+    "preview": "vite preview --config vite.config.ts --host 0.0.0.0",
+    "test": "vitest run --config vitest.config.ts",
+    "test:watch": "vitest --config vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "check:phase1": "npm run typecheck && npm test && npm run build:web && npm run build",
+    "check:phase2": "npm run typecheck && npm test && npm run build:web && npm run build",
+    "check:phase3": "npm run typecheck && npm test && npm run build:web && npm run build",
+    "check:license": "npm run typecheck && npm test && npm run build:web && npm run build",
+    "check:phase4": "npm run check:license",
+    "check:phase5": "npm run typecheck && npm test && npm run build:web && npm run build",
+    "check:phase6": "npm run typecheck && npm test && npm run build:web && npm run build",
+    "check:phase7": "npm run typecheck && npm test && npm run build:web && npm run build:mobile && npm run build",
+    "check:phase8": "npm run typecheck && npm test && npm run build:web && npm run build:mobile && npm run build",
+    "check:phase9": "npm run typecheck && npm test && npm run build:web && npm run build:mobile && npm run build",
+    "check:phase10": "npm run typecheck && npm test && npm run build:web && npm run build:mobile && npm run build",
+    "check:phase11": "npm run typecheck && npm test && npm run build:web && npm run build:mobile && npm run build",
+    "check:phase12": "npm run typecheck && npm test && npm run build:web && npm run build:mobile && npm run build",
+    "cloud:dev": "tsx cloud/src/server.ts",
+    "cloud:test": "vitest run --config vitest.config.ts cloud/tests",
+    "php:test": "php cloud/php/tests/run.php",
+    "cloud:mock": "tsx cloud/mock/server.ts",
+    "dist:win": "npm run build:mobile && electron-vite build && electron-builder --win nsis",
+    "installer:script": "tsx scripts/installer-script.ts",
+    "installer:assets": "tsx scripts/png-to-bmp.ts",
+    "installer:check": "tsx scripts/check-installer.ts",
+    "installer:online": "npm run installer:script && npm run installer:assets && electron-builder --win nsis --config electron-builder.installer-online.json",
+    "installer:offline": "npm run installer:script && npm run installer:assets && electron-builder --win nsis --config electron-builder.installer-offline.json",
+    "check:phase13": "npm run typecheck && npm test && npm run installer:script && npm run installer:check && npm run build:web && npm run build:mobile && npm run build",
+    "build:studio": "tsx scripts/build-studio.ts",
+    "studio": "npm run build:studio && electron buildstudio/out/main.js",
+    "dist:studio": "npm run build:studio && electron-builder --win nsis --config electron-builder.buildstudio.json",
+    "check:phase14": "npm run typecheck && npm test && npm run build:studio",
+    "cloud:package": "tsx scripts/cloud-package.ts",
+    "artefacts:verify": "tsx scripts/verify-artefacts.ts",
+    "release:assemble": "tsx scripts/assemble-release.ts",
+    "release:assemble:dev": "tsx scripts/assemble-release.ts --allow-unpinned",
+    "release:scan": "tsx scripts/release-scan.ts",
+    "release:prerequisite": "tsx scripts/release-prerequisite.ts",
+    "check:phase15": "npm run typecheck && npm test && npm run installer:script && npm run installer:check && npm run installer:compile && npm run build:studio && npm run cloud:package && npm run release:scan && npm run release:assemble:dev && npm run build:web && npm run build:mobile && npm run build",
+    "installer:compile": "tsx scripts/compile-check-installer.ts"
+  },
+  "dependencies": {
+    "@fastify/websocket": "^11.3.7",
+    "@zxing/browser": "^0.2.1",
+    "@zxing/library": "^0.23.0",
+    "argon2": "^0.44.0",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^13.2.0",
+    "exceljs": "^4.4.0",
+    "fastify": "^5.12.8",
+    "jsbarcode": "^3.12.3",
+    "node-machine-id": "^1.1.12",
+    "pdfkit": "^0.20.2",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "selfsigned": "^5.5.0",
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^24.9.0",
+    "@types/pdfkit": "^0.17.7",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/ws": "^8.18.2",
+    "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^45.3.3",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^4.0.1",
+    "fake-indexeddb": "^6.2.8",
+    "jsdom": "^31.0.1",
+    "php-wasm": "^0.2.0",
+    "php-wasm-openssl": "^0.2.0",
+    "php-wasm-sqlite": "^0.2.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.12",
+    "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "minimatch": "^11.0.9",
+    "uuid": "^11.1.1"
+  },
+  "build": {
+    "appId": "com.infoflex.pharmart",
+    "productName": "Infoflex",
+    "npmRebuild": false,
+    "asarUnpack": [
+      "**/*.node"
+    ],
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "build"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Infoflex Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
+      "include": "installer/nsis/installer.nsi",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "installerHeader": "build/installer-banner.bmp",
+      "installerSidebar": "build/installer-sidebar.bmp",
+      "uninstallerSidebar": "build/installer-sidebar.bmp",
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Infoflex",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "artifactName": "Infoflex Setup.${ext}"
+    }
+  }
+}
