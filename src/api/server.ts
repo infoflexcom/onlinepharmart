@@ -16,6 +16,7 @@ import { requireAdmin, type AdminPrincipal, type AuthenticatedPrincipal } from '
 import type { MobileLoginInput, MobileLoginResult, MobilePairInput, MobilePushEvent, MobileSessionCredentials } from '../shared/mobile/types'
 import { rememberRateLimitState } from '../services/rate-limit-state'
 import { RELAY_ARRIVAL_HEADER } from '../shared/relay/protocol'
+import { authorize, hasPolicy, httpKey, resolveRole } from '../../packages/core/src/index'
 
 export type AdminAuthenticator = (request: FastifyRequest) => Promise<AuthenticatedPrincipal | null>
 
@@ -328,6 +329,100 @@ export async function createHostApi(options: HostApiOptions): Promise<FastifyIns
     }
   }
 
+  /**
+   * The permission policy gate.
+   *
+   * This is the point at which a route becomes reachable at all. It runs **when the route is registered**, not when
+   * a request arrives, and it wraps the handler in a check that consults the one declarative table in
+   * `/packages/core`.
+   *
+   * Registering the check here rather than as a global hook is deliberate, and the reason is a defect this rewrite
+   * fixed: a global `onRequest`/`preHandler` gate answers before the route's own pre-handler chain, so it returned
+   * 403 to a caller the rate limiter was about to answer with a more accurate 429, and it turned Fastify's own 404
+   * for an unknown URL into a 403 — which would tell an attacker that a path exists. A floor should refuse what
+   * nothing else refuses; it should not pre-empt a check with more to say, and it must not paper over routing.
+   *
+   * Two properties follow:
+   *
+   * 1. **A route with no policy entry is refused at runtime** and, because the check is attached at registration, it
+   *    is refused before it can ever be served. The coverage test fails the build over the same hole; this is the
+   *    check that protects a shop whose build somebody skipped.
+   * 2. **No handler is invoked for a refused caller.** The wrapper returns before calling through.
+   *
+   * `anonymous` rows are allowed without a role. Everything else requires an authenticated principal whose role
+   * resolves to one of the four real roles: a legacy `CASHIER` resolves to `USER`, and a role nobody recognises is
+   * refused rather than defaulted.
+   *
+   * The per-route pre-handlers still run afterwards and still do their own work — licence state, LAN-only arrival,
+   * rate limits, the Admin-only rule. The gate is the floor, not the ceiling, so widening the table can never widen
+   * the licence rules.
+   */
+  const policy = <T extends { preHandler?: unknown }>(route: T): T => {
+    const original = route.preHandler
+    const guarded = {
+      ...route,
+      preHandler: async (request: FastifyRequest, reply: FastifyReply) => {
+        // Fastify reports a HEAD as its own route; treat it as the GET policy so a probe cannot bypass the gate.
+        const method = request.method === 'HEAD' ? 'GET' : request.method
+        // The registered pattern is what the table names, and what Fastify routed on.
+        const pattern = request.routeOptions?.url ?? request.url.split('?')[0] ?? request.url
+        const key = httpKey(method, pattern)
+
+        // Refuse first if the route is unpoliced at all. This is a defect in this server, and it must never be
+        // papered over by a route's own pre-handler happening to refuse the caller for a different reason.
+        if (!hasPolicy(key)) {
+          options.service.recordDeniedAccess({
+            reason: 'authentication_error',
+            ipAddress: request.ip || null,
+            userAgent: request.headers['user-agent'],
+          })
+          await reply.code(403).send({ message: GENERIC_DENIAL })
+          return
+        }
+
+        // Then let the route's own pre-handler chain run. It owns rate limiting, licence state and LAN-only
+        // arrival, and its answer is the more specific one: a caller locked out after five failures should see
+        // 429, not the flatter 401 this gate would produce. If it refuses, it has already replied.
+        if (Array.isArray(original)) {
+          for (const step of original) await (step as (r: FastifyRequest, q: FastifyReply) => Promise<void>)(request, reply)
+        } else if (typeof original === 'function') {
+          await (original as (r: FastifyRequest, q: FastifyReply) => Promise<void>)(request, reply)
+        }
+        if (reply.sent) return
+
+        // Finally, the policy itself. The pre-handler proves licence and transport; this proves the role may use
+        // this route at all.
+        let principal: AuthenticatedPrincipal | null = null
+        try {
+          principal = await options.authenticate(request)
+        } catch {
+          principal = null
+        }
+        const signedIn = principal !== null
+        const outcome = authorize(key, principal ? resolveRole(principal.role) : null, signedIn)
+        if (outcome.allowed) return
+        if (outcome.reason === 'no-policy') {
+          // A defect in this server, not a caller asking for something it may not have.
+          options.service.recordDeniedAccess({
+            reason: 'authentication_error',
+            ipAddress: request.ip || null,
+            userAgent: request.headers['user-agent'],
+            actor: principal?.username,
+          })
+        } else {
+          options.service.recordDeniedAccess({
+            reason: signedIn ? 'non_admin' : 'unauthenticated',
+            ipAddress: request.ip || null,
+            userAgent: request.headers['user-agent'],
+            actor: principal?.username,
+          })
+        }
+        await reply.code(signedIn ? 403 : 401).send({ message: GENERIC_DENIAL })
+      },
+    }
+    return guarded as T
+  }
+
   server.addHook('onSend', async (request, reply, payload) => {
     reply.header('x-content-type-options', 'nosniff')
     reply.header('referrer-policy', 'no-referrer')
@@ -335,12 +430,12 @@ export async function createHostApi(options: HostApiOptions): Promise<FastifyIns
     return payload
   })
 
-  server.get('/api/v1/health', async () => ({ status: 'ok' }))
+  server.get('/api/v1/health', policy({}), async () => ({ status: 'ok' }))
   /**
    * The one route that answers with a licence problem instead of a bare denial, so the phone can say
    * "the shop's licence has expired" rather than showing a broken screen. It reveals nothing else.
    */
-  server.get('/api/v1/licence', async (_request, reply) => {
+  server.get('/api/v1/licence', policy({}), async (_request, reply) => {
     try {
       const license = options.license.getSnapshot()
       return reply.header('cache-control', 'no-store').send({
@@ -362,7 +457,7 @@ export async function createHostApi(options: HostApiOptions): Promise<FastifyIns
    * Step 1 of pairing: the phone exchanges the eight-digit code for a PENDING device and a request token.
    * Nothing usable comes back — no access token, no session — until an Admin approves on the PC.
    */
-  server.post('/api/v1/mobile/pair', { preHandler: authorizePairing }, async (request, reply) => {
+  server.post('/api/v1/mobile/pair', policy({ preHandler: authorizePairing }), async (request, reply) => {
     if (!options.mobileSessions) return reply.code(503).send({ message: 'Mobile pairing is not configured on this host.' })
     const body = request.body as Partial<MobilePairInput> | null
     if (!body || typeof body !== 'object' || typeof body.code !== 'string'
@@ -395,7 +490,7 @@ export async function createHostApi(options: HostApiOptions): Promise<FastifyIns
     }
   })
   /** Step 2: the phone polls this while it waits for the Admin. Safe to repeat; it never returns a secret. */
-  server.get('/api/v1/mobile/pair/status', { preHandler: authorizePairing }, async (request, reply) => {
+  server.get('/api/v1/mobile/pair/status', policy({ preHandler: authorizePairing }), async (request, reply) => {
     if (!options.mobileSessions) return reply.code(503).send({ message: 'Mobile pairing is not configured on this host.' })
     const query = request.query as { requestToken?: unknown } | null
     const token = typeof query?.requestToken === 'string' ? query.requestToken : ''
@@ -414,7 +509,7 @@ export async function createHostApi(options: HostApiOptions): Promise<FastifyIns
    * Step 3: Admin username + password (+ authenticator code off-LAN) + the device token. A Cashier or
    * Supervisor, a wrong password and an unknown account all receive the same body and status code.
    */
-  server.post('/api/v1/mobile/session/login', { preHandler: authorizeMobileTransport }, async (request, reply) => {
+  server.post('/api/v1/mobile/session/login', policy({ preHandler: authorizeMobileTransport }), async (request, reply) => {
     if (!options.mobileSessions) return reply.code(503).send({ message: 'Mobile sign-in is not configured on this host.' })
     const body = request.body as Partial<MobileLoginInput> & { deviceToken?: unknown; deviceName?: unknown } | null
     if (!body || typeof body !== 'object' || typeof body.username !== 'string' || typeof body.password !== 'string'
@@ -446,7 +541,7 @@ export async function createHostApi(options: HostApiOptions): Promise<FastifyIns
       return reply.code(message === MOBILE_LOGIN_DENIED ? 401 : 429).send({ message: MOBILE_LOGIN_DENIED })
     }
   })
-  server.post('/api/v1/mobile/session/refresh', { preHandler: authorizeMobileTransport }, async (request, reply) => {
+  server.post('/api/v1/mobile/session/refresh', policy({ preHandler: authorizeMobileTransport }), async (request, reply) => {
     if (!options.mobileSessions) return reply.code(503).send({ message: 'Mobile sessions are not configured on this host.' })
     const body = request.body as { refreshToken?: unknown } | null
     if (!body || typeof body.refreshToken !== 'string') return reply.code(400).send({ message: 'A refresh credential is required.' })
@@ -462,7 +557,7 @@ export async function createHostApi(options: HostApiOptions): Promise<FastifyIns
    * Logout ends the phone's own session. It is still gated on an Admin session so a non-Admin credential can
    * never make the host act, even harmlessly — the mobile surface has no non-Admin routes at all.
    */
-  server.post('/api/v1/mobile/session/logout', { preHandler: authorizeMobileTransport }, async (request, reply) => {
+  server.post('/api/v1/mobile/session/logout', policy({ preHandler: authorizeMobileTransport }), async (request, reply) => {
     if (!options.mobileSessions) return reply.code(503).send({ message: 'Mobile sessions are not configured on this host.' })
     const principal = await options.authenticate(request).catch(() => null)
     if (!principal || principal.role !== 'ADMIN' || principal.isActive === false || principal.isLocked === true) {
@@ -477,8 +572,8 @@ export async function createHostApi(options: HostApiOptions): Promise<FastifyIns
     options.mobileSessions.logout(request.headers.authorization)
     return reply.code(204).send()
   })
-  server.get('/api/v1/admin/settings', { preHandler: authorizeAdmin }, async () => options.service.getSettings())
-  server.get('/api/v1/admin/returns/pending', { preHandler: authorizeAdmin }, async (request, reply) => {
+  server.get('/api/v1/admin/settings', policy({ preHandler: authorizeAdmin }), async () => options.service.getSettings())
+  server.get('/api/v1/admin/returns/pending', policy({ preHandler: authorizeAdmin }), async (request, reply) => {
     if (!options.returnApprovals) return reply.code(503).send({ message: 'Return approvals are not configured on this host.' })
     const admin = verifiedAdmins.get(request)
     if (!admin) return reply.code(403).send({ message: GENERIC_DENIAL })
@@ -489,7 +584,7 @@ export async function createHostApi(options: HostApiOptions): Promise<FastifyIns
       return reply.code(409).send({ message: safeErrorMessage(error) })
     }
   })
-  server.post('/api/v1/admin/returns/:returnId/approval', { preHandler: authorizeAdmin }, async (request, reply) => {
+  server.post('/api/v1/admin/returns/:returnId/approval', policy({ preHandler: authorizeAdmin }), async (request, reply) => {
     if (!options.returnApprovals) return reply.code(503).send({ message: 'Return approvals are not configured on this host.' })
     const admin = verifiedAdmins.get(request)
     if (!admin) return reply.code(403).send({ message: GENERIC_DENIAL })
@@ -506,7 +601,7 @@ export async function createHostApi(options: HostApiOptions): Promise<FastifyIns
       return reply.code(409).send({ message: safeErrorMessage(error) })
     }
   })
-  server.get('/api/v1/admin/reports/summary', { preHandler: authorizeAdmin }, async (request, reply) => {
+  server.get('/api/v1/admin/reports/summary', policy({ preHandler: authorizeAdmin }), async (request, reply) => {
     if (!options.mobileReports) return reply.code(503).send({ message: 'Mobile reports are not configured on this host.' })
     const admin = verifiedAdmins.get(request)
     if (!admin) return reply.code(403).send({ message: GENERIC_DENIAL })
@@ -518,7 +613,7 @@ export async function createHostApi(options: HostApiOptions): Promise<FastifyIns
       return reply.code(400).send({ message: safeErrorMessage(error) })
     }
   })
-  server.get('/api/v1/admin/reports/summary.pdf', { preHandler: authorizeAdmin }, async (request, reply) => {
+  server.get('/api/v1/admin/reports/summary.pdf', policy({ preHandler: authorizeAdmin }), async (request, reply) => {
     if (!options.mobileReports) return reply.code(503).send({ message: 'Mobile reports are not configured on this host.' })
     const admin = verifiedAdmins.get(request)
     if (!admin) return reply.code(403).send({ message: GENERIC_DENIAL })
@@ -535,7 +630,7 @@ export async function createHostApi(options: HostApiOptions): Promise<FastifyIns
       return reply.code(400).send({ message: safeErrorMessage(error) })
     }
   })
-  server.get('/api/v1/admin/events', { websocket: true, preHandler: authorizeAdmin }, (socket) => {
+  server.get('/api/v1/admin/events', policy({ websocket: true, preHandler: authorizeAdmin }), (socket) => {
     socket.send(JSON.stringify({ type: 'connected', at: new Date(now()).toISOString() }))
     const unsubscribe = options.mobileEvents?.subscribe((event) => {
       // A closed socket throws; drop the subscription rather than surfacing an unhandled error.

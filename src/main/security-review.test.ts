@@ -245,7 +245,11 @@ describe('security review: the IPC registrar itself', () => {
   it('refuses a sub-frame sender before any handler runs', async () => {
     const channels = new Map<string, (event: unknown, ...args: unknown[]) => unknown>()
     const ipcMain = { handle: (channel: string, listener: (event: never, ...args: never[]) => unknown) => { channels.set(channel, listener as never) } }
-    const host = { getLicenseStatus: () => ({ status: 'active' }) } as unknown as DesktopHostController
+    const host = {
+      getLicenseStatus: () => ({ status: 'active' }),
+      // The IPC layer now asks the host who is signed in on this sender before it consults the permission table.
+      getCurrentUser: () => ({ id: 'u1', fullName: 'Ada', username: 'ada', role: 'ADMIN', isActive: true, isLocked: false, permissions: {} }),
+    } as unknown as DesktopHostController
     registerDesktopIpc(ipcMain as never, host)
 
     const listener = channels.get('license:get-status')!

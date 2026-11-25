@@ -13,6 +13,9 @@ export default defineConfig({
     environment: 'node',
     include: [
       'src/**/*.test.ts', 'src/**/*.test.tsx', 'mobile/src/**/*.test.ts',
+      // The shared package: the role vocabulary, the permission policy and the surface scanner. Its own tests live
+      // beside it because it is meant to be loadable by anything, including a client that never sees this repo's src/.
+      'packages/core/**/*.test.ts',
       // The installer's rules are pure functions precisely so they can be tested without Windows.
       'installer/src/**/*.test.ts', 'cloud/tests/**/*.test.ts',
       // Build Studio's steps, prerequisite table and key handling are pure functions for the same reason.

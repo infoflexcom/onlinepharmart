@@ -24,6 +24,7 @@ import type {
   StocktakeInput,
 } from '../shared/inventory/types'
 import { DesktopHostController } from './desktop-host-controller'
+import { authorize, ipcKey, resolveRole } from '../../packages/core/src/index'
 
 export interface DesktopIpcOptions {
   /**
@@ -50,10 +51,37 @@ export function registerDesktopIpc(
   host: DesktopHostController,
   options: DesktopIpcOptions = {},
 ): void {
+  /**
+   * Every channel is registered through here, and every channel is checked against the one declarative permission
+   * table in `/packages/core` before its handler runs.
+   *
+   * The order is deliberate:
+   *
+   * 1. **The frame check.** A nested frame must not reach a handler at all. This runs first because it costs
+   *    nothing and refuses a whole class of message before any identity is resolved.
+   * 2. **The policy check.** A channel with no entry in the table is refused — `authorize()` returns `no-policy` and
+   *    the handler is never called. The coverage test fails the build over the same hole, but this is the check
+   *    that protects an installation whose build somebody short-circuited.
+   *
+   * The role comes from the host's own session for this sender, not from anything the renderer sent. A renderer that
+   * lies about its role changes nothing here, which is the whole point: roles are enforced on the server side of the
+   * bridge, never only in the interface.
+   */
   const handle = (channel: string, action: (event: IpcMainInvokeEvent, ...args: any[]) => unknown): void => {
     ipcMain.handle(channel, (event, ...args) => {
       if (event.senderFrame && event.senderFrame !== event.sender.mainFrame) {
         throw new Error('This action is only available to the main application window.')
+      }
+      const currentUser = host.getCurrentUser(event.sender.id)
+      const outcome = authorize(ipcKey(channel), currentUser ? resolveRole(currentUser.role) : null, currentUser !== null)
+      if (!outcome.allowed) {
+        // A signed-out caller is told its session ended, because that is true and it is the only thing it can act
+        // on. A signed-in caller whose role is wrong is told the same flat sentence for every channel, so it cannot
+        // learn which role it would have to become to reach one. Collapsing the two into a single message was the
+        // first thing this gate did wrong: the host already had a better sentence for an expired session, and
+        // replacing it made every timeout look like a permissions problem.
+        if (currentUser === null) throw new Error('Your session has expired. Sign in again.')
+        throw new Error('This action is restricted to the Admin.')
       }
       return action(event, ...args)
     })

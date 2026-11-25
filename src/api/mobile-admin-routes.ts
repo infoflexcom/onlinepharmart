@@ -10,6 +10,7 @@ import type {
 } from '../shared/mobile/admin-types'
 import { MobileAdminService, MobileReloadRequiredError, MobileStaleVersionError } from './mobile-admin-service'
 import { serializeBigInts } from './serialize-money'
+import { authorize, httpKey, resolveRole } from '../../packages/core/src/index'
 
 const GENERIC_DENIAL = 'This account cannot use the mobile app'
 
@@ -76,8 +77,23 @@ export function registerMobileAdminRoutes(server: FastifyInstance, options: Mobi
    */
   const route = (method: 'GET' | 'POST', url: string, handler: Handler): void => {
     const wrapped = async (request: FastifyRequest, reply: FastifyReply) => {
+      // The permission policy table is consulted before the Admin guard, so a route that somehow has no policy row
+      // is refused rather than served. Every route below is `ADMIN` today, and this is what makes that a fact the
+      // table asserts rather than a habit the wrapper happens to share.
+      const policyOutcome = authorize(httpKey(method, url), null, false)
+      if (!policyOutcome.allowed && policyOutcome.reason === 'no-policy') {
+        options.recordDeniedAccess({ reason: 'authentication_error', ipAddress: request.ip || null, userAgent: request.headers['user-agent'] })
+        return reply.code(403).send({ message: GENERIC_DENIAL })
+      }
       const principal = await guard(request, reply)
       if (!principal) return reply
+      // Second, this time with the role the guard actually verified. The table decides; the wrapper only reports.
+      if (!authorize(httpKey(method, url), resolveRole(principal.role), true).allowed) {
+        options.recordDeniedAccess({
+          reason: 'non_admin', ipAddress: request.ip || null, userAgent: request.headers['user-agent'], actor: principal.username,
+        })
+        return reply.code(403).send({ message: GENERIC_DENIAL })
+      }
       try {
         const result = await handler(principal, request)
         // A late refusal (the licence expired between the gate and the call) is still a refusal.

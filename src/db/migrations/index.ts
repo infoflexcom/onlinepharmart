@@ -14,11 +14,19 @@ import { migrateMobileSessions } from './012_mobile_sessions'
 import { migrateOperationalSettings } from './013_operational_settings'
 import { migrateMobileLogin } from './014_mobile_login'
 import { migrateDemoDataRemoval } from './015_demo_data_removal'
+import { migrateClientServerFoundation, migrateClientServerAuditAndSales } from './016_client_server_foundation'
 
 export interface Migration {
   version: number
   name: string
   up(database: Database.Database): void
+  /**
+   * Declares that this migration rebuilds a table and therefore needs foreign-key enforcement paused for its
+   * duration. The runner pauses it *outside* the transaction, because the pragma is a no-op inside one.
+   *
+   * Only a migration that genuinely rebuilds a table may set this. Everything else runs with enforcement on.
+   */
+  setsForeignKeysOff?: boolean
 }
 
 export const MIGRATIONS: readonly Migration[] = [
@@ -37,4 +45,14 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 13, name: 'operational-settings-and-backup-log', up: migrateOperationalSettings },
   { version: 14, name: 'mobile-two-factor-login-and-device-approval', up: migrateMobileLogin },
   { version: 15, name: 'removable-demonstration-stock-seed', up: migrateDemoDataRemoval },
+  {
+    version: 16,
+    name: 'client-server-orders-devices-and-audit',
+    // `users` is rebuilt to widen its role CHECK; devices, refresh_tokens and user_permissions all reference it.
+    setsForeignKeysOff: true,
+    up: (database) => {
+      migrateClientServerFoundation(database)
+      migrateClientServerAuditAndSales(database)
+    },
+  },
 ]

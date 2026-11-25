@@ -51,15 +51,21 @@ describe('the approvals queue', () => {
     expect(pending.every((request) => typeof request.amountMinor === 'string')).toBe(true)
   })
 
-  it('lets a supervisor decide returns, discounts and voids, but not credit', () => {
+  it('refuses a supervisor deciding anything, because the role is now audit-only', () => {
     const { service } = setup()
     const credit = service.raise({ kind: 'CREDIT', actor: CASHIER, currencyCode: 'NGN', amountMinor: 500n, payload: {} })
     const discount = service.raise({ kind: 'DISCOUNT', actor: CASHIER, currencyCode: 'NGN', amountMinor: 500n, payload: {} })
+    const returned = service.raise({ kind: 'RETURN', actor: CASHIER, currencyCode: 'NGN', amountMinor: 500n, payload: {} })
 
-    // A supervisor's queue excludes the credit request entirely.
-    expect(service.listPending(SUPERVISOR).map((request) => request.id)).toEqual([discount.id])
-    expect(() => service.resolve(credit.id, 'APPROVE', SUPERVISOR)).toThrow(/Only an Admin can decide/u)
-    expect(service.resolve(discount.id, 'APPROVE', SUPERVISOR).status).toBe('APPROVED')
+    // All three used to be decidable by a Supervisor except credit. None of them is now: each one authorises a
+    // movement of money or stock, and the role holds no operational authority.
+    for (const request of [credit, discount, returned]) {
+      expect(() => service.resolve(request.id, 'APPROVE', SUPERVISOR)).toThrow(/Only an Admin can decide/u)
+    }
+    // A supervisor's queue is empty, because it can decide nothing: a queue of work it may not do would be a lie.
+    expect(service.listPending(SUPERVISOR)).toEqual([])
+    // The Admin still decides all three.
+    expect(service.resolve(discount.id, 'APPROVE', ADMIN).status).toBe('APPROVED')
   })
 
   it('refuses a cashier deciding any request, including their own', () => {

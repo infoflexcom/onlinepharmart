@@ -523,8 +523,13 @@ export class ReturnService {
     const approver = this.authorizeActor(actor)
     const normalizedId = normalizeReturnId(returnId)
     if (decision !== 'APPROVE' && decision !== 'REJECT') throw new Error('Choose approve or reject for this return request.')
-    if (approver.role !== 'ADMIN' && approver.role !== 'SUPERVISOR') {
-      throw new Error('Only an Admin or Supervisor can approve a return above the requester’s limit.')
+    // Supervisor cannot approve a return as of the client/server change. The role is audit-only now: it may review
+    // a request and raise a flag about it, but approving one refunds money or restocks goods, which is an Admin act.
+    // This is enforced here, in the service, rather than only in the permission table, because the table protects
+    // the transport and this protects the operation — a second caller added later would otherwise inherit the old
+    // behaviour silently.
+    if (approver.role !== 'ADMIN') {
+      throw new Error('Only the Admin can approve a return above the requester’s limit.')
     }
     if (channel === 'MOBILE' && approver.role !== 'ADMIN') {
       throw new Error('Mobile return approvals are restricted to Admin accounts.')

@@ -23,6 +23,18 @@ const SUPERVISOR: PublicUser = {
   id: 'return-supervisor', fullName: 'Return Supervisor', username: 'returnsupervisor', role: 'SUPERVISOR', isActive: true, isLocked: false,
   permissions: { allowWholesale: false, maxDiscountBasisPoints: 0, allowCreditSales: false, returnLimitMinor: 0n },
 }
+/**
+ * A second Admin, added because the Supervisor lost its approval authority in this phase.
+ *
+ * The test that needs it is the self-approval one: it has to show that an Admin who raised a return cannot approve
+ * it, which requires *somebody else* who is allowed to approve. The Supervisor used to play that part. Now that
+ * approving is Admin-only, the part has to be played by another Admin — which is also a truer picture of a shop
+ * with more than one administrator.
+ */
+const SECOND_ADMIN: PublicUser = {
+  id: 'return-admin-two', fullName: 'Second Admin', username: 'returnadmin2', role: 'ADMIN', isActive: true, isLocked: false,
+  permissions: { allowWholesale: true, maxDiscountBasisPoints: 10_000, allowCreditSales: true, returnLimitMinor: 9_223_372_036_854_775_807n },
+}
 const CASHIER: PublicUser = {
   id: 'return-cashier', fullName: 'Return Cashier', username: 'returncashier', role: 'CASHIER', isActive: true, isLocked: false,
   permissions: { allowWholesale: false, maxDiscountBasisPoints: 0, allowCreditSales: false, returnLimitMinor: 100_000n },
@@ -45,12 +57,13 @@ function createHarness(currencyCode = 'NGN') {
     currencyConfirmed: true,
   })
   const insertUser = database.prepare('INSERT INTO users (id, username, password_hash, role, full_name) VALUES (?, ?, ?, ?, ?)')
-  for (const user of [ADMIN, SUPERVISOR, CASHIER]) insertUser.run(user.id, user.username, 'test-hash', user.role, user.fullName)
+  for (const user of [ADMIN, SECOND_ADMIN, SUPERVISOR, CASHIER]) insertUser.run(user.id, user.username, 'test-hash', user.role, user.fullName)
   const insertPermission = database.prepare(`
     INSERT INTO user_permissions (user_id, allow_wholesale, max_discount_pct, allow_credit_sales, return_limit)
     VALUES (?, ?, ?, ?, ?)
   `)
   insertPermission.run(ADMIN.id, 1, 10_000, 1, 9_223_372_036_854_775_807n)
+  insertPermission.run(SECOND_ADMIN.id, 1, 10_000, 1, 9_223_372_036_854_775_807n)
   insertPermission.run(SUPERVISOR.id, 0, 0, 0, 0)
   insertPermission.run(CASHIER.id, 0, 0, 0, 100_000n)
 
@@ -226,14 +239,19 @@ describe('ReturnService', () => {
         .toThrow(/already has a return awaiting approval/u)
       expect(harness.returns.listPendingMobileApprovals(ADMIN).map((record) => record.id)).toEqual([pending.id])
 
-      const approved = harness.returns.resolveApproval(pending.id, 'APPROVE', SUPERVISOR, 'DESKTOP')
+      // A Supervisor was allowed to approve returns before the role became audit-only. It no longer can: approving
+      // refunds money or restocks goods. The refusal is asserted rather than the capability being quietly dropped,
+      // so the removal is visible to whoever reads this file next.
+      expect(() => harness.returns.resolveApproval(pending.id, 'APPROVE', SUPERVISOR, 'DESKTOP'))
+        .toThrow(/Only the Admin can approve/u)
+      const approved = harness.returns.resolveApproval(pending.id, 'APPROVE', ADMIN, 'DESKTOP')
       expect(approved).toMatchObject({ decision: 'APPROVE', returnRecord: {
-        status: 'COMPLETED', approvedBy: SUPERVISOR.fullName, approvalChannel: 'DESKTOP', totalMinor: 2_500n,
+        status: 'COMPLETED', approvedBy: ADMIN.fullName, approvalChannel: 'DESKTOP', totalMinor: 2_500n,
       } })
       expect(stockQuantity(harness, product.id)).toBe(2_000n)
       expect(harness.database.prepare('SELECT amount, payment_method FROM payments WHERE return_id = ?').get(pending.id)).toEqual({ amount: 2_500, payment_method: 'REFUND_CASH' })
       expect(harness.database.prepare("SELECT status FROM approval_requests WHERE request_type = 'RETURN'").get()).toEqual({ status: 'APPROVED' })
-      expect(() => harness.returns.resolveApproval(pending.id, 'APPROVE', CASHIER)).toThrow(/Admin or Supervisor/u)
+      expect(() => harness.returns.resolveApproval(pending.id, 'APPROVE', CASHIER)).toThrow(/Only the Admin can approve/u)
     } finally {
       harness.close()
     }
@@ -251,7 +269,9 @@ describe('ReturnService', () => {
       expect(pending).toMatchObject({ cashierId: CASHIER.id, cashier: CASHIER.fullName })
       expect(sale.cashier).toBe(ADMIN.fullName)
 
-      expect(() => harness.returns.resolveMobileApproval(pending.id, 'APPROVE', SUPERVISOR)).toThrow(/Mobile return approvals are restricted to Admin/u)
+      // A Supervisor is refused for two reasons that both still hold: the role is audit-only, and the mobile channel
+      // was already Admin-only. The assertion below pins the role refusal, which is the newer of the two.
+      expect(() => harness.returns.resolveMobileApproval(pending.id, 'APPROVE', SUPERVISOR)).toThrow(/Only the Admin can approve|restricted to Admin/u)
       expect(harness.returns.listPendingMobileApprovals(ADMIN).map((record) => record.id)).toEqual([pending.id])
       const result = harness.returns.resolveMobileApproval(pending.id, 'APPROVE', ADMIN)
       expect(result).toMatchObject({ decision: 'APPROVE', returnRecord: {
@@ -275,7 +295,9 @@ describe('ReturnService', () => {
       const sale = sell(harness, product, 'SUPERMARKET', '1')
       const pending = harness.returns.createReturn(returnInput(sale.receiptNumber, sale.items[0]!.id, '1'), ADMIN, 'SUPERMARKET')
       expect(() => harness.returns.resolveApproval(pending.id, 'APPROVE', ADMIN)).toThrow(/cannot approve their own/u)
-      const rejected = harness.returns.resolveApproval(pending.id, 'REJECT', SUPERVISOR)
+      // Rejecting is also a decision that releases a held return, so it moved to Admin with approving.
+      expect(() => harness.returns.resolveApproval(pending.id, 'REJECT', SUPERVISOR)).toThrow(/Only the Admin can approve/u)
+      const rejected = harness.returns.resolveApproval(pending.id, 'REJECT', SECOND_ADMIN)
       expect(rejected.returnRecord.status).toBe('REJECTED')
       const found = harness.returns.findSaleForReturn(sale.receiptNumber, CASHIER, 'SUPERMARKET')
       expect(found.items[0]?.returnableQuantityMilli).toBe(1_000n)

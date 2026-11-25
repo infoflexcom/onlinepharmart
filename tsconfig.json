@@ -9,6 +9,7 @@
     "baseUrl": ".",
     "paths": {
       "@shared/*": ["src/shared/*"],
+      "@infoflex/core": ["packages/core/src/index.ts"],
       "@main/*": ["src/main/*"],
       "@renderer/*": ["src/renderer/src/*"]
     },
@@ -23,5 +24,5 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["vite/client", "vitest/globals", "node"]
   },
-  "include": ["src", "mobile/src/**/*.ts", "mobile/vite.config.ts", "cloud/**/*.ts", "cloud/php/**/*.d.ts", "installer/**/*.ts", "buildstudio/**/*.ts", "electron.vite.config.ts", "vite.config.ts"]
+  "include": ["src", "packages/core/src/**/*.ts", "mobile/src/**/*.ts", "mobile/vite.config.ts", "cloud/**/*.ts", "cloud/php/**/*.d.ts", "installer/**/*.ts", "buildstudio/**/*.ts", "electron.vite.config.ts", "vite.config.ts"]
 }

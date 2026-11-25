@@ -1,0 +1,312 @@
+/**
+ * The one declarative table that says who may do what.
+ *
+ * There is deliberately no second list. The desktop IPC registration, the Fastify route registration and this
+ * file meet at `describeSurface()`: the surface is *derived* from the code that registers handlers, and every
+ * entry it finds must have a row here. A channel or route with no row is **refused**, not allowed, and a test
+ * enumerates the surface and fails when a row is missing.
+ *
+ * Two properties matter more than the contents:
+ *
+ * 1. **Absence is denial.** The check is `policyFor(...) ?? deny()`. There is no path where an unknown name
+ *    reaches a handler because somebody forgot to add it to a deny-list.
+ * 2. **The table is the only source.** The server asks this module; it does not also consult a role string in
+ *    each handler. A second opinion would drift, and the drift would be invisible.
+ *
+ * Roles are the four real roles from `roles.ts`. `CASHIER` never appears here because it is not a role — it is a
+ * historical value in the database that `resolveRole()` maps to `USER` before any check runs.
+ */
+import type { Role } from './roles'
+
+/**
+ * What kind of thing is being asked for.
+ *
+ * `action` is an operation with no transport of its own (a service call, a background task). `ipc` is a desktop
+ * channel. `http` is a Fastify route. The kind is recorded so that a missing HTTP policy cannot be satisfied by
+ * an IPC row that happens to share its name.
+ */
+export type SurfaceKind = 'action' | 'ipc' | 'http'
+
+/**
+ * `anonymous` means the caller need not be signed in at all, and is only used where the route genuinely must be
+ * reachable before a session exists — a health probe, or the pairing status a phone polls while it waits for the
+ * Admin to approve it. It is never a shortcut for "we did not want to think about the role": each such entry is
+ * listed in `ANONYMOUS_JUSTIFICATIONS` with the reason, and the test refuses an anonymous entry without one.
+ */
+export type PolicyRoles = readonly Role[] | 'anonymous'
+
+export interface PolicyEntry {
+  /** Every role permitted. An empty list refuses everyone, which is a useful way to disable a route. */
+  readonly roles: readonly Role[]
+  /** Routes and channels reachable before sign-in. Only meaningful for `anonymous` entries. */
+  readonly anonymous: boolean
+  /** Why this entry permits what it permits, for the next reader. Required, not decorative. */
+  readonly note: string
+}
+
+const ADMIN: readonly Role[] = ['ADMIN']
+const ADMIN_SUPERVISOR: readonly Role[] = ['ADMIN', 'SUPERVISOR']
+/** The till roles: everything the old CASHIER could do, plus the Admin. */
+const TILL: readonly Role[] = ['ADMIN', 'ACCOUNT', 'USER']
+/** Read-only review surfaces: an audit-only supervisor may look, and the Admin may do more elsewhere. */
+const REVIEW: readonly Role[] = ['ADMIN', 'SUPERVISOR']
+const EVERYONE: readonly Role[] = ['ADMIN', 'SUPERVISOR', 'ACCOUNT', 'USER']
+
+function entry(roles: readonly Role[], note: string): PolicyEntry {
+  return { roles, anonymous: false, note }
+}
+
+function anonymous(note: string): PolicyEntry {
+  return { roles: [], anonymous: true, note }
+}
+
+/**
+ * The policy. Keys are the literal channel or route path as the registering code writes it; for `http` entries the
+ * key is `METHOD /path`.
+ *
+ * Grouped by area rather than sorted, because a reader looking for "can a supervisor close the day" should find
+ * the answer next to the other reporting rows.
+ */
+export const POLICY = {
+  // ── Desktop IPC: the window's own lifecycle and identity ────────────────────────────────────────────────
+  'ipc:host:get-bootstrap': entry(EVERYONE, 'The window needs its bootstrap before it knows who is signed in; it returns no data the role gate protects.'),
+  'ipc:auth:login': anonymous('Signing in is how a session begins; refusing it to an anonymous caller would refuse everybody.'),
+  'ipc:auth:logout': entry(EVERYONE, 'Anyone signed in may end their own session.'),
+  'ipc:auth:get-current-user': entry(EVERYONE, 'A caller may always ask who it is.'),
+  'ipc:auth:activity': entry(EVERYONE, 'Keeps the caller\'s own session alive.'),
+  'ipc:shell:get-navigation': entry(EVERYONE, 'Navigation is filtered per role by the host before it is returned.'),
+  'ipc:shell:open-page': entry(EVERYONE, 'Page opening is authorised per page by the host; the channel itself is available to any signed-in caller.'),
+  'ipc:shop:get-settings': entry(EVERYONE, 'Every screen needs the shop name and currency to render.'),
+  'ipc:setup:complete-first-run': anonymous('First run happens before any account exists. The host refuses it once users are present.'),
+
+  // ── Desktop IPC: licence. The server machine is the licensed machine. ───────────────────────────────────
+  'ipc:license:get-status': entry(EVERYONE, 'Every screen needs to know whether the licence is usable.'),
+  'ipc:license:import-vendor-policy': entry(ADMIN, 'Installing a vendor policy changes what the shop is entitled to.'),
+  'ipc:license:activate-online': entry(ADMIN, 'Activation binds the licence to this server machine.'),
+  'ipc:license:import-file': entry(ADMIN, 'Importing a licence file is an activation.'),
+  'ipc:license:activate-onsite': entry(ADMIN, 'On-site activation is an activation.'),
+  'ipc:license:check-in-now': entry(ADMIN, 'A check-in reports the machine to the vendor cloud.'),
+
+  // ── Desktop IPC: users and permissions ──────────────────────────────────────────────────────────────────
+  'ipc:users:list': entry(ADMIN_SUPERVISOR, 'An audit-only supervisor may see who exists; only the Admin may change it.'),
+  'ipc:users:create': entry(ADMIN, 'Creating an account is an Admin act.'),
+  'ipc:users:update': entry(ADMIN, 'Changing a role or permission is an Admin act.'),
+  'ipc:users:deactivate': entry(ADMIN, 'Deactivating an account is an Admin act.'),
+  'ipc:users:reset-password': entry(ADMIN, 'Resetting another person\'s password is an Admin act.'),
+  'ipc:users:unlock': entry(ADMIN, 'Clearing a lockout is an Admin act.'),
+
+  // ── Desktop IPC: approvals ──────────────────────────────────────────────────────────────────────────────
+  'ipc:approvals:list-pending': entry(ADMIN_SUPERVISOR, 'A supervisor reviews pending requests.'),
+  'ipc:approvals:list-recent': entry(ADMIN_SUPERVISOR, 'A supervisor reviews what was decided.'),
+  'ipc:approvals:pending-count': entry(ADMIN_SUPERVISOR, 'A count of what awaits review.'),
+  'ipc:approvals:resolve': entry(ADMIN, 'Resolving an approval authorises a money or stock movement, which a supervisor no longer holds.'),
+
+  // ── Desktop IPC: inventory ──────────────────────────────────────────────────────────────────────────────
+  'ipc:inventory:get-overview': entry(TILL, 'The till and the back office both read stock.'),
+  'ipc:inventory:save-product': entry(ADMIN, 'Editing a product changes prices and pack sizes.'),
+  'ipc:inventory:import-csv': entry(ADMIN, 'A bulk import can rewrite the catalogue.'),
+  'ipc:inventory:import-excel': entry(ADMIN, 'A bulk import can rewrite the catalogue.'),
+  'ipc:inventory:export-csv': entry(TILL, 'Exporting the catalogue reads data an operator may already see.'),
+  'ipc:inventory:export-excel': entry(TILL, 'Exporting the catalogue reads data an operator may already see.'),
+  'ipc:inventory:receive-stock': entry(ADMIN, 'Receiving records supplier costs.'),
+  'ipc:inventory:adjust-stock': entry(ADMIN, 'An adjustment moves stock without a sale.'),
+  'ipc:inventory:stocktake': entry(ADMIN, 'A stocktake overwrites counted quantities.'),
+  'ipc:inventory:stocktake-report': entry(ADMIN, 'The variance report exposes cost and shrinkage.'),
+  'ipc:inventory:list-purchase-orders': entry(ADMIN, 'Purchase orders carry supplier costs.'),
+  'ipc:inventory:create-purchase-order': entry(ADMIN, 'Creating a purchase order commits the shop to buy.'),
+  'ipc:inventory:receive-purchase-order': entry(ADMIN, 'Receiving a purchase order records supplier costs.'),
+  'ipc:inventory:sellable-batches': entry(TILL, 'The till needs the sellable batches to quote a price.'),
+  'ipc:inventory:consume-fefo': entry(ADMIN, 'Forcing a specific batch consumption overrides FEFO ordering.'),
+  'ipc:inventory:weighed-price': entry(TILL, 'Pricing a weighed item is part of taking an order.'),
+
+  // ── Desktop IPC: point of sale ──────────────────────────────────────────────────────────────────────────
+  'ipc:pos:list-customers': entry(TILL, 'The till needs the customer list.'),
+  'ipc:pos:create-customer': entry(TILL, 'A new customer is created at the counter.'),
+  'ipc:pos:quote-sale': entry(TILL, 'Quoting a sale computes prices; it stores nothing.'),
+  'ipc:pos:complete-sale': entry(TILL, 'Completing a sale is the till\'s core act.'),
+  'ipc:pos:list-sales': entry(TILL, 'The till reviews the sales it made.'),
+  'ipc:pos:get-receipt': entry(TILL, 'Re-reading a receipt is a till act, and every read is logged.'),
+  'ipc:pos:print-receipt': entry(TILL, 'Every print is recorded in print_log with a copy number.'),
+  'ipc:pos:hold-cart': entry(TILL, 'Holding a cart is a till act.'),
+  'ipc:pos:list-held-carts': entry(TILL, 'A held cart is visible to the till.'),
+  'ipc:pos:recall-held-cart': entry(TILL, 'Recalling a held cart is a till act.'),
+  'ipc:pos:discard-held-cart': entry(TILL, 'Discarding a held cart is a till act.'),
+  'ipc:pos:can-make-wholesale-sale': entry(TILL, 'Answering whether the caller may sell wholesale. The per-user permission still applies.'),
+
+  // ── Desktop IPC: returns ───────────────────────────────────────────────────────────────────────────────
+  'ipc:returns:find-sale': entry(TILL, 'A return starts by finding the sale.'),
+  'ipc:returns:create': entry(TILL, 'Raising a return request is a till act; approving it is not.'),
+  'ipc:returns:list': entry(TILL, 'The return list is the till\'s own work.'),
+  'ipc:returns:get-document': entry(TILL, 'Reading a credit note the till issued.'),
+  'ipc:returns:resolve-approval': entry(ADMIN, 'Approving a return authorises refunding money or restocking goods.'),
+  'ipc:returns:print-document': entry(TILL, 'Printing a credit note is recorded in the print log.'),
+
+  // ── Desktop IPC: reports and cash ──────────────────────────────────────────────────────────────────────
+  // Deliberately not ADMIN-only, and this is the policy that most needed reading rather than guessing: the host
+  // already opens the reports page to a till user and hands back a PERSONAL report with cost and profit columns
+  // blanked out (`adminReports: null`, `cogsMinor: null`). Narrowing the table to Admin here would not add a rule;
+  // it would remove a screen a cashier is entitled to and has been since Phase 6.
+  'ipc:reports:get-accounting': entry(REVIEW.concat(['ACCOUNT', 'USER'] as const), 'The host scopes the answer: the Admin and an audit supervisor see the whole shop, a till user sees a personal report with costs withheld.'),
+  // Same reasoning as the report itself: the export is scoped by the same host service, so refusing a till user
+  // here would refuse the personal report they were just shown.
+  'ipc:reports:export-csv': entry(REVIEW.concat(['ACCOUNT', 'USER'] as const), 'Exports whatever the same caller was just shown, scoped by the host.'),
+  'ipc:reports:export-excel': entry(REVIEW.concat(['ACCOUNT', 'USER'] as const), 'Exports whatever the same caller was just shown, scoped by the host.'),
+  'ipc:reports:export-pdf': entry(REVIEW.concat(['ACCOUNT', 'USER'] as const), 'Exports whatever the same caller was just shown, scoped by the host.'),
+  'ipc:reports:close-day': entry(ADMIN, 'Closing the day freezes the business date and the reconciliation.'),
+  'ipc:reports:open-cashier-shift': entry(TILL, 'A till operator opens their own shift.'),
+  'ipc:reports:close-cashier-shift': entry(TILL, 'A till operator closes their own shift; the host additionally refuses another person\'s shift.'),
+  'ipc:reports:drawer-event': entry(TILL, 'Recording a drawer event belongs to the person whose shift it is.'),
+
+  // ── Desktop IPC: settings ──────────────────────────────────────────────────────────────────────────────
+  'ipc:settings:update-store-details': entry(ADMIN, 'Shop identity appears on every receipt.'),
+  'ipc:settings:update-display': entry(ADMIN, 'Display settings are shop-wide.'),
+  'ipc:settings:change-currency': entry(ADMIN, 'Changing the currency is guarded by the lock rule and is shop-wide.'),
+  'ipc:settings:update-idle-timeout': entry(ADMIN, 'A shop-wide security setting.'),
+  'ipc:settings:update-return-window': entry(ADMIN, 'A shop-wide policy the returns logic reads.'),
+  'ipc:settings:update-operational': entry(ADMIN, 'VAT, printer, discount ceiling and payment methods are shop-wide.'),
+
+  // ── Desktop IPC: backup and demonstration data ─────────────────────────────────────────────────────────
+  'ipc:backup:get-status': entry(ADMIN, 'Backup state names filesystem paths on the server.'),
+  'ipc:backup:create-manual': entry(ADMIN, 'A backup writes a copy of the whole database.'),
+  'ipc:backup:list-files': entry(ADMIN, 'Listing backups exposes server paths.'),
+  'ipc:backup:restore': entry(ADMIN, 'A restore replaces every row in the database.'),
+  'ipc:backup:choose-folder': entry(ADMIN, 'Choosing a folder only makes sense to the Admin doing a backup.'),
+  'ipc:demo:get-status': entry(ADMIN, 'Whether demonstration data is loaded is an Admin concern.'),
+  'ipc:demo:load': entry(ADMIN, 'Loading demonstration data writes stock and sales.'),
+  'ipc:demo:remove': entry(ADMIN, 'Removing the demonstration data deletes rows the Admin loaded.'),
+
+  // ── Desktop IPC: mobile / LAN host administration ──────────────────────────────────────────────────────
+  'ipc:mobile:assert-feature': entry(EVERYONE, 'Asking whether a licensed feature exists returns a boolean and no data.'),
+  'ipc:mobile:assert-admin-phone-capacity': entry(ADMIN, 'Only the Admin may add a phone.'),
+  'ipc:mobile:get-access-status': entry(ADMIN, 'The LAN host is an Admin-managed facility.'),
+  'ipc:mobile:start-access': entry(ADMIN, 'Starting the LAN listener opens a port.'),
+  'ipc:mobile:stop-access': entry(ADMIN, 'Stopping the LAN listener closes it.'),
+  'ipc:mobile:set-internet-access': entry(ADMIN, 'Internet access for phones is an Admin decision.'),
+  'ipc:mobile:begin-pairing': entry(ADMIN, 'Beginning a pairing mints a device credential.'),
+  'ipc:mobile:list-devices': entry(ADMIN, 'Seeing paired devices is an Admin act.'),
+  'ipc:mobile:revoke-device': entry(ADMIN, 'Revoking a device cuts off a phone.'),
+  'ipc:mobile:get-trust-certificate': entry(ADMIN, 'The certificate is shown to the Admin to compare a fingerprint.'),
+  'ipc:mobile:acknowledge-certificate': entry(ADMIN, 'Confirming the certificate was installed on the phone.'),
+  'ipc:mobile:regenerate-certificate': entry(ADMIN, 'Regenerating the certificate invalidates every trusted phone.'),
+  'ipc:mobile:list-pending-approvals': entry(ADMIN, 'The Admin approves devices.'),
+  'ipc:mobile:approve-device': entry(ADMIN, 'Approving a device grants it a session.'),
+  'ipc:mobile:reject-device': entry(ADMIN, 'Rejecting a device denies it a session.'),
+  'ipc:mobile:rename-device': entry(ADMIN, 'Naming a device is device administration.'),
+  'ipc:mobile:revoke-all-devices': entry(ADMIN, 'Revoking every device cuts off every phone.'),
+  'ipc:mobile:turn-off-all': entry(ADMIN, 'Turning off mobile access closes the facility.'),
+  'ipc:mobile:repair-firewall': entry(ADMIN, 'Changing the firewall rule is a server-machine act.'),
+  'ipc:mobile:test-connection': entry(ADMIN, 'Testing the LAN listener is device administration.'),
+  'ipc:mobile:start-totp-enrollment': entry(ADMIN, 'The authenticator belongs to the Admin account.'),
+  'ipc:mobile:confirm-totp': entry(ADMIN, 'Confirming enrolment completes two-factor setup for the Admin.'),
+  'ipc:mobile:get-totp-status': entry(ADMIN, 'Whether two-factor is on is Admin information.'),
+  'ipc:mobile:disable-totp': entry(ADMIN, 'Disabling two-factor weakens the Admin account and is an Admin act.'),
+  'ipc:mobile:get-keep-running': entry(ADMIN, 'The server\'s run-on behaviour is an Admin setting.'),
+  'ipc:mobile:set-keep-running': entry(ADMIN, 'The server\'s run-on behaviour is an Admin setting.'),
+
+  // ── HTTP: the pre-session surface ──────────────────────────────────────────────────────────────────────
+  'http:GET /api/v1/health': anonymous('A liveness probe. It reveals only that the server is running.'),
+  'http:GET /api/v1/licence': entry(EVERYONE, 'The licence summary is what a client needs before it can offer a sign-in screen.'),
+  'http:POST /api/v1/mobile/pair': anonymous('A phone that has no credential yet begins pairing here; the Admin approves it afterwards.'),
+  'http:GET /api/v1/mobile/pair/status': anonymous('A phone polls its own pairing request by its request token; it learns only its own status.'),
+  'http:POST /api/v1/mobile/session/login': anonymous('Sign-in is how a session begins.'),
+  'http:POST /api/v1/mobile/session/refresh': anonymous('A refresh exchange carries its own rotating credential instead of an access token.'),
+
+  // ── HTTP: sessions ─────────────────────────────────────────────────────────────────────────────────────
+  'http:POST /api/v1/mobile/session/logout': entry(EVERYONE, 'Anyone with a session may end it.'),
+
+  // ── HTTP: the Admin phone app ──────────────────────────────────────────────────────────────────────────
+  'http:GET /api/v1/admin/settings': entry(ADMIN, 'The Admin phone reads shop settings.'),
+  'http:GET /api/v1/admin/returns/pending': entry(ADMIN, 'The Admin phone reviews pending returns.'),
+  'http:POST /api/v1/admin/returns/:returnId/approval': entry(ADMIN, 'Approving a return from the phone authorises money.'),
+  'http:GET /api/v1/admin/reports/summary': entry(ADMIN, 'The Admin phone reads the accounting summary.'),
+  'http:GET /api/v1/admin/reports/summary.pdf': entry(ADMIN, 'The Admin phone exports the summary.'),
+  'http:GET /api/v1/admin/events': entry(ADMIN, 'The Admin phone streams server events.'),
+  'http:GET /api/v1/mobile/admin/dashboard': entry(ADMIN, 'The Admin phone dashboard.'),
+  'http:GET /api/v1/mobile/admin/products': entry(ADMIN, 'The Admin phone reads the catalogue.'),
+  'http:GET /api/v1/mobile/admin/products/:productId': entry(ADMIN, 'The Admin phone reads one product.'),
+  'http:POST /api/v1/mobile/admin/products/:productId': entry(ADMIN, 'The Admin phone edits a product.'),
+  'http:POST /api/v1/mobile/admin/products': entry(ADMIN, 'The Admin phone creates a product.'),
+  'http:POST /api/v1/mobile/admin/products/:productId/stock': entry(ADMIN, 'The Admin phone adjusts stock.'),
+  'http:POST /api/v1/mobile/admin/products/:productId/receive': entry(ADMIN, 'The Admin phone receives stock.'),
+  'http:GET /api/v1/mobile/admin/reports': entry(ADMIN, 'The Admin phone reads reports.'),
+  'http:GET /api/v1/mobile/admin/reports.pdf': entry(ADMIN, 'The Admin phone exports reports.'),
+  'http:GET /api/v1/mobile/admin/sales': entry(ADMIN, 'The Admin phone reads sales.'),
+  'http:GET /api/v1/mobile/admin/sales/:saleId': entry(ADMIN, 'The Admin phone reads one sale.'),
+  'http:GET /api/v1/mobile/admin/cashiers': entry(ADMIN, 'The Admin phone reads till permissions.'),
+  'http:POST /api/v1/mobile/admin/cashiers/:userId/wholesale': entry(ADMIN, 'The Admin phone changes a wholesale permission.'),
+  'http:GET /api/v1/mobile/admin/devices': entry(ADMIN, 'The Admin phone lists devices.'),
+  'http:POST /api/v1/mobile/admin/devices/:deviceId/revoke': entry(ADMIN, 'The Admin phone revokes a device.'),
+  'http:GET /api/v1/mobile/admin/approvals': entry(ADMIN, 'The Admin phone lists approvals.'),
+  'http:POST /api/v1/mobile/admin/approvals/:requestId': entry(ADMIN, 'The Admin phone resolves an approval.'),
+
+  // ── HTTP: the served phone app itself (static assets only) ─────────────────────────────────────────────
+  'http:GET /': anonymous('The phone app shell is static HTML with no shop data in it.'),
+  'http:GET /*': anonymous('Static assets and the client-side router\'s fallback; no shop data is served here.'),
+} as const satisfies Record<string, PolicyEntry>
+
+export type PolicyKey = keyof typeof POLICY
+
+/**
+ * Keys that are anonymous on purpose, with the reason they must be. The test asserts every anonymous entry appears
+ * here, so an anonymous route cannot slip in without somebody writing down why.
+ */
+export const ANONYMOUS_JUSTIFICATIONS: Readonly<Record<string, string>> = {
+  'ipc:auth:login': 'A session has to start somewhere.',
+  'ipc:setup:complete-first-run': 'First run precedes the first account.',
+  'http:GET /api/v1/health': 'A liveness probe carries no data.',
+  'http:POST /api/v1/mobile/pair': 'Pairing precedes the credential.',
+  'http:GET /api/v1/mobile/pair/status': 'A phone polls its own request.',
+  'http:POST /api/v1/mobile/session/login': 'Sign-in precedes the session.',
+  'http:POST /api/v1/mobile/session/refresh': 'A refresh exchange carries its own credential.',
+  'http:GET /': 'The phone app shell is static.',
+  'http:GET /*': 'Static assets and the client-side router fallback.',
+}
+
+export type PolicyOutcome =
+  | { allowed: true; entry: PolicyEntry }
+  | { allowed: false; reason: 'no-policy' | 'anonymous-only' | 'role-not-permitted' | 'unknown-role' }
+
+/** Build the key a route registration maps to. One function, so a caller cannot invent a different spelling. */
+export function httpKey(method: string, path: string): string {
+  return `http:${method.toUpperCase()} ${path}`
+}
+
+export function ipcKey(channel: string): string {
+  return `ipc:${channel}`
+}
+
+export function actionKey(action: string): string {
+  return `action:${action}`
+}
+
+/**
+ * Decide whether a caller with this role may use this key.
+ *
+ * The order is deliberate: find the entry, then test anonymity, then test the role. A caller with an unknown role
+ * is refused before the table is consulted at all, because "unknown" must never be treated as "not listed, so
+ * maybe fine".
+ */
+export function authorize(key: string, role: Role | null, signedIn: boolean): PolicyOutcome {
+  if (!signedIn) {
+    const entryForAnonymous = (POLICY as Record<string, PolicyEntry>)[key]
+    if (!entryForAnonymous) return { allowed: false, reason: 'no-policy' }
+    if (entryForAnonymous.anonymous) return { allowed: true, entry: entryForAnonymous }
+    return { allowed: false, reason: 'anonymous-only' }
+  }
+  if (!role) return { allowed: false, reason: 'unknown-role' }
+  const found = (POLICY as Record<string, PolicyEntry>)[key]
+  if (!found) return { allowed: false, reason: 'no-policy' }
+  if (found.anonymous) return { allowed: true, entry: found }
+  if (!found.roles.includes(role)) return { allowed: false, reason: 'role-not-permitted' }
+  return { allowed: true, entry: found }
+}
+
+/** True when a policy row exists for this key, whatever it permits. */
+export function hasPolicy(key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(POLICY, key)
+}
+
+/** Every key in the table, for the coverage test to compare against the registered surface. */
+export function policyKeys(): string[] {
+  return Object.keys(POLICY)
+}

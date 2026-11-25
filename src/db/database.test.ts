@@ -30,6 +30,9 @@ const EXPECTED_TABLES = [
   'product_variants', 'promotions', 'price_rules', 'loyalty_members', 'loyalty_transactions', 'cashier_shifts',
   'cash_drawer_events', 'sync_state', 'sync_operations', 'held_carts', 'sale_item_batches', 'sale_print_events',
   'return_credits', 'return_print_events',
+  // Migration 16: the client/server foundations.
+  'role_seats', 'client_devices', 'sessions', 'orders', 'order_items', 'order_events', 'reservations',
+  'print_log', 'audit_signoffs', 'audit_flags', 'document_sequences',
 ] as const
 
 function migratedDatabase(): Database.Database {
@@ -68,14 +71,14 @@ describe('database migrations and schema', () => {
     const database = migratedDatabase()
     const tables = new Set((database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(({ name }) => name))
     for (const table of EXPECTED_TABLES) expect(tables.has(table), table).toBe(true)
-    expect(database.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([
-      { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 },
-      { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 },
-      { version: 15 },
-    ])
+    // Derived from the registry rather than typed out. A hand-kept list of migration numbers has to be edited every
+    // time a migration is added, which means the day somebody forgets, this assertion quietly describes an older
+    // schema than the one under test.
+    expect(database.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
+      .toEqual(MIGRATIONS.map((migration) => ({ version: migration.version })))
     expect(database.prepare('SELECT COUNT(*) AS count FROM currencies').get()).toEqual({ count: 54 })
     migrateDatabase(database)
-    expect(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 15 })
+    expect(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: MIGRATIONS.length })
     database.close()
   })
 
@@ -186,7 +189,8 @@ describe('database migrations and schema', () => {
     })
     expect(database.prepare('SELECT description_snapshot, expiry_tracking_snapshot FROM sale_items WHERE id = ?')
       .get('v9-sale-item')).toEqual({ description_snapshot: 'Legacy item', expiry_tracking_snapshot: 0 })
-    expect(database.prepare('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1').get()).toEqual({ version: 15 })
+    expect(database.prepare('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1').get())
+      .toEqual({ version: MIGRATIONS[MIGRATIONS.length - 1]!.version })
     database.close()
   })
 
@@ -376,6 +380,44 @@ describe('database migrations and schema', () => {
       VALUES (?, ?, ?, ?, ?, ?)
     `).run('backup-1', 'AUTOMATIC', 'infoflex-backup-2026-11-17.infoflexbackup', 'C:/infoflex/backups', 'NGN', '2026-11-17T00:00:00.000Z')
 
+    // ── Migration 16: a row in each new table, so "the table exists" is not mistaken for "the table works" ──
+    database.prepare(`
+      INSERT INTO client_devices (id, name, os, token_hash, approved_by, approved_at)
+      VALUES ('client-1', 'Counter till', 'Windows 11', 'hashed-token', 'user-admin', '2026-11-17T00:00:00.000Z')
+    `).run()
+    database.prepare(`
+      INSERT INTO sessions (id, user_id, client_device_id, token_hash, pc_name)
+      VALUES ('session-1', 'user-admin', 'client-1', 'session-token-hash', 'COUNTER-PC')
+    `).run()
+    database.prepare(`
+      INSERT INTO orders (id, type, status, created_by, currency_code, subtotal, total, expires_at)
+      VALUES ('order-1', 'WHOLESALE', 'PENDING', 'user-admin', 'NGN', 1500, 1500, '2026-11-18T00:00:00.000Z')
+    `).run()
+    database.prepare(`
+      INSERT INTO order_items (id, order_id, product_id, description_snapshot, quantity_milli, unit_price, line_total)
+      VALUES ('order-item-1', 'order-1', 'product-1', 'Paracetamol 500mg', 2000, 750, 1500)
+    `).run()
+    database.prepare(`
+      INSERT INTO order_events (order_id, event, from_status, to_status, actor_id)
+      VALUES ('order-1', 'CREATED', NULL, 'DRAFT', 'user-admin')
+    `).run()
+    database.prepare(`
+      INSERT INTO reservations (id, order_id, product_id, quantity_milli)
+      VALUES ('reservation-1', 'order-1', 'product-1', 2000)
+    `).run()
+    database.prepare(`
+      INSERT INTO print_log (document_kind, document_id, copy_no, duplicate, printed_by)
+      VALUES ('SALE', ?, 2, 1, 'user-admin')
+    `).run(String(saleId))
+    database.prepare(`
+      INSERT INTO audit_signoffs (id, subject_kind, subject_id, signed_by, subject_digest, note)
+      VALUES ('signoff-1', 'DAY_CLOSE', '1', 'user-admin', 'digest-of-what-was-shown', 'Reviewed at close')
+    `).run()
+    database.prepare(`
+      INSERT INTO audit_flags (id, subject_kind, subject_id, raised_by, severity, detail)
+      VALUES ('flag-1', 'RETURN', ?, 'user-admin', 'CONCERN', 'Refund exceeded the receipt total')
+    `).run(String(returnId))
+
     const rowChecks: Array<[string, string, string | number]> = [
       ['schema_migrations', 'version', 13], ['currencies', 'code', 'NGN'], ['settings', 'id', 1], ['sync_state', 'id', 1],
       ['users', 'id', 'user-admin'], ['user_permissions', 'user_id', 'user-admin'], ['categories', 'id', 'cat-1'],
@@ -395,6 +437,12 @@ describe('database migrations and schema', () => {
       ['loyalty_members', 'id', 'loyalty-1'], ['loyalty_transactions', 'id', 'loyalty-tx-1'],
       ['cashier_shifts', 'id', 'shift-1'], ['cash_drawer_events', 'id', 'drawer-1'],
       ['backup_log', 'id', 'backup-1'],
+      // Migration 16.
+      ['role_seats', 'role', 'ADMIN'], ['client_devices', 'id', 'client-1'], ['sessions', 'id', 'session-1'],
+      ['orders', 'id', 'order-1'], ['order_items', 'id', 'order-item-1'],
+      ['order_events', 'order_id', 'order-1'], ['reservations', 'id', 'reservation-1'],
+      ['print_log', 'document_kind', 'SALE'], ['audit_signoffs', 'id', 'signoff-1'], ['audit_flags', 'id', 'flag-1'],
+      ['document_sequences', 'kind', 'SALE'],
     ]
     for (const [table, column, value] of rowChecks) {
       const row = database.prepare(`SELECT * FROM "${table}" WHERE "${column}" = ?`).get(value)

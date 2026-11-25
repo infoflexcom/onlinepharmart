@@ -4,12 +4,19 @@ import type { ApprovalDecision, ApprovalKind, ApprovalRequestView } from '../sha
 
 export type { ApprovalDecision, ApprovalKind, ApprovalRequestView }
 
-/** Who may resolve each kind of request. A cashier can raise them; only a supervisor or Admin can decide. */
+/**
+ * Who may resolve each kind of request.
+ *
+ * A till user raises them; **only the Admin decides**. The Supervisor used to appear against RETURN, DISCOUNT and
+ * VOID, and was removed when the role became audit-only: every one of those three authorises a movement of money or
+ * stock, and a role that holds no operational authority cannot be the one granting it. The Supervisor's new surface
+ * is `audit_signoffs` and `audit_flags` — it can record that it reviewed a decision, never take one.
+ */
 const RESOLVERS: Record<ApprovalKind, Array<PublicUser['role']>> = {
-  RETURN: ['ADMIN', 'SUPERVISOR'],
-  DISCOUNT: ['ADMIN', 'SUPERVISOR'],
+  RETURN: ['ADMIN'],
+  DISCOUNT: ['ADMIN'],
   CREDIT: ['ADMIN'],
-  VOID: ['ADMIN', 'SUPERVISOR'],
+  VOID: ['ADMIN'],
 }
 
 const KIND_LABEL: Record<ApprovalKind, string> = {

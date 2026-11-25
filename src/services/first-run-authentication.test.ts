@@ -336,7 +336,9 @@ describe('first-run setup and authentication phase', () => {
       expect(replayedReturn.id).toBe(pendingReturn.id)
       expect(fixture.database.prepare('SELECT quantity_milli FROM stock WHERE product_id = ?').get(inventoryProduct.id)).toEqual({ quantity_milli: 0 })
       expect(fixture.database.prepare('SELECT COUNT(*) AS count FROM payments WHERE return_id IS NOT NULL').get()).toEqual({ count: 0 })
-      const approvedReturn = await invoke('returns:resolve-approval', 4, pendingReturn.id, 'APPROVE') as { returnRecord: { status: string; approvalChannel: string } }
+      // Sender 4 is the Supervisor, which may no longer approve a return: the decision moved to the Admin (sender 1).
+      await expect(Promise.resolve().then(() => invoke('returns:resolve-approval', 4, pendingReturn.id, 'APPROVE'))).rejects.toThrow(/restricted to the Admin/u)
+      const approvedReturn = await invoke('returns:resolve-approval', 1, pendingReturn.id, 'APPROVE') as { returnRecord: { status: string; approvalChannel: string } }
       expect(approvedReturn.returnRecord).toMatchObject({ status: 'COMPLETED', approvalChannel: 'DESKTOP' })
       expect(fixture.database.prepare('SELECT quantity_milli FROM stock WHERE product_id = ?').get(inventoryProduct.id)).toEqual({ quantity_milli: 1_000 })
       await expect(Promise.resolve().then(() => invoke('returns:get-document', 2, pendingReturn.id))).resolves.toMatchObject({ returnNumber: expect.stringMatching(/^C-/u) })
