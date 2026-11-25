@@ -157,6 +157,18 @@ export const POLICY = {
   'ipc:pos:discard-held-cart': entry(TILL, 'Discarding a held cart is a till act.'),
   'ipc:pos:can-make-wholesale-sale': entry(TILL, 'Answering whether the caller may sell wholesale. The per-user permission still applies.'),
 
+  // ── Desktop IPC: the order-to-receipt workflow ────────────────────────────────────────────────────────────
+  // A USER builds an order; an ACCOUNT finalizes it into a sale. Every row below is derived from the same capability
+  // vocabulary as the rest of the table, so the roles here cannot drift from the roles in `capabilities.ts`.
+  'ipc:orders:create': entry(withCapability('build_order'), 'A picker generates an order and stock is reserved. Taking payment is a different capability.'),
+  'ipc:orders:list-queue': entry(withCapability('take_payment'), 'The queue is the Account\'s work list; a picker sees only their own orders.'),
+  'ipc:orders:list-mine': entry(withCapability('see_own_orders'), 'A picker follows their own orders through PENDING, PAID and CANCELLED.'),
+  'ipc:orders:get': entry(withCapability('build_order'), 'Reading one order. Ownership is scoped in the service, so a picker cannot read another picker\'s.'),
+  'ipc:orders:adjust-line': entry(withCapability('take_payment'), 'Adjusting a quantity at the till is an Account act, and it is logged.'),
+  'ipc:orders:cancel': entry(withCapability('build_order'), 'Either side may cancel an unpaid order, as the brief requires; the service scopes who.'),
+  'ipc:orders:finalize': entry(withCapability('take_payment'), 'Finalizing deducts stock and takes money. This is the sharpest rule in the phase.'),
+  'ipc:print:log': entry(REVIEW.concat(withCapability('print_documents')), 'A Supervisor audits reprints without being able to make one; an Account sees their own.'),
+
   // ── Desktop IPC: returns ───────────────────────────────────────────────────────────────────────────────
   'ipc:returns:find-sale': entry(TILL, 'A return starts by finding the sale.'),
   'ipc:returns:create': entry(withCapability('process_returns'), 'A USER may not process returns: "CANNOT ... process returns" is explicit in the brief.'),

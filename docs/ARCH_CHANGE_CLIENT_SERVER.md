@@ -108,3 +108,26 @@ A client cannot open the database **by any code path**, not merely by convention
 of the product rests on: if a client can open the file, then two writers exist, the single-writer assumption
 behind every transaction is false, and the permission table is decoration. It is therefore checked mechanically,
 and the check is itself tested by breaking it on purpose.
+
+## Divergence recorded in Phase 18: `orders.order_number` is allocated at creation
+
+This document described `order_number` as staying NULL until finalisation, so a cancelled draft would burn no document
+number. Phase 18 changed that, and the change is recorded here because this is the document that promised it.
+
+**Why.** The workflow the brief describes is a conversation across a shop floor. A picker generates an order and reads
+its number off an on-screen slip; an Account sees the same order arrive in a live queue and pays for it. Both halves have
+to be able to name the order while it is still unpaid, and a number that appears only at payment cannot take part in
+that conversation. So the number is allocated when the order is created.
+
+**How.** From `document_sequences` (kind `ORDER`), the allocator migration 16 built for this and nothing had used yet:
+one row per document kind, written only by the Server, with a trigger refusing a number that moves backwards. Not from
+`MAX()` over `orders` — that would be a second allocator no trigger protects, and one that would silently disagree with
+the receipt sequence if the same shape were ever reused for sales.
+
+**What it costs.** A cancelled or expired order burns its number and leaves a gap in the sequence. This is accepted, and
+accepted deliberately: gaps are normal in document numbering, and a sequence with none is a sequence somebody has been
+closing up. An order number identifies a picking event, not money, so a gap is not an unaccounted-for sale — receipts
+keep their own separate sequence, which still has no gaps because a receipt is only ever created by a completed sale.
+
+`sales.order_id`, added by migration 16 and written from Phase 18, carries the link from an order to the sale it became.
+It is NULL for a counter sale the Account built directly, which is most sales.

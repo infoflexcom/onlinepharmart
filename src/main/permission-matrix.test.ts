@@ -145,21 +145,25 @@ describe('the on-screen menus agree with the table', () => {
    * the navigation offers.
    */
   it('gives a USER only the pick-and-orders pages the brief names', () => {
-    // The brief's USER row: "Pick goods, My orders." Nothing else.
-    expect(pagesForRole('USER', 'PHARMACY')).toEqual(['dashboard', 'pos', 'stock'])
+    // The brief's USER row: "Pick goods, My orders." Nothing else. Phase 18 added the orders page, which is "My
+    // orders" — the picker's half of the same screen the Account takes payment on.
+    expect(pagesForRole('USER', 'PHARMACY')).toEqual(['dashboard', 'orders', 'pos', 'stock'])
   })
 
   it('gives a SUPERVISOR audit and stock, and nothing that would let it act on money', () => {
     const pages = pagesForRole('SUPERVISOR', 'PHARMACY')
     expect(pages).toEqual(['audit', 'batches', 'dashboard', 'stock'])
-    for (const forbidden of ['pos', 'returns', 'reports', 'users', 'settings'] as AppPage[]) {
+    // 'orders' is here because it is the screen that pays for goods and prints receipts. A SUPERVISOR is refused both
+    // by capability, so it must not be offered the page that hosts them: a menu entry that only ever produces a
+    // refusal teaches the person that the refusal is a fault.
+    for (const forbidden of ['pos', 'orders', 'returns', 'reports', 'users', 'settings'] as AppPage[]) {
       expect(pages, `SUPERVISOR must not be offered ${forbidden}`).not.toContain(forbidden)
     }
   })
 
   it('gives an ACCOUNT the till, returns, reports and stock, but not administration', () => {
     const pages = pagesForRole('ACCOUNT', 'PHARMACY')
-    for (const allowed of ['pos', 'returns', 'reports', 'stock', 'customers'] as AppPage[]) {
+    for (const allowed of ['pos', 'orders', 'returns', 'reports', 'stock', 'customers'] as AppPage[]) {
       expect(pages, `ACCOUNT should be offered ${allowed}`).toContain(allowed)
     }
     for (const forbidden of ['users', 'settings', 'mobile', 'audit', 'approvals'] as AppPage[]) {
@@ -169,7 +173,7 @@ describe('the on-screen menus agree with the table', () => {
 
   it('gives an Admin every page that exists in the edition', () => {
     const pages = pagesForRole('ADMIN', 'PHARMACY')
-    for (const page of ['dashboard', 'pos', 'products', 'stock', 'returns', 'customers', 'reports', 'users', 'settings', 'audit', 'approvals'] as AppPage[]) {
+    for (const page of ['dashboard', 'pos', 'orders', 'products', 'stock', 'returns', 'customers', 'reports', 'users', 'settings', 'audit', 'approvals'] as AppPage[]) {
       expect(pages, `ADMIN should be offered ${page}`).toContain(page)
     }
   })

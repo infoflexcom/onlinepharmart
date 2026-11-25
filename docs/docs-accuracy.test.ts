@@ -63,6 +63,10 @@ const GENERATED = new Set([
   'preload.js', 'ui.js', 'main.js',
   // Written by `npm run release:assemble`. Named in DECISIONS.md as where the release record lives.
   'MANIFEST.json',
+  // Written by `npm run artefacts:verify` into `dist/`, which no build commits. Listed here rather than left to be
+  // found on disk, because requiring the file to be lying around makes this test fail on every fresh clone until
+  // somebody happens to have run that script — a fact about the sandbox, not about the documentation.
+  'artefacts.json',
   // Ships inside electron-builder, in node_modules. Named in DECISIONS.md as the file that settles whether a define can
   // be passed through to makensis -- the answer that made the generated-include route necessary.
   'nsisOptions.d.ts',

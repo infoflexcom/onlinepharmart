@@ -7,6 +7,7 @@ import { UsersAndSeats } from './UsersAndSeats'
 import { SettingsScreen } from './SettingsScreen'
 import { InventoryWorkspace } from './InventoryWorkspace'
 import { PosWorkspace } from './PosWorkspace'
+import { OrderWorkflow } from './OrderWorkflow'
 import { ReturnsWorkspace } from './ReturnsWorkspace'
 import { ReportsWorkspace } from './ReportsWorkspace'
 import { MobileAccessWorkspace } from './MobileAccessWorkspace'
@@ -66,6 +67,8 @@ export function AppShell({ bridge, bootstrap, onLogout, onSettingsUpdated }: Pro
           {message && <div className="form-error shell-message" role="alert"><span>!</span>{message}</div>}
           {activePage === 'pos'
             ? <PosWorkspace bridge={bridge} bootstrap={bootstrap} user={user} onNavigate={(page) => void navigate(page)} />
+            : activePage === 'orders'
+            ? <OrderWorkflow bridge={bridge} bootstrap={bootstrap} user={user} />
             : activePage === 'products'
             ? <InventoryWorkspace bridge={bridge} bootstrap={bootstrap} user={user} mode="products" onNavigate={(page) => void navigate(page)} />
             : activePage === 'stock'
@@ -106,7 +109,7 @@ function NavGlyph({ page }: { page: AppPage }) {
   const symbols: Partial<Record<AppPage, string>> = {
     dashboard: '◫', pos: '▣', products: '◈', stock: '▤', returns: '↶', customers: '◎', reports: '▥',
     users: '♙', mobile: '▯', settings: '⚙', departments: '▦', promotions: '✦', loyalty: '♡', shifts: '◷',
-    batches: '⌁', approvals: '✓',
+    batches: '⌁', approvals: '✓', orders: '⧉',
   }
   return <span className="nav-glyph" aria-hidden="true">{symbols[page] ?? '•'}</span>
 }
@@ -116,6 +119,7 @@ function pageLabel(page: AppPage): string {
     dashboard: 'Dashboard', pos: 'Point of Sale', products: 'Products', stock: 'Stock / Purchases', returns: 'Returns',
     customers: 'Customers', reports: 'Reports', users: 'Users', mobile: 'Mobile Access', settings: 'Settings',
     departments: 'Departments', promotions: 'Promotions', loyalty: 'Loyalty', shifts: 'Shifts', batches: 'Batches / Expiry', approvals: 'Approvals',
+    orders: 'Orders / Receipts',
   }
   return labels[page]
 }

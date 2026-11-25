@@ -1,6 +1,10 @@
 import type {
   AppPage, AssignableRole, CreateUserInput, LoginInput, NavigationItem, PublicUser, UpdateUserInput, UserPermissions,
 } from './auth/types'
+import type {
+  CreateOrderInput, FinalizeOrderInput, FinalizeOrderResult, OrderView,
+} from './orders/types'
+import type { PrintLogEntry } from '../services/print-gate-service'
 import type { RoleSeatCount, SeatCountChange, TeamSettingsInput, TeamSnapshot } from '../services/team-service'
 
 import type { CurrencyDefinition } from './currency/catalog'
@@ -170,7 +174,31 @@ export interface InfoflexBridge {
   completePosSale(input: CompletePosSaleInput): Promise<CompletePosSaleResult>
   listRecentPosSales(): Promise<PosRecentSaleRecord[]>
   getPosReceipt(saleId: string | number): Promise<PosReceiptRecord>
-  recordPosReceiptPrint(saleId: string | number, layout: ReceiptLayout): Promise<PosReceiptRecord>
+  /**
+   * Print a receipt. The reason is required for any copy after the first, and every copy is written to the print log
+   * with the machine it was asked for on.
+   */
+  recordPosReceiptPrint(saleId: string | number, layout: ReceiptLayout, reason?: string): Promise<PosReceiptRecord>
+
+  // ── the order-to-receipt workflow ────────────────────────────────────────────────────────────────────────
+  /** A picker generates an order: stock is reserved, prices snapshotted, nothing paid. */
+  createOrder(input: CreateOrderInput): Promise<OrderView>
+  /** The Account's queue of unpaid orders. */
+  listOrderQueue(): Promise<OrderView[]>
+  /** A picker's own orders, with their live status. */
+  listMyOrders(): Promise<OrderView[]>
+  getOrder(orderId: string): Promise<OrderView>
+  /** An Account adjusts a quantity at the till. Logged, with the before and after. */
+  adjustOrderLine(orderId: string, itemId: string, quantity: string): Promise<OrderView>
+  /** Either side may cancel an unpaid order. The reason is mandatory and is recorded. */
+  cancelOrder(orderId: string, reason: string): Promise<OrderView>
+  /**
+   * Take payment and finalize into a sale. The key makes a double-click produce one sale; a second Account finalizing
+   * the same order is told it is already completed.
+   */
+  finalizeOrder(orderId: string, input: FinalizeOrderInput): Promise<FinalizeOrderResult>
+  /** Every copy of every document: who, which machine, which copy number, and why it was printed again. */
+  listPrintLog(limit?: number): Promise<PrintLogEntry[]>
   holdPosCart(data: HeldPosCartData): Promise<HeldPosCartRecord>
   listHeldPosCarts(): Promise<HeldPosCartRecord[]>
   recallHeldPosCart(id: string): Promise<HeldPosCartRecord>
@@ -180,7 +208,8 @@ export interface InfoflexBridge {
   listReturns(): Promise<ReturnRecord[]>
   getReturnDocument(returnId: string | number): Promise<ReturnRecord>
   resolveReturnApproval(returnId: string | number, decision: ReturnApprovalDecision): Promise<ResolveReturnApprovalResult>
-  recordReturnPrint(returnId: string | number, layout: ReturnDocumentLayout): Promise<ReturnRecord>
+  /** Print a credit note. The reason is required for any copy after the first. */
+  recordReturnPrint(returnId: string | number, layout: ReturnDocumentLayout, reason?: string): Promise<ReturnRecord>
   getAccountingReport(input: ReportPeriodInput): Promise<AccountingReport>
   exportReportCsv(input: ReportExportInput): Promise<string>
   exportReportExcel(input: ReportExportInput): Promise<string>

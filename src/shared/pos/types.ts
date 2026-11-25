@@ -30,6 +30,16 @@ export interface CompletePosSaleInput {
   loyaltyPointsToRedeem?: number
   prescriptionAcknowledged?: boolean
   heldCartId?: string | null
+  /**
+   * The order this sale finalizes, when it finalizes one.
+   *
+   * Written at INSERT time and never afterwards: the sale is COMPLETED the moment it exists, and migration 3's
+   * `completed_sales_cannot_be_changed` trigger aborts any later UPDATE — rightly, because a printed receipt is
+   * history. So the link has to be made here or not at all.
+   */
+  orderId?: string | null
+  /** The Account that took the payment. Distinct from `cashierId` only in that it names who finalized an order. */
+  finalizedBy?: string | null
 }
 
 export interface PosQuoteInput {

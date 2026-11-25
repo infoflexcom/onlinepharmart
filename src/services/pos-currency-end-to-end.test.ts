@@ -17,6 +17,7 @@ import { SetupService } from './setup-service'
 import { ProductInventoryService } from './product-inventory-service'
 import { PointOfSaleService } from './point-of-sale-service'
 import { ReturnService } from './return-service'
+import { PrintGateService } from './print-gate-service'
 import { AccountingReportService } from './accounting-report-service'
 import { formatReceiptMoney } from '../shared/pos/receipt-format'
 
@@ -80,9 +81,18 @@ async function createHost(currencyCode: string) {
   const pos = new PointOfSaleService(database, repository, { workstation: 'E2E-PC', now: () => NOW, newId: () => `e2e-pos-${++ids}` })
   const returns = new ReturnService(database, repository, { workstation: 'E2E-PC', now: () => NOW, newId: () => `e2e-ret-${++ids}` })
   const reports = new AccountingReportService(database, repository, { now: () => NOW })
+  // The gate wraps the printers that already existed, so a host that can print is a host that was given one. Since
+  // Phase 18 the gate is the ONLY route to a printer: printing without it is not a fallback, it is a refusal.
+  const printGate = new PrintGateService(database, repository, pos, returns, {
+    workstation: 'E2E-PC', now: () => NOW,
+  })
   const host = new DesktopHostController(
     repository, userRepository, setup, auth, userService, shopService, () => NOW, '0.1.0',
     undefined, inventory, pos, returns, reports,
+    // Positional gaps the gate sits behind. The host controller has outgrown its constructor signature; filling these
+    // in is the price of not refactoring it mid-phase.
+    undefined, undefined, undefined, undefined, undefined, 'server',
+    undefined, printGate,
   )
   await host.initialize()
   await host.completeFirstRun(firstRun(currencyCode))
@@ -123,8 +133,18 @@ describe('a sale from the host controller to a printed receipt in four currencie
         // Printing records the event and marks the first print as not a duplicate.
         const printed = h.host.recordPosReceiptPrint(1, sold.receipt.id, 'THERMAL_80')
         expect(printed.duplicate).toBe(false)
-        const reprint = h.host.recordPosReceiptPrint(1, sold.receipt.id, 'THERMAL_80')
+        // Changed deliberately in Phase 18: a copy after the first is a reprint, and a reprint without a reason is
+        // refused, because a duplicate nobody can account for is the one thing the print log exists to prevent. This
+        // assertion used to print twice with no explanation and expect both to succeed.
+        expect(() => h.host.recordPosReceiptPrint(1, sold.receipt.id, 'THERMAL_80'))
+          .toThrowError(/reason for printing this document again/u)
+        const reprint = h.host.recordPosReceiptPrint(1, sold.receipt.id, 'THERMAL_80', 'Paper jammed on the first copy.')
         expect(reprint.duplicate).toBe(true)
+        // The log names the machine that asked, not the Server that served it.
+        const log = h.host.listPrintLog(1, 10)
+        expect(log.filter((entry) => entry.copyNumber === 2)[0]).toMatchObject({
+          duplicate: true, reprintReason: 'Paper jammed on the first copy.',
+        })
 
         // The receipt carries the CUSTOMER's store name and this currency's own formatting.
         const receipt = h.host.getPosReceipt(1, sold.receipt.id)

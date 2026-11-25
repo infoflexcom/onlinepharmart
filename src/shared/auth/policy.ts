@@ -19,6 +19,9 @@ export const MAX_SQLITE_MINOR_UNITS = 9_223_372_036_854_775_807n
 const PAGE_CAPABILITY: Partial<Record<AppPage, Capability | null>> = {
   dashboard: 'view_dashboard',
   pos: 'build_order',
+  // The order-to-receipt workflow. The same capability as the till, because picking goods is the first half of
+  // selling them: a USER builds the order, an ACCOUNT takes payment on the same screen and sees the queue.
+  orders: 'build_order',
   products: 'edit_products',
   stock: 'view_stock',
   batches: 'view_stock_detail',

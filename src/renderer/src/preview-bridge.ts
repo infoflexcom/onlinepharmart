@@ -12,6 +12,12 @@ import { TRANSACTION_CURRENCY_LOCK_MESSAGE, VENDOR_CURRENCY_LOCK_MESSAGE } from 
 import type { LicenseSummary } from '@shared/license/types'
 import type { ApprovalRequestView } from '@shared/approvals/types'
 import type {
+  CreateOrderInput, FinalizeOrderInput, FinalizeOrderResult, OrderEventView, OrderStatus, OrderView,
+} from '@shared/orders/types'
+import type { SaleType } from '@shared/pos/types'
+import type { PrintLogEntry } from '../../services/print-gate-service'
+import { can } from '../../../packages/core/src/capabilities'
+import type {
   MobileAccessStatus, MobileConnectionTest, MobileKeepRunningSettings, MobileTotpEnrollment,
   PairedMobileDevice, PendingMobileApproval, TotpStatus,
 } from '@shared/mobile/types'
@@ -164,6 +170,94 @@ export function createPreviewBridge(): InfoflexBridge {
   const previewDayCloses = new Map<string, DayCloseRecord>()
   let nextPreviewCloseId = 0
   const previewIdempotency = new Map<string, number>()
+  /**
+   * The browser preview's copy of the order workflow.
+   *
+   * In memory, like everything else in this file, and deliberately structured the same way as `OrderService`: an order
+   * reserves stock, and finalizing releases the reservation and delegates to the same `completePosSale` the till uses.
+   * A preview that took a different route to a sale would demo behaviour the product does not have.
+   */
+  /** Two hours, the brief's default. The preview has no settings row for it and does not need one. */
+  const PREVIEW_ORDER_EXPIRY_MINUTES = 120
+  const previewOrders: PreviewOrderRow[] = []
+  let previewOrderSequence = 0
+
+  interface PreviewOrderLine {
+    id: string
+    productId: string
+    description: string
+    unit: string
+    quantityMilli: bigint
+    unitPriceMinor: bigint
+    discountMinor: bigint
+    lineTotalMinor: bigint
+    prescriptionRequired: boolean
+  }
+
+  interface PreviewOrderRow {
+    id: string
+    orderNumber: string
+    type: SaleType
+    status: OrderStatus
+    customerId: string | null
+    createdById: string
+    createdByName: string
+    finalizedByName: string | null
+    currencyCode: string
+    subtotalMinor: bigint
+    discountMinor: bigint
+    totalMinor: bigint
+    lines: PreviewOrderLine[]
+    expiresAt: string
+    createdAt: string
+    saleId: number | null
+    receiptNumber: string | null
+    events: OrderEventView[]
+  }
+
+  /** The shape the screens read, built from the preview's own row. Mirrors `OrderService.toView`. */
+  function previewOrderView(row: PreviewOrderRow): OrderView {
+    return {
+      ...structuredClone({
+        id: row.id, orderNumber: row.orderNumber, type: row.type, status: row.status,
+        customerId: row.customerId, createdById: row.createdById, createdByName: row.createdByName,
+        finalizedById: null, finalizedByName: row.finalizedByName, currencyCode: row.currencyCode,
+        expiresAt: row.expiresAt, createdAt: row.createdAt, saleId: row.saleId, receiptNumber: row.receiptNumber,
+      }),
+      customerName: row.customerId
+        ? previewCustomers.find((candidate) => candidate.id === row.customerId)?.name ?? null
+        : null,
+      subtotalMinor: row.subtotalMinor,
+      discountMinor: row.discountMinor,
+      taxMinor: 0n,
+      totalMinor: row.totalMinor,
+      lines: row.lines.map((line) => ({ ...line })),
+      needsPrescriptionAck: row.lines.some((line) => line.prescriptionRequired),
+      events: row.events.map((event) => ({ ...event })),
+    }
+  }
+
+  function requireOrderRole(user: PublicUser, capability: 'build_order' | 'take_payment' | 'see_own_orders', act: string): void {
+    const role = user.role === 'CASHIER' ? 'USER' : user.role
+    if (!can(role, capability)) throw new Error(`Your role cannot ${act}.`)
+  }
+
+  /** Release an unpaid order's holds and mark it finished, the preview's equivalent of the expiry sweep. */
+  function sweepPreviewOrders(now: number): void {
+    for (const row of previewOrders) {
+      if (row.status !== 'PENDING') continue
+      if (Date.parse(row.expiresAt) > now) continue
+      for (const line of row.lines) {
+        const product = inventoryProducts.find((candidate) => candidate.id === line.productId)
+        if (product) product.reservedMilli -= line.quantityMilli
+      }
+      row.status = 'EXPIRED'
+      row.events.push({
+        event: 'order.expired', fromStatus: 'PENDING', toStatus: 'EXPIRED', actorName: null,
+        detail: 'Unpaid past its expiry; reserved stock released.', createdAt: new Date(now).toISOString(),
+      })
+    }
+  }
 
   function context() {
     const initialCurrency = settings.currency ?? defaultCurrency
@@ -461,7 +555,10 @@ export function createPreviewBridge(): InfoflexBridge {
     }
   }
 
-  return {
+  // Assigned to a name rather than returned inline, because the order workflow delegates to this bridge's own
+  // `quotePosSale` and `completePosSale`. Reaching for them through the returned object is what keeps the preview on
+  // the same route to a sale as the desktop host, instead of growing a second pricing path.
+  const bridge: InfoflexBridge = {
     getBootstrap,
     async getLicenseStatus() { return previewLicense },
     async importVendorPolicyFile() { throw new Error('Import the Build Studio policy from the Electron desktop host.') },
@@ -1092,16 +1189,237 @@ export function createPreviewBridge(): InfoflexBridge {
       if (!receipt) throw new Error('The preview receipt could not be found.')
       return structuredClone({ ...receipt, duplicate: receipt.printCount > 1 })
     },
-    async recordPosReceiptPrint(saleId: string | number, layout: ReceiptLayout) {
-      requireInventoryPage('pos')
+    async recordPosReceiptPrint(saleId: string | number, layout: ReceiptLayout, reason?: string) {
+      const user = requireInventoryPage('pos')
+      // The gate's role rule, restated here because the preview has no gate: a USER or SUPERVISOR gets no printer.
+      if (user.role !== 'ADMIN' && user.role !== 'ACCOUNT' && user.role !== 'CASHIER') {
+        throw new Error(`A ${user.role.toLowerCase()} account cannot print documents.`)
+      }
       if (!['THERMAL_80', 'THERMAL_58', 'A4_RECEIPT', 'A4_INVOICE'].includes(layout)) throw new Error('Choose a valid receipt or invoice layout.')
       const receipt = previewReceipts.get(Number(saleId))
       if (!receipt) throw new Error('The preview receipt could not be found.')
-      if (!receipt.store.name.trim()) throw new Error('Printing is blocked because this sale has no saved store name.')
+      if (!receipt.store.name.trim()) throw new Error('Printing is blocked because this sale has no saved store name. Update store details in Settings.')
       const duplicate = receipt.printCount > 0
+      if (duplicate && !(reason ?? '').trim()) throw new Error('Give a reason for printing this document again. It is recorded beside the copy.')
       const next = { ...receipt, printCount: receipt.printCount + 1, duplicate }
       previewReceipts.set(receipt.id, next)
       return structuredClone(next)
+    },
+
+    // ── the order-to-receipt workflow ──────────────────────────────────────────────────────────────────────
+    async createOrder(input: CreateOrderInput): Promise<OrderView> {
+      const user = requireInventoryPage('pos')
+      requireOrderRole(user, 'build_order', 'create an order')
+      if (!input.items.length) throw new Error('Add at least one item before generating the order.')
+      const quote = await bridge.quotePosSale({
+        saleType: input.saleType, items: input.items, customerId: input.customerId ?? null,
+        loyaltyPointsToRedeem: input.loyaltyPointsToRedeem,
+      })
+      const now = Date.now()
+      sweepPreviewOrders(now)
+      if (input.idempotencyKey) {
+        const existing = previewOrders.find((row) => row.createdById === user.id && row.orderNumber.includes(input.idempotencyKey!))
+        if (existing) return previewOrderView(existing)
+      }
+      // Reserving here is the point of an order: without it two pickers could promise the same last unit.
+      for (const line of quote.items) {
+        const product = findPreviewProduct(line.productId)
+        if (product.quantityMilli - product.reservedMilli < line.quantityMilli) {
+          throw new Error(`There is not enough available stock of ${product.name} to reserve for this order.`)
+        }
+      }
+      for (const line of quote.items) findPreviewProduct(line.productId).reservedMilli += line.quantityMilli
+
+      previewOrderSequence += 1
+      const row: PreviewOrderRow = {
+        id: `preview-order-${previewOrderSequence}`,
+        orderNumber: `ORD-${String(previewOrderSequence).padStart(6, '0')}`,
+        type: input.saleType,
+        status: 'PENDING',
+        customerId: input.customerId ?? null,
+        createdById: user.id,
+        createdByName: user.fullName || user.username,
+        finalizedByName: null,
+        currencyCode: quote.currencyCode,
+        subtotalMinor: quote.subtotalMinor,
+        discountMinor: quote.manualDiscountMinor + quote.promotionDiscountMinor + quote.loyaltyDiscountMinor,
+        totalMinor: quote.totalMinor,
+        lines: quote.items.map((line: (typeof quote.items)[number], index: number) => ({
+          id: `preview-order-${previewOrderSequence}-line-${index}`,
+          productId: line.productId, description: line.description, unit: line.unit,
+          quantityMilli: line.quantityMilli, unitPriceMinor: line.unitPriceMinor,
+          discountMinor: line.manualDiscountMinor + line.promotionDiscountMinor + line.loyaltyDiscountMinor,
+          lineTotalMinor: line.lineTotalMinor, prescriptionRequired: line.prescriptionRequired,
+        })),
+        expiresAt: new Date(now + PREVIEW_ORDER_EXPIRY_MINUTES * 60_000).toISOString(),
+        createdAt: new Date(now).toISOString(),
+        saleId: null,
+        receiptNumber: null,
+        events: [{
+          event: 'order.created', fromStatus: null, toStatus: 'PENDING', actorName: user.fullName || user.username,
+          detail: `${quote.items.length} line(s) reserved.`, createdAt: new Date(now).toISOString(),
+        }],
+      }
+      previewOrders.unshift(row)
+      return previewOrderView(row)
+    },
+
+    async listOrderQueue(): Promise<OrderView[]> {
+      const user = requireInventoryPage('pos')
+      requireOrderRole(user, 'take_payment', 'see the order queue')
+      sweepPreviewOrders(Date.now())
+      return previewOrders.filter((row) => row.status === 'PENDING')
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map(previewOrderView)
+    },
+
+    async listMyOrders(): Promise<OrderView[]> {
+      const user = requireInventoryPage('pos')
+      requireOrderRole(user, 'see_own_orders', 'see your orders')
+      sweepPreviewOrders(Date.now())
+      const role = user.role === 'CASHIER' ? 'USER' : user.role
+      const rows = can(role, 'take_payment') ? previewOrders : previewOrders.filter((row) => row.createdById === user.id)
+      return rows.map(previewOrderView)
+    },
+
+    async getOrder(orderId: string): Promise<OrderView> {
+      const user = requireInventoryPage('pos')
+      const row = previewOrders.find((candidate) => candidate.id === orderId)
+      if (!row) throw new Error('That order could not be found.')
+      const role = user.role === 'CASHIER' ? 'USER' : user.role
+      if (!can(role, 'take_payment') && row.createdById !== user.id) throw new Error('That order belongs to another picker.')
+      return previewOrderView(row)
+    },
+
+    async adjustOrderLine(orderId: string, itemId: string, quantity: string): Promise<OrderView> {
+      const user = requireInventoryPage('pos')
+      requireOrderRole(user, 'take_payment', 'adjust an order')
+      const row = previewOrders.find((candidate) => candidate.id === orderId)
+      if (!row) throw new Error('That order could not be found.')
+      if (row.status !== 'PENDING') throw new Error(`That order is ${row.status.toLowerCase()} and can no longer be changed.`)
+      const line = row.lines.find((candidate) => candidate.id === itemId)
+      if (!line) throw new Error('That line is not on this order.')
+      const next = parsePreviewQuantity(quantity)
+      const delta = next - line.quantityMilli
+      const product = findPreviewProduct(line.productId)
+      if (delta > 0n && product.quantityMilli - product.reservedMilli < delta) {
+        throw new Error(`There is not enough available stock of ${product.name} to reserve for this order.`)
+      }
+      product.reservedMilli += delta
+      const was = line.quantityMilli
+      line.quantityMilli = next
+      line.lineTotalMinor = roundHalfUp(line.unitPriceMinor * next, 1000n) - line.discountMinor
+      row.totalMinor = row.lines.reduce((sum, candidate) => sum + candidate.lineTotalMinor, 0n)
+      row.events.push({
+        event: 'order.line_adjusted', fromStatus: row.status, toStatus: row.status,
+        actorName: user.fullName || user.username,
+        detail: `${line.description}: quantity ${was} → ${next} milli-units.`, createdAt: new Date().toISOString(),
+      })
+      return previewOrderView(row)
+    },
+
+    async cancelOrder(orderId: string, reason: string): Promise<OrderView> {
+      const user = requireInventoryPage('pos')
+      if (!reason.trim()) throw new Error('Give a reason for cancelling. It is recorded on the audit trail.')
+      const row = previewOrders.find((candidate) => candidate.id === orderId)
+      if (!row) throw new Error('That order could not be found.')
+      if (row.status === 'PAID') throw new Error('That order is paid. Process a return instead — a completed sale cannot be cancelled.')
+      if (row.status !== 'PENDING') throw new Error(`That order is already ${row.status.toLowerCase()}.`)
+      const role = user.role === 'CASHIER' ? 'USER' : user.role
+      if (!can(role, 'take_payment') && row.createdById !== user.id) throw new Error('That order belongs to another picker.')
+      for (const line of row.lines) findPreviewProduct(line.productId).reservedMilli -= line.quantityMilli
+      row.status = 'CANCELLED'
+      row.events.push({
+        event: 'order.cancelled', fromStatus: 'PENDING', toStatus: 'CANCELLED',
+        actorName: user.fullName || user.username, detail: reason.trim(), createdAt: new Date().toISOString(),
+      })
+      return previewOrderView(row)
+    },
+
+    async finalizeOrder(orderId: string, input: FinalizeOrderInput): Promise<FinalizeOrderResult> {
+      const user = requireInventoryPage('pos')
+      requireOrderRole(user, 'take_payment', 'finalize an order and take payment')
+      if (!input.idempotencyKey || input.idempotencyKey.length < 8) {
+        throw new Error('A finalize needs an idempotency key, so a double-click cannot create two sales.')
+      }
+      const row = previewOrders.find((candidate) => candidate.id === orderId)
+      if (!row) throw new Error('That order could not be found.')
+      sweepPreviewOrders(Date.now())
+      if (row.status === 'PAID' && row.saleId !== null) {
+        return {
+          order: previewOrderView(row), saleId: row.saleId, receiptNumber: row.receiptNumber ?? '',
+          idempotentReplay: true, priceChangesAccepted: [],
+        }
+      }
+      if (row.status !== 'PENDING') {
+        throw new Error(row.status === 'PAID'
+          ? `Order ${row.orderNumber} was already completed by another account.`
+          : `Order ${row.orderNumber} is ${row.status.toLowerCase()} and cannot be finalized.`)
+      }
+      // The prices are re-checked against the products as they are now, and the Account has to accept a difference.
+      const changes = row.lines.map((line) => {
+        const product = findPreviewProduct(line.productId)
+        const now = row.type === 'WHOLESALE' ? product.wholesalePriceMinor : product.retailPriceMinor
+        return now === line.unitPriceMinor ? null : {
+          productId: line.productId, description: line.description, wasMinor: line.unitPriceMinor, nowMinor: now,
+        }
+      }).filter((change): change is NonNullable<typeof change> => change !== null)
+      if (changes.length > 0 && !input.acceptPriceChange) {
+        throw new Error('Prices changed since this order was created. Show the difference to the Account and finalize again with the change accepted.')
+      }
+      // Release before deducting, exactly as the real service does: the sale measures availability as
+      // quantity − reserved, so an order's own hold would otherwise block its own payment.
+      for (const line of row.lines) findPreviewProduct(line.productId).reservedMilli -= line.quantityMilli
+      try {
+        const completed = await bridge.completePosSale({
+          idempotencyKey: input.idempotencyKey,
+          saleType: row.type,
+          items: row.lines.map((line) => ({ productId: line.productId, quantity: String(line.quantityMilli / 1000n) })),
+          payments: input.payments as never,
+          customerId: input.customerId ?? row.customerId,
+          loyaltyPointsToRedeem: input.loyaltyPointsToRedeem,
+          prescriptionAcknowledged: input.prescriptionAcknowledged,
+        })
+        row.status = 'PAID'
+        row.saleId = Number(completed.receipt.id)
+        row.receiptNumber = completed.receipt.receiptNumber
+        row.finalizedByName = user.fullName || user.username
+        row.events.push({
+          event: 'order.finalized', fromStatus: 'PENDING', toStatus: 'PAID',
+          actorName: user.fullName || user.username,
+          detail: `Receipt ${completed.receipt.receiptNumber}.`, createdAt: new Date().toISOString(),
+        })
+        return {
+          order: previewOrderView(row), saleId: row.saleId, receiptNumber: row.receiptNumber ?? completed.receipt.receiptNumber,
+          idempotentReplay: completed.idempotentReplay, priceChangesAccepted: changes,
+        }
+      } catch (error) {
+        // The sale failed, so the hold goes back: stock that is neither held nor sold could be promised twice.
+        for (const line of row.lines) findPreviewProduct(line.productId).reservedMilli += line.quantityMilli
+        throw error
+      }
+    },
+
+    async listPrintLog(limit = 200): Promise<PrintLogEntry[]> {
+      const user = requireInventoryPage('pos')
+      const role = user.role === 'CASHIER' ? 'USER' : user.role
+      if (!can(role, 'view_audit') && !can(role, 'print_documents')) throw new Error('Your role cannot read the print log.')
+      // Rebuilt from the preview's receipts, which carry the copy count the desktop print_log would hold.
+      return [...previewReceipts.values()]
+        .flatMap((receipt) => Array.from({ length: receipt.printCount }, (_unused, index) => ({
+          id: receipt.id * 100 + index,
+          kind: 'SALE' as const,
+          documentId: String(receipt.id),
+          copyNumber: index + 1,
+          duplicate: index > 0,
+          receiptNumber: receipt.receiptNumber,
+          printedBy: user.username,
+          printedByName: user.fullName || user.username,
+          workstation: 'BROWSER_PREVIEW',
+          reprintReason: '',
+          printedAt: receipt.createdAt,
+        })))
+        .sort((a, b) => b.printedAt.localeCompare(a.printedAt))
+        .slice(0, Math.max(1, limit))
     },
     async holdPosCart(data: HeldPosCartData) {
       requireInventoryPage('pos')
@@ -1506,6 +1824,7 @@ export function createPreviewBridge(): InfoflexBridge {
       throw new Error('The demonstration catalogue is available in the installed desktop app, not this browser preview.')
     },
   }
+  return bridge
 }
 
 function buildPreviewAccountingReport(

@@ -20,6 +20,7 @@ import { DesktopHostController } from '../main/desktop-host-controller'
 import { ProductInventoryService } from './product-inventory-service'
 import { PointOfSaleService } from './point-of-sale-service'
 import { ReturnService } from './return-service'
+import { PrintGateService } from './print-gate-service'
 import { AccountingReportService } from './accounting-report-service'
 import type { MobileAccessService } from './mobile-access-service'
 import type { ProductDraft } from '../shared/inventory/types'
@@ -78,7 +79,15 @@ function createFixture(policy: VerifiedLicensePolicy | null = TEST_LICENSE_POLIC
     workstation: 'TEST-DESKTOP', now: () => Date.parse('2026-11-17T12:00:00.000Z'), newId: () => `return-${++generatedId}`,
   })
   const reports = new AccountingReportService(database, shop, { now: () => Date.parse('2026-11-17T12:00:00.000Z') })
-  const host = new DesktopHostController(shop, users, setup, auth, userService, shopService, () => clock, '0.1.0', undefined, inventory, pointOfSale, returns, reports, mobileAccess)
+  // Since Phase 18 the print gate is the only route to a printer, so a host that can print must be given one.
+  const printGate = new PrintGateService(database, shop, pointOfSale, returns, {
+    workstation: 'TEST-DESKTOP', now: () => Date.parse('2026-11-17T12:00:00.000Z'),
+  })
+  const host = new DesktopHostController(
+    shop, users, setup, auth, userService, shopService, () => clock, '0.1.0', undefined, inventory, pointOfSale, returns, reports, mobileAccess,
+    // Positional gaps the gate sits behind, including the app role this fixture models.
+    undefined, undefined, undefined, undefined, 'server', undefined, printGate,
+  )
   return {
     database, shop, users, setup, auth, shopService, userService, inventory, pointOfSale, returns, reports, host,
     setClock(value: number) { clock = value },

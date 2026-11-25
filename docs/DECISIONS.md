@@ -1326,3 +1326,119 @@ The same file records two smaller lessons about driving React from a test, both 
 were understood: `onChange` is the DOM `input` event and not `change`; and a *controlled* input ignores a direct
 assignment to `.value`, because React compares against the value it last rendered. Writing through the prototype's native
 setter is what makes the change visible. Neither is a product defect, and both would have looked like one.
+
+## Print controls cover the application, and a determined person can photograph the screen
+
+The brief asks for this to be written down, and it is the honest limit of everything in this phase.
+
+Role checks, the single print endpoint, the `print_log` row for every copy, the mandatory reason for a reprint, the
+DUPLICATE marking, the absence of any print button for a USER or SUPERVISOR, and the refusal of both roles at the
+endpoint — all of it governs **what the application will do**. None of it governs what a person standing in front of the
+screen will do with a phone. A picker who cannot print a receipt can still photograph the NOT PAID slip, read the
+figures off it, or memorise them. There is no software control for that, in this product or any other, and claiming one
+would be worse than saying so.
+
+What the controls are actually for is the ordinary case: an account that prints receipts it should not, a reprint nobody
+can account for, a till that produces a document the shop cannot trace. Those are the failures a shop meets every week,
+and every one of them now leaves a row naming the person, the machine, the time, the copy number and the reason. The
+determined insider is a different problem, and it is managed the way shops have always managed it — by who is hired,
+what they are trusted with, and the audit trail that makes a pattern visible after the fact.
+
+## An order number is allocated when the order is created, not when it is paid
+
+Migration 16's comment on `orders.order_number` says it stays NULL until finalisation, so a cancelled draft burns no
+document number. That was a sensible design for a number nobody reads until a receipt exists, and it is wrong for the
+workflow the brief describes.
+
+A picker's on-screen slip has to name the order. The Account's queue has to name it. The two of them are having a
+conversation across a shop floor — "that's ORD-000041" — and a number that appears only at payment cannot take part in
+it. So the number is allocated at creation, from `document_sequences` (kind `ORDER`), which is the allocator migration 16
+built for exactly this: one row per document kind, Server-owned, with a trigger that refuses a number moving backwards.
+
+The consequence is that a cancelled or expired order burns its number and leaves a gap. That is accepted. Gaps are
+normal in document numbering, and a sequence with no gaps in it is a sequence somebody has been closing up — which is
+the thing an auditor is trained to look for. Reading `MAX()` over `orders` and parsing the number back out of its own
+string would have been a second allocator that no trigger protects.
+
+## The order-to-sale link lives on `sales.order_id`, and a shadow table was removed to put it there
+
+An earlier draft of migration 18 created an `order_sales` join table on the stated grounds that `sales` had no
+`order_id` column and could not get one without rebuilding the table that holds every completed sale in the shop. The
+first half of that was false: migration 16 line 209 adds `sales.order_id TEXT REFERENCES orders(id)`, alongside
+`finalized_by` and `server_receipt_no`. The column existed and had never been written, because nothing finalized an
+order until now.
+
+The table was removed before release. Two records of one relationship are two chances for them to disagree, and the
+disagreement would have been invisible: an audit query reading one and a report reading the other.
+
+What survives from the draft's reasoning is the ordering constraint, which was real. The link must be written at INSERT
+time, because the sale is `COMPLETED` the moment it exists and migration 3's `completed_sales_cannot_be_changed` trigger
+aborts any later UPDATE. That rule is right — a printed receipt's contents are history — and it is why
+`CompletePosSaleInput` gained `orderId` and `finalizedBy` rather than the order being patched on afterwards.
+
+## An over-limit sale now asks an Admin, and the answer is bound to one exact amount
+
+A discount above the cap and a credit sale above the customer's limit both used to be flat refusals. The cashier's only
+routes were to reduce the discount — overcharging a customer who had been promised it — or to abandon the sale. Neither
+is a shop working correctly, and both push the decision underground, where it happens without being recorded at all.
+
+Both now raise an approval request. Three details carry the weight:
+
+**The excess is what gets authorized, not the sale.** The request records how far over the line the attempt went, and a
+retry is authorized only by an `APPROVED` request whose excess matches exactly. Approving a ₦5 overage must not become a
+pass for a ₦50 one on the next attempt; if it did, the first approval would be worth whatever the cashier decided to
+ask for next.
+
+**The request is matched to an attempt, not to a person.** Kind, idempotency key, requesting cashier and amount all have
+to agree. An approval is not transferable between cashiers, and a `CREDIT` approval does not unlock a `DISCOUNT` — both
+are "an Admin said yes", but to different questions.
+
+**It is raised after the sale's transaction rolls back, never inside it.** A throw inside a better-sqlite3 transaction
+rolls back everything that transaction wrote, including a request raised inside it; the cashier would have been told to
+wait for an approval nobody had ever been asked for. Quoting a basket still files nothing, because the till quotes on
+every keystroke and only completing a sale moves money. An Admin who authorizes their own over-limit sale is allowed to:
+they are the approver role, and inventing a second approver for a one-Admin shop would leave the sale stuck forever.
+
+## The print gate learns which machine asked from the Server, never from the client
+
+The gate runs on the Server and serves every till, so a workstation name captured when it was constructed would be the
+Server's name on every entry — the log would say one machine printed every receipt in the shop. The name therefore
+arrives per request, as a `PrintContext`, filled by the Server from the session it authenticated.
+
+It is never taken from anything a client asserts about itself. A client that could name itself could name itself after
+somebody else's PC, and then the print log — the one record whose whole purpose is saying who did what from where —
+would be a document a till could write. Where the session belongs to an approved `client_devices` row, that device's
+name is used; otherwise the request came from the Server's own window and the gate's own workstation is correct. An
+order's `origin_pc` is filled from the same source for the same reason.
+
+Reading the log is deliberately wider than writing to it: a SUPERVISOR may see every copy every Account printed, without
+being able to print one. That asymmetry is the job — the auditor reads, the till acts.
+
+## A refused print names the caller's own role and nothing else
+
+`PrintRefusedError` says "A user account cannot print documents." It does not say which role *could*. Naming the role
+that would have been allowed leaks exactly the information the login refusal is written to withhold: what to become to
+get further. A test asserts the message does not mention `ACCOUNT`.
+
+## Reservations are rows, and are released before a sale deducts
+
+A hold is a row in `reservations`, not arithmetic on `stock.reserved_milli`. Releasing it is a deletion, which cannot
+drift; decrementing a counter can, and a counter that has drifted is wrong forever in a direction nobody notices until
+stock says there are goods on the shelf that the system believes are elsewhere.
+
+Reserves are per **product**, not per batch. FEFO across batches is `deductStock`'s job and it already did it correctly;
+reserving per batch would mean choosing a batch at pick time, which is choosing it before anybody knows what will still
+be in date when the customer pays.
+
+Release happens **before** deduction, inside the same transaction, and that ordering is load-bearing rather than tidy:
+`deductStock` measures availability as `quantity − reserved`, so an order's own reservation blocks its own finalize. A
+test removes the release call and asserts five failures.
+
+## The browser preview implements the same workflow, by the same route
+
+`preview-bridge.ts` gained the eight order methods and the reprint-reason rule. It delegates to its own `quotePosSale`
+and `completePosSale` rather than growing a second pricing path, and it releases reservations before deducting for the
+same reason the real service does. A preview that reached a sale by a different route would demonstrate behaviour the
+product does not have — which is worse than no preview, because it is believed.
+
+It is in memory and says so. It exists to show the workflow, not to stand in for the Server.

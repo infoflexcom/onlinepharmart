@@ -871,3 +871,42 @@ a second PC, or the vendor's signing key, and are written down so they cannot be
 - [ ] **`needs manual check on real hardware` — deactivating a seat stops that person mid-shift.** Sign in on a client PC
   as an Account, deactivate the seat from the server, and confirm the till refuses the next action immediately rather
   than at the idle timeout. Reactivate and confirm the person must sign in again rather than resuming where they were.
+
+## Phase 18 — orders, receipts and printing: owed manual checks
+
+**Every item here can only be checked by hand, on the hardware it names.** None of them has been done. Nothing in this
+section has been passed, and no automated test in this repository can pass them: there is no printer, no roll of paper,
+no cash drawer and no Windows machine in the environment where this was built.
+
+### Printing, on the Account PC's own printer
+
+| Check | Expected on the hardware | Status |
+| --- | --- | --- |
+| Local printer choice | The Account PC prints to the printer chosen in **that client's** local settings, not to a printer on the Server | ☐ pass ☐ fail |
+| 80 mm thermal | A receipt prints on an 80 mm roll with no clipped columns and no overprint | ☐ pass ☐ fail |
+| 58 mm thermal | The same receipt prints on a 58 mm roll, narrower and still legible | ☐ pass ☐ fail |
+| A4 receipt | Prints on A4 with the store name large, bold and centred | ☐ pass ☐ fail |
+| A4 wholesale invoice | A wholesale order prints as an A4 invoice with the **currency code** beside the total | ☐ pass ☐ fail |
+| Greyscale logo | The store logo prints in greyscale on a thermal printer, not as a black block | ☐ pass ☐ fail |
+| Currency glyph fallback | A currency whose symbol the thermal font lacks (₦, JPY, KWD) prints as its ISO code rather than as garbage | ☐ pass ☐ fail |
+| Reprint marking | A second copy of the same receipt prints with **DUPLICATE** on it, and the reason given is in the print log | ☐ pass ☐ fail |
+| Reprint reason required | Printing a second copy with the reason left blank is refused and prints nothing | ☐ pass ☐ fail |
+| Print log machine name | A receipt printed from a till's printer names **that till** in the log, not the Server | ☐ pass ☐ fail |
+| No print button for a picker | A USER's screen has no print control anywhere, and the slip is marked NOT PAID - NOT A RECEIPT | ☐ pass ☐ fail |
+| Refused at the endpoint | Calling the print endpoint signed in as USER, then as SUPERVISOR, is refused both times and writes no log row | ☐ pass ☐ fail |
+| Blank store name | With the store name cleared in Settings, printing is blocked and the Admin is directed to Settings | ☐ pass ☐ fail |
+| Cash drawer | The drawer opens on a cash sale, on the till that took the payment, and on no other event | ☐ pass ☐ fail |
+
+### Two tills, one order
+
+| Check | Expected on the hardware | Status |
+| --- | --- | --- |
+| Two Accounts, one order | Two Account PCs finalizing the same order at the same moment: exactly one succeeds, the other is told it is already completed, and only one receipt exists | ☐ pass ☐ fail |
+| Double-click | Pressing Finalize twice quickly produces one sale and one stock deduction | ☐ pass ☐ fail |
+| Live queue | An order generated on a picker's screen appears in the Account's queue without anybody reloading | ☐ pass ☐ fail |
+| Expiry | An unpaid order left past the configured expiry releases its stock, and the goods can be sold to somebody else | ☐ pass ☐ fail |
+| Pharmacy FEFO | Finalizing an order draws the earliest-expiring batch first, across two batches received out of date order | ☐ pass ☐ fail |
+| Approval on the Server | An over-cap discount raises a request the Admin accepts on the Server, and the same attempt then completes | ☐ pass ☐ fail |
+| Approval from the phone | The same request accepted from the Admin's phone app unlocks the same attempt | ☐ pass ☐ fail |
+| Receipts in four currencies | Receipts print with the shop's own store name and in NGN, USD, JPY and KWD, each correctly formatted | ☐ pass ☐ fail |
+| Renaming the store | Renaming the store changes **new** receipts only; reprinting an old one still shows the name it was sold under | ☐ pass ☐ fail |

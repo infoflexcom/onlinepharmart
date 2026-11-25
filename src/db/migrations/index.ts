@@ -16,6 +16,7 @@ import { migrateMobileLogin } from './014_mobile_login'
 import { migrateDemoDataRemoval } from './015_demo_data_removal'
 import { migrateClientServerFoundation, migrateClientServerAuditAndSales } from './016_client_server_foundation'
 import { migrateSeatsAndPasswords } from './017_seats_and_passwords'
+import { migrateOrderWorkflow } from './018_order_workflow'
 
 export interface Migration {
   version: number
@@ -60,5 +61,10 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 17,
     name: 'team-seats-password-state-and-screen-settings',
     up: migrateSeatsAndPasswords,
+  },
+  {
+    version: 18,
+    name: 'order-to-receipt-workflow',
+    up: migrateOrderWorkflow,
   },
 ]

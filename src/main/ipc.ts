@@ -5,6 +5,7 @@ import type { CurrencyDefinition } from '../currency/catalog'
 import type { MoneyDisplayOptions } from '../currency/money'
 import type { LicenseFeatures, OnsiteActivationInput, OnlineActivationInput } from '../shared/license/types'
 import type { CompletePosSaleInput, HeldPosCartData, PosCustomerDraft, PosQuoteInput, ReceiptLayout } from '../shared/pos/types'
+import type { CreateOrderInput, FinalizeOrderInput } from '../shared/orders/types'
 import type { RequestReturnInput, ReturnApprovalDecision, ReturnDocumentLayout } from '../shared/returns/types'
 import type {
   CashDrawerEventInput,
@@ -200,7 +201,24 @@ export function registerDesktopIpc(
   handle('pos:complete-sale', (event, input) => host.completePosSale(sender(event), input as CompletePosSaleInput))
   handle('pos:list-sales', (event) => host.listRecentPosSales(sender(event)))
   handle('pos:get-receipt', (event, saleId) => host.getPosReceipt(sender(event), saleId as string | number))
-  handle('pos:print-receipt', (event, saleId, layout) => host.recordPosReceiptPrint(sender(event), saleId as string | number, layout as ReceiptLayout))
+  handle('pos:print-receipt', (event, saleId, layout, reason) => (
+    host.recordPosReceiptPrint(sender(event), saleId as string | number, layout as ReceiptLayout, reason as string | undefined)
+  ))
+
+  // ── the order-to-receipt workflow ──────────────────────────────────────────────────────────────────────
+  // Every one of these goes through `authorize()` in `handle`, so the policy table is what decides who may call them;
+  // the service checks the capability again, because a rule enforced only at the channel is a rule any second caller
+  // can walk past.
+  handle('orders:create', (event, input) => host.createOrder(sender(event), input as CreateOrderInput))
+  handle('orders:list-queue', (event) => host.listOrderQueue(sender(event)))
+  handle('orders:list-mine', (event) => host.listMyOrders(sender(event)))
+  handle('orders:get', (event, orderId) => host.getOrder(sender(event), orderId as string))
+  handle('orders:adjust-line', (event, orderId, itemId, quantity) => (
+    host.adjustOrderLine(sender(event), orderId as string, itemId as string, quantity as string)
+  ))
+  handle('orders:cancel', (event, orderId, reason) => host.cancelOrder(sender(event), orderId as string, reason as string))
+  handle('orders:finalize', (event, orderId, input) => host.finalizeOrder(sender(event), orderId as string, input as FinalizeOrderInput))
+  handle('print:log', (event, limit) => host.listPrintLog(sender(event), limit as number | undefined))
   handle('pos:hold-cart', (event, data) => host.holdPosCart(sender(event), data as HeldPosCartData))
   handle('pos:list-held-carts', (event) => host.listHeldPosCarts(sender(event)))
   handle('pos:recall-held-cart', (event, id) => host.recallHeldPosCart(sender(event), id as string))
@@ -211,7 +229,9 @@ export function registerDesktopIpc(
   handle('returns:list', (event) => host.listReturns(sender(event)))
   handle('returns:get-document', (event, returnId) => host.getReturnDocument(sender(event), returnId as string | number))
   handle('returns:resolve-approval', (event, returnId, decision) => host.resolveReturnApproval(sender(event), returnId as string | number, decision as ReturnApprovalDecision))
-  handle('returns:print-document', (event, returnId, layout) => host.recordReturnPrint(sender(event), returnId as string | number, layout as ReturnDocumentLayout))
+  handle('returns:print-document', (event, returnId, layout, reason) => (
+    host.recordReturnPrint(sender(event), returnId as string | number, layout as ReturnDocumentLayout, reason as string | undefined)
+  ))
 
   handle('reports:get-accounting', (event, input) => host.getAccountingReport(sender(event), input as ReportPeriodInput))
   handle('reports:export-csv', (event, input) => host.exportReportCsv(sender(event), input as ReportExportInput))

@@ -1410,3 +1410,65 @@ are written (`seats.css`, plus the team-size step in `styles.css`) and `css-cove
 every component asks for and checks it against every stylesheet, so the next screen cannot do this silently. Fourteen
 genuinely unstyled classes remain in six files this phase did not touch; they are listed in that test with a reason each,
 and the list can only shrink.
+
+## Phase 18 — the order-to-receipt workflow, payment and printing
+
+**Status: built and tested in this repository; nothing in it has run on Windows, and no printer has been driven.**
+
+### What was built
+
+**Migration 18, and the discovery that most of it was already there.** Migration 16 created `orders`, `order_items`,
+`order_events`, `reservations`, `print_log` and `document_sequences` and deliberately built nothing on them. This phase
+is the building. It needed three columns the earlier design did not have — `order_items.unit` (a slip has to say "2 kg",
+and reading the unit back from `products` at print time would let a product switched from `each` to `box` rewrite what an
+old order said), `print_log.reprint_reason`, and `orders.origin_pc`. It did **not** need the join table an earlier draft
+of the migration created: `sales.order_id` had existed since migration 16 line 209 and had simply never been written,
+because nothing finalized an order until now. Two records of one relationship are two chances for them to disagree, so
+the shadow table was removed before release and the link lives where it was designed to. It has to be written at INSERT
+time — migration 3's `completed_sales_cannot_be_changed` trigger aborts any later UPDATE, and it is right to.
+
+**`OrderService` (44 tests).** A picker generates an order: stock is *reserved*, not deducted, prices are snapshotted,
+the order number is allocated, and the order appears in the Account's queue. Reservations are held per **product** as
+rows in `reservations` rather than as arithmetic on `stock.reserved_milli`, so releasing a hold is a deletion that cannot
+drift; FEFO across batches happens at finalize, inside `deductStock`, where it already worked. Expiry is swept **on read**
+— before the queue is listed and before every finalize — and never on a timer, because a timer is a second writer with
+its own clock and would not run on a Server that was off overnight. Unpaid orders past `settings.order_expiry_minutes`
+(default 120, schema-guaranteed 1..10080) release their stock and become `EXPIRED`.
+
+**`PrintGateService` (19 tests): the only route to a printer.** Both document kinds — sale receipts and credit notes — go
+through one `print(request, actor, context)`, because the answer to "who printed this, from which machine, which copy,
+and why again" has to be one shape. It checks the role, numbers the copy, demands a reason for every copy after the
+first, writes the `print_log` row, and only then asks the document's own service for the thing to print. The two existing
+printers (`recordReceiptPrint`, `recordReturnPrint`) are wrapped, not duplicated: their per-document event tables still
+get written, and there is now no path to a printer that does not pass the gate. A refused print leaves no log row and
+produces no document.
+
+**Refusals became approval requests.** An over-cap discount and an over-limit credit sale used to throw, and a cashier
+who hit either had one way forward: take the discount off and overcharge the customer, or abandon the sale. Both now
+raise an approval request the Admin can accept on the Server or from the phone app. The request records the **excess**,
+and a retry is authorized only by an `APPROVED` request matching the same kind, the same idempotency key, the same
+requesting cashier and the same excess amount — so approving a ₦5 overage cannot blanket-authorize a ₦50 one, and one
+cashier cannot spend another's approval. Quoting a basket still files nothing: the till quotes on every keystroke, and
+only completing a sale moves money. (13 tests.)
+
+**The order workflow on one screen (`OrderWorkflow.tsx`, 8 tests).** A picker builds a basket, generates the order and
+gets a slip marked, in the words the brief chose, **NOT PAID - NOT A RECEIPT**. An Account sees the live queue, adjusts
+quantities (each adjustment recorded with their name and the quantity before it), takes split tender across Cash,
+Transfer, POS/Card and Credit with change computed in the smallest currency unit, and finalizes into a printed receipt.
+The Admin additionally sees the print log. Which controls appear is derived from the same capability sets the Server
+enforces, so the screen cannot offer what the Server would refuse — and, just as importantly, a picker is offered no
+print button at all, because a button that fails on click teaches the person at the till that the refusal is a
+malfunction to be worked around.
+
+### What the tests prove, and what they cannot
+
+Every guard in this phase has a test that disables the guard or removes its input and asserts the failure: removing
+`releaseAllFor` from `finalizeOrder` fails 5 tests (an order's own reservation would otherwise block its own sale,
+because `deductStock` measures availability as `quantity − reserved`); neutralizing the gate's role check fails 3;
+making the override lookup never match fails 3, and making it always match fails 10; forcing `canPrint` true in the
+screen fails the picker's no-print test.
+
+What no test here can prove is the printing. Layouts are validated against the same exported list the picker uses, the
+print log is asserted row by row, and receipts are asserted to keep their snapshot when the store is renamed — but no
+receipt has come out of a printer, no 58 mm roll has been loaded, and no cash drawer has opened. Those are owed checks
+in `docs/RELEASE-CHECKLIST.md`, not passes.

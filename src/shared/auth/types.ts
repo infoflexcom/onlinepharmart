@@ -72,6 +72,7 @@ export interface LoginInput {
 export type AppPage =
   | 'dashboard'
   | 'pos'
+  | 'orders'
   | 'products'
   | 'stock'
   | 'returns'

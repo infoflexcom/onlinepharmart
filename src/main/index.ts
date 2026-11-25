@@ -18,6 +18,8 @@ import { UserService } from '../services/user-service'
 import { ProductInventoryService } from '../services/product-inventory-service'
 import { PointOfSaleService } from '../services/point-of-sale-service'
 import { ReturnService } from '../services/return-service'
+import { OrderService } from '../services/order-service'
+import { PrintGateService } from '../services/print-gate-service'
 import { AccountingReportService } from '../services/accounting-report-service'
 import { ApprovalQueueService } from '../services/approval-queue-service'
 import { MobileAccessService } from '../services/mobile-access-service'
@@ -220,6 +222,20 @@ app.whenReady().then(async () => {
   const inventoryService = new ProductInventoryService(database, repository, { deviceName: hostname() })
   const pointOfSaleService = new PointOfSaleService(database, repository, { workstation: hostname() })
   const returnService = new ReturnService(database, repository, { workstation: hostname() })
+  /**
+   * The order-to-receipt workflow, and the single route to a printer.
+   *
+   * Both take the Server's own hostname as their workstation, which is the correct fallback and the wrong answer for a
+   * till: a print asked for by a client PC carries that machine's name through the request context instead, so the print
+   * log does not blame the Server for every receipt in the shop.
+   *
+   * The gate wraps the two printers that already existed rather than replacing them, so there is one place that checks
+   * the role, numbers the copy and demands a reason for a reprint.
+   */
+  const orderService = new OrderService(database, repository, pointOfSaleService, { workstation: hostname() })
+  const printGateService = new PrintGateService(database, repository, pointOfSaleService, returnService, {
+    workstation: hostname(),
+  })
   const accountingReportService = new AccountingReportService(database, repository)
   approvalQueue = new ApprovalQueueService(database)
   // The optional demonstration catalogue. Its edition comes from the live licence, never from a setting, so a
@@ -325,6 +341,8 @@ app.whenReady().then(async () => {
     demoDataService,
     teamService,
     appRole,
+    orderService,
+    printGateService,
   )
   await hostController.initialize()
   licenseManager.startBackgroundCheckIns()

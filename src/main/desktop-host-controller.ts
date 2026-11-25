@@ -27,12 +27,18 @@ import type { ShopRepository } from '../services/contracts/shop-repository'
 import type { LicenseCheckInResult, LicenseFeatures, LicenseSummary } from '../shared/license/types'
 import type { LicenseManager } from '../license/license-manager'
 import { ProductInventoryService } from '../services/product-inventory-service'
-import { PointOfSaleService } from '../services/point-of-sale-service'
+import { PointOfSaleService, SaleApprovalRequired } from '../services/point-of-sale-service'
 import { ReturnService } from '../services/return-service'
+import type { OrderService } from '../services/order-service'
+import type { PrintContext, PrintGateService, PrintLogEntry } from '../services/print-gate-service'
+import type {
+  CreateOrderInput, FinalizeOrderInput, FinalizeOrderResult, OrderView,
+} from '../shared/orders/types'
 import type {
   RequestReturnInput,
   ReturnApprovalDecision,
   ReturnDocumentLayout,
+  ReturnRecord,
 } from '../shared/returns/types'
 import type {
   AccountingReport,
@@ -103,6 +109,14 @@ const PAGE_LABELS: readonly NavigationItem[] = [
 interface DesktopSession {
   userId: string
   lastActivityAt: number
+  /**
+   * The approved client device this session belongs to, when it came over the network rather than from the Server's own
+   * window. Recorded at sign-in from the device row the Admin approved — never from a name the client sent, because a
+   * client that could name itself could name itself after somebody else's PC.
+   */
+  clientDeviceId?: string | null
+  /** The machine's name as the Admin approved it, for the print log and the audit trail. */
+  pcName?: string | null
 }
 
 export class DesktopHostController {
@@ -133,6 +147,16 @@ export class DesktopHostController {
     private readonly team?: TeamService,
     /** Which application this is. A client refuses the Admin at login unless the shop allows it. */
     private readonly appRole: AppRole = 'server',
+    /**
+     * The order-to-receipt workflow, and the single route to a printer.
+     *
+     * Both optional for the same reason as `team`: every existing fixture keeps constructing the host unchanged, and a
+     * host without them reports the channels as unavailable rather than pretending there is nothing to print.
+     * Appended after `appRole` rather than inserted beside the other services, because inserting would shift the
+     * position of every argument that follows and silently re-bind callers that pass them positionally.
+     */
+    private readonly orders?: OrderService,
+    private readonly printGate?: PrintGateService,
   ) {}
 
   async initialize(): Promise<void> {
@@ -482,7 +506,50 @@ export class DesktopHostController {
 
   completePosSale(senderId: number, input: CompletePosSaleInput) {
     const { actor, edition } = this.requirePosAccess(senderId)
-    return this.requirePointOfSaleService().completeSale(input, actor, edition)
+    return this.withSaleApproval(() => (
+      this.requirePointOfSaleService().completeSale(input, actor, edition)
+    ), actor, input.idempotencyKey)
+  }
+
+  /**
+   * Runs a sale, and if it crosses a limit an Admin can lift, files the request instead of failing quietly.
+   *
+   * The point of separating this from the sale itself is what the cashier sees next. A refusal with no way forward
+   * ends the interaction — the discount comes off and the customer is overcharged, or the sale is abandoned. A request
+   * gives the till something to wait for: the Admin accepts it on the Server or from the phone, the cashier presses
+   * Complete again, and the same key now goes through because an approval exists for exactly this excess.
+   *
+   * The request is raised after the sale's transaction has rolled back, never inside it. Raising it inside would mean
+   * the throw that abandons the sale also erased the request, and the cashier would be told to wait for an approval
+   * nobody had ever been asked for.
+   */
+  private withSaleApproval<T>(run: () => T, actor: PublicUser, idempotencyKey: string): T {
+    let signal: SaleApprovalRequired
+    try {
+      return run()
+    } catch (error) {
+      if (!(error instanceof SaleApprovalRequired)) throw error
+      signal = error
+    }
+    const settings = this.shop.readSettings()
+    const request = this.requireApprovalsService().raise({
+      kind: signal.kind,
+      actor,
+      // The key and the excess are what authorize the retry: without both, one approval would cover every later
+      // attempt on this key, or an Admin who authorized a small overage would be recorded as authorizing a large one.
+      payload: {
+        ...signal.detail,
+        idempotencyKey,
+        excessMinor: signal.excessMinor.toString(),
+        explanation: signal.explanation,
+      },
+      amountMinor: signal.excessMinor,
+      currencyCode: settings.currency.code,
+    })
+    throw new Error(
+      `${signal.explanation} An approval request has been sent to the Admin (${request.id.slice(0, 8)}). `
+      + 'Once it is accepted, complete this sale again — nothing has been charged and no stock has moved.',
+    )
   }
 
   listRecentPosSales(senderId: number) {
@@ -495,9 +562,116 @@ export class DesktopHostController {
     return this.requirePointOfSaleService().recordReceiptViewed(saleId, actor)
   }
 
-  recordPosReceiptPrint(senderId: number, saleId: string | number, layout: ReceiptLayout): PosReceiptRecord {
+  /**
+   * Print a receipt — through the gate, which is the only route to a printer.
+   *
+   * This used to call the POS service's own printer directly. Routing it through `PrintGateService` instead is what
+   * makes "the only print path is a Server print endpoint that checks the role and writes a print log entry" true
+   * rather than aspirational: the gate checks the role, numbers the copy, demands a reason for a reprint, and only
+   * then asks the POS service for the document.
+   */
+  recordPosReceiptPrint(senderId: number, saleId: string | number, layout: ReceiptLayout, reason?: string): PosReceiptRecord {
     const { actor } = this.requirePosAccess(senderId)
-    return this.requirePointOfSaleService().recordReceiptPrint(saleId, layout, actor)
+    const ticket = this.requirePrintGate().print(
+      { kind: 'SALE', documentId: saleId, layout, reason },
+      actor,
+      this.printContextFor(senderId),
+    )
+    // Returned in the shape the till already renders — the receipt with `duplicate` and `printCount` beside it — rather
+    // than as the gate's ticket. The ticket carries the log entry; the screen wants the document. Changing the return
+    // type here would have meant changing every caller to reach into `ticket.document` for no benefit to anybody.
+    return { ...(ticket.document as PosReceiptRecord), duplicate: ticket.duplicate, printCount: ticket.copyNumber }
+  }
+
+  /** The Admin's print log: every copy of every document, with the machine and the reason. */
+  listPrintLog(senderId: number, limit = 200): PrintLogEntry[] {
+    const { actor } = this.requirePosAccess(senderId)
+    return this.requirePrintGate().listPrintLog(actor, limit)
+  }
+
+  /**
+   * Which machine asked for this print.
+   *
+   * The gate runs on the Server and serves every till, so it cannot learn the caller's PC from its own construction —
+   * a name captured there would be the Server's on every entry, and the log would say one machine printed every
+   * receipt in the shop. Where the session belongs to an approved client device, that device's name is used; otherwise
+   * the request came from the Server's own window and the gate's own workstation is correct.
+   */
+  private printContextFor(senderId: number): PrintContext {
+    const session = this.sessions.get(senderId)
+    return { pcName: session?.pcName ?? null, clientDeviceId: session?.clientDeviceId ?? null }
+  }
+
+  private requirePrintGate(): PrintGateService {
+    if (!this.printGate) throw new Error('Printing is not available on this installation.')
+    return this.printGate
+  }
+
+  private requireOrders(): OrderService {
+    if (!this.orders) throw new Error('Orders are not available on this installation.')
+    return this.orders
+  }
+
+  // ── the order-to-receipt workflow ────────────────────────────────────────────────────────────────────────
+
+  createOrder(senderId: number, input: CreateOrderInput): OrderView {
+    const { actor, edition } = this.requirePosAccess(senderId)
+    const key = input.idempotencyKey?.trim() || null
+    const create = (): OrderView => this.requireOrders().createOrder(
+      input,
+      actor,
+      edition,
+      // The order records which machine picked the goods, and that comes from the session the Server authenticated —
+      // the same source the print log uses — not from the renderer's own say-so.
+      this.printContextFor(senderId),
+      // With a key, an Admin's earlier decision about this exact basket can be found again, so a picker whose discount
+      // is over the cap gets a request rather than a dead end. Without one there is nothing to correlate a retry to.
+      key
+        ? (kind, excess) => this.requirePointOfSaleService().hasApprovedOverride(kind, excess, key, actor)
+        : undefined,
+    )
+    // No key means no request is filed, and that is deliberate rather than an oversight: an approval nobody can match
+    // to a later attempt is worse than a refusal, because the cashier is told to wait for a decision that can never
+    // unlock anything. The picker is simply told the ceiling, as the till is.
+    return key ? this.withSaleApproval(create, actor, key) : create()
+  }
+
+  listOrderQueue(senderId: number): OrderView[] {
+    const { actor } = this.requirePosAccess(senderId)
+    return this.requireOrders().listQueue(actor)
+  }
+
+  listMyOrders(senderId: number): OrderView[] {
+    const { actor } = this.requirePosAccess(senderId)
+    return this.requireOrders().listMyOrders(actor)
+  }
+
+  getOrder(senderId: number, orderId: string): OrderView {
+    const { actor } = this.requirePosAccess(senderId)
+    return this.requireOrders().getOrder(orderId, actor)
+  }
+
+  adjustOrderLine(senderId: number, orderId: string, itemId: string, quantity: string): OrderView {
+    const { actor } = this.requirePosAccess(senderId)
+    return this.requireOrders().adjustLineQuantity(orderId, itemId, quantity, actor)
+  }
+
+  cancelOrder(senderId: number, orderId: string, reason: string): OrderView {
+    const { actor } = this.requirePosAccess(senderId)
+    return this.requireOrders().cancelOrder(orderId, reason, actor)
+  }
+
+  finalizeOrder(senderId: number, orderId: string, input: FinalizeOrderInput): FinalizeOrderResult {
+    const { actor, edition } = this.requirePosAccess(senderId)
+    // Finalizing an order is completing a sale, so it crosses the same two limits and files the same request. Routing
+    // it anywhere else would give an Account two ways to sell — one that asks the Admin and one that does not — and
+    // the one that does not ask would be the one used for every order a picker brought to the till.
+    //
+    // The order's own transaction rolls back with the sale, so the stock the order was holding stays held: an order
+    // awaiting an Admin's decision must not quietly lose its reservation and let the goods be sold to somebody else.
+    return this.withSaleApproval(() => (
+      this.requireOrders().finalizeOrder(orderId, input, actor, edition)
+    ), actor, input.idempotencyKey)
   }
 
   holdPosCart(senderId: number, data: HeldPosCartData) {
@@ -545,9 +719,22 @@ export class DesktopHostController {
     return this.requireReturnService().resolveApproval(returnId, decision, actor, 'DESKTOP')
   }
 
-  recordReturnPrint(senderId: number, returnId: string | number, layout: ReturnDocumentLayout) {
+  /**
+   * Print a credit note, through the same gate and under the same rules as a receipt.
+   *
+   * Routed through `PrintGateService` rather than the return service's own printer so that "the only print path is a
+   * Server print endpoint" is literally true: one place checks the role, numbers the copy and demands a reason for a
+   * reprint, whichever document is being printed.
+   */
+  recordReturnPrint(senderId: number, returnId: string | number, layout: ReturnDocumentLayout, reason?: string): ReturnRecord {
     const { actor } = this.requireReturnAccess(senderId)
-    return this.requireReturnService().recordReturnPrint(returnId, layout, actor)
+    const ticket = this.requirePrintGate().print(
+      { kind: 'RETURN', documentId: returnId, layout, reason },
+      actor,
+      this.printContextFor(senderId),
+    )
+    // Same reasoning as the receipt above: the credit-note screen renders the document, not the log entry.
+    return { ...(ticket.document as ReturnRecord), duplicate: ticket.duplicate, printCount: ticket.copyNumber }
   }
 
   getAccountingReport(senderId: number, input: ReportPeriodInput): AccountingReport {

@@ -36,6 +36,40 @@ export interface PointOfSaleServiceOptions {
   newId?: () => string
 }
 
+/** The two limits a cashier cannot cross alone. Both are decided by an Admin, on the Server or from the phone app. */
+export type SaleApprovalKind = 'CREDIT' | 'DISCOUNT'
+
+/**
+ * Thrown when a sale crosses a limit that an Admin can authorize, instead of a limit nobody can.
+ *
+ * This is a signal between two parts of this product rather than a message for a person: `completeSale` lets it escape
+ * so the host can turn it into an approval request, while `quoteSale` catches it and shows the plain sentence it always
+ * showed, because quoting a basket must not file paperwork. Splitting it this way keeps the limit arithmetic in exactly
+ * one place — the two entry points differ only in what crossing the limit costs.
+ */
+export class SaleApprovalRequired extends Error {
+  constructor(
+    readonly kind: SaleApprovalKind,
+    /** How far over the limit the sale is, in integer minor units. Never the whole amount: only the excess is asked for. */
+    readonly excessMinor: bigint,
+    /** The sentence a person should read. Kept identical to the refusal this replaced. */
+    readonly explanation: string,
+    /** What the Admin is being shown, so the request says more than "over the limit". */
+    readonly detail: Record<string, unknown>,
+  ) {
+    super(explanation)
+    this.name = 'SaleApprovalRequired'
+  }
+}
+
+/**
+ * Asks whether an Admin has already authorized this exact excess.
+ *
+ * Passed into the calculation rather than reached for globally, so a quote — which has no idempotency key and completes
+ * nothing — can never find an override to hide behind.
+ */
+export type ApprovalOverrideLookup = (kind: SaleApprovalKind, excessMinor: bigint) => boolean
+
 interface ProductRow {
   id: string
   sku: string
@@ -210,7 +244,17 @@ export class PointOfSaleService {
     this.newId = options.newId ?? randomUUID
   }
 
-  quoteSale(input: PosQuoteInput, actor: PublicUser, edition: Edition): PosQuoteRecord {
+  quoteSale(
+    input: PosQuoteInput,
+    actor: PublicUser,
+    edition: Edition,
+    /**
+     * Passed only by a caller that is about to commit something — an order being generated, not a basket being priced.
+     * With no lookup the ceiling is simply reported, so the till can show a cashier the total they are typing towards
+     * without filing an approval request on every keystroke.
+     */
+    approvedOverride?: ApprovalOverrideLookup,
+  ): PosQuoteRecord {
     validateActor(actor)
     validateEdition(edition)
     const normalized = normalizeQuoteInput(input)
@@ -218,7 +262,16 @@ export class PointOfSaleService {
       throw new Error('Your account does not have permission to make wholesale sales.')
     }
     const settings = this.shop.readSettings()
-    const quote = this.calculateSale(normalized, actor, edition, settings)
+    let quote: SaleComputation
+    try {
+      quote = this.calculateSale(normalized, actor, edition, settings, approvedOverride)
+    } catch (error) {
+      // A quote shows the cashier the ceiling; it does not ask an Admin to lift it. Only completing the sale files a
+      // request, because only completing it moves money. Without this the till would raise an approval request every
+      // time somebody typed a discount into a basket they had not yet decided to sell.
+      if (error instanceof SaleApprovalRequired && !approvedOverride) throw new Error(error.explanation)
+      throw error
+    }
     this.assertStockAvailable(quote.lines, edition)
     return {
       saleType: normalized.saleType,
@@ -252,13 +305,32 @@ export class PointOfSaleService {
     }
   }
 
-  completeSale(input: CompletePosSaleInput, actor: PublicUser, edition: Edition): CompletePosSaleResult {
+  completeSale(
+    input: CompletePosSaleInput,
+    actor: PublicUser,
+    edition: Edition,
+    /**
+     * An extra source of authorization, used by the order workflow.
+     *
+     * An order's discount may have been approved against the key the picker used to generate it, while the Account
+     * paying for it brings a key of their own. Both approvals are the same Admin decision about the same basket, so
+     * the caller supplies the other one and the two are OR'd rather than the order workflow having to re-key a request
+     * it did not raise. It can only widen what this attempt's own key already allows, never bypass the amount check:
+     * the lookup is still asked about one specific excess.
+     */
+    additionalOverride?: ApprovalOverrideLookup,
+  ): CompletePosSaleResult {
     validateActor(actor)
     validateEdition(edition)
     const normalized = normalizeSaleInput(input)
     const requestHash = hashSaleRequest(normalized)
     let saleId = 0
     let replay = false
+    /** Whether an Admin has authorized this exact excess for this attempt, from either key. */
+    const authorized = (kind: SaleApprovalKind, excessMinor: bigint): boolean => (
+      this.hasApprovedOverride(kind, excessMinor, normalized.idempotencyKey, actor)
+      || (additionalOverride?.(kind, excessMinor) ?? false)
+    )
 
     this.database.transaction(() => {
       const previous = this.database.prepare(`
@@ -284,7 +356,11 @@ export class PointOfSaleService {
         items: normalized.items,
         customerId: normalized.customerId,
         loyaltyPointsToRedeem: normalized.loyaltyPointsToRedeem,
-      }, actor, edition, settings)
+      }, actor, edition, settings,
+      // Bound to this attempt, so the only override the calculation can find is one an Admin approved for this very
+      // sale. A quote passes no lookup at all and therefore cannot be pre-authorized.
+      authorized,
+      )
       const {
         lines, grossSubtotal, customer, promotion, promotionDiscount, manualDiscount,
         loyalty, loyaltyDiscount, total, prescriptionLines,
@@ -305,7 +381,22 @@ export class PointOfSaleService {
         const customerBalance = BigInt(customer.balance_text)
         assertSqliteInteger(customerBalance + tender.creditMinor, 'Customer balance')
         if (creditLimit <= 0n || customerBalance + tender.creditMinor > creditLimit) {
-          throw new Error('This sale would exceed the customer’s available credit limit.')
+          const explanation = 'This sale would exceed the customer’s available credit limit.'
+          // With no limit set at all, the whole credit amount is the excess: there is no ceiling to measure against,
+          // so the Admin is being asked to authorize the entire amount going on account.
+          const excess = creditLimit <= 0n
+            ? tender.creditMinor
+            : customerBalance + tender.creditMinor - creditLimit
+          if (!authorized('CREDIT', excess)) {
+            throw new SaleApprovalRequired('CREDIT', excess, explanation, {
+              customerId: customer.id,
+              customerName: customer.name,
+              creditLimitMinor: creditLimit.toString(),
+              customerBalanceMinor: customerBalance.toString(),
+              requestedCreditMinor: tender.creditMinor.toString(),
+              hasCreditLimit: creditLimit > 0n,
+            })
+          }
         }
       }
 
@@ -330,7 +421,7 @@ export class PointOfSaleService {
           promotion_id, promotion_name_snapshot, promotion_discount, manual_discount,
           loyalty_member_id, loyalty_member_number_snapshot, loyalty_points_earned, loyalty_points_redeemed,
           loyalty_discount, credit_amount, total_tendered, prescription_acknowledged, shift_id, created_at,
-          show_powered_by_snapshot
+          show_powered_by_snapshot, order_id, finalized_by
         ) VALUES (
           @customerId, @cashierId, 'COMPLETED', @currencyCode, @subtotal, @discount, 0, @total, @paid, @change,
           @storeName, @storeAddress, @storePhone, @saleType, @idempotencyKey, @requestHash,
@@ -342,11 +433,15 @@ export class PointOfSaleService {
           @promotionId, @promotionName, @promotionDiscount, @manualDiscount,
           @loyaltyMemberId, @loyaltyMemberNumber, @loyaltyPointsEarned, @loyaltyPointsRedeemed,
           @loyaltyDiscount, @creditAmount, @tendered, @prescriptionAcknowledged, @shiftId, @createdAt,
-          @showPoweredBy
+          @showPoweredBy, @orderId, @finalizedBy
         )
       `).run({
         customerId: customer?.id ?? null,
         cashierId: actor.id,
+        // Both NULL for a counter sale the Account built directly, which is most sales. Populated only when a picker's
+        // order is being finalized, and only here, because the row cannot be updated once it is COMPLETED.
+        orderId: input.orderId ?? null,
+        finalizedBy: input.finalizedBy ?? null,
         currencyCode: settings.currency.code,
         subtotal: grossSubtotal,
         discount: promotionDiscount + manualDiscount + loyaltyDiscount,
@@ -633,11 +728,57 @@ export class PointOfSaleService {
     }).immediate()
   }
 
+  /**
+   * Whether an Admin has already authorized this excess, for this attempt, for this cashier.
+   *
+   * All four have to match. Matching on the idempotency key alone would let one approval cover every later attempt
+   * that reused the key; matching on the amount alone would let an Admin who authorized a small overage be quoted as
+   * having authorized a large one. A rejected or still-pending request authorizes nothing, and an approval filed by a
+   * different cashier is not this cashier's to spend.
+   *
+   * The request is read straight from `approval_requests` rather than through `ApprovalQueueService`: this service
+   * already reads `sales`, `customers` and `stock` directly, and depending on the queue here would make two services
+   * that each construct the other's database calls.
+   */
+  /**
+   * Public because the order workflow has to ask the same question. An order's discount is snapshotted when the picker
+   * generates it and re-checked when an Account takes payment, so both moments consult the Admin's decision — and
+   * there must be one rule for what counts as approved, not one per caller.
+   */
+  hasApprovedOverride(
+    kind: SaleApprovalKind,
+    excessMinor: bigint,
+    idempotencyKey: string,
+    actor: PublicUser,
+  ): boolean {
+    const rows = this.database.prepare(`
+      SELECT payload_json FROM approval_requests
+      WHERE request_type = ? AND status = 'APPROVED' AND requested_by = ?
+    `).all(kind, actor.id) as Array<{ payload_json: string }>
+    for (const row of rows) {
+      let payload: Record<string, unknown>
+      try {
+        payload = JSON.parse(row.payload_json) as Record<string, unknown>
+      } catch {
+        // A payload this service cannot read cannot authorize anything. Skipping it is the safe direction: the sale is
+        // refused and the cashier is told to ask again, rather than an unreadable row being treated as consent.
+        continue
+      }
+      if (payload.idempotencyKey !== idempotencyKey) continue
+      // Compared as strings of the same bigint, so 500 and 500.0 and "500" cannot be argued into being equal.
+      if (String(payload.excessMinor ?? '') !== excessMinor.toString()) continue
+      return true
+    }
+    return false
+  }
+
   private calculateSale(
     input: QuoteInputNormalized,
     actor: PublicUser,
     edition: Edition,
     settings: ReturnType<ShopRepository['readSettings']>,
+    /** Present only when a sale is being completed. A quote passes nothing and so can never be pre-authorized. */
+    approvedOverride?: ApprovalOverrideLookup,
   ): SaleComputation {
     const lines = input.items.map((item) => this.priceSaleLine(item, input.saleType, settings.currency, settings.display, edition))
     const grossSubtotal = lines.reduce((total, line) => total + line.grossMinor, 0n)
@@ -663,11 +804,25 @@ export class PointOfSaleService {
     const maximumDiscount = (grossSubtotal * BigInt(limitBasisPoints)) / 10_000n
     if (manualDiscount > maximumDiscount) {
       const limit = limitBasisPoints / 100
-      throw new Error(
-        limitBasisPoints === shopLimit && shopLimit < actorLimit
-          ? `This sale's manual discount exceeds the ${limit}% shop limit set in Settings.`
-          : `This sale's manual discount exceeds your ${limit}% permission limit.`,
-      )
+      const byShopLimit = limitBasisPoints === shopLimit && shopLimit < actorLimit
+      const explanation = byShopLimit
+        ? `This sale's manual discount exceeds the ${limit}% shop limit set in Settings.`
+        : `This sale's manual discount exceeds your ${limit}% permission limit.`
+      const excess = manualDiscount - maximumDiscount
+      // Changed in Phase 18: this used to be a flat refusal, and a cashier who hit it had one option — take the
+      // discount off and overcharge the customer. The brief wants the Admin asked instead, so the excess is what gets
+      // authorized: approving a 500 discount must not blanket-authorize a 5,000 one on the next attempt.
+      if (!approvedOverride?.('DISCOUNT', excess)) {
+        throw new SaleApprovalRequired('DISCOUNT', excess, explanation, {
+          requestedDiscountMinor: manualDiscount.toString(),
+          allowedDiscountMinor: maximumDiscount.toString(),
+          limitBasisPoints,
+          limitPercent: limit,
+          setBy: byShopLimit ? 'SHOP_SETTINGS' : 'USER_PERMISSION',
+          subtotalMinor: grossSubtotal.toString(),
+          saleType: input.saleType,
+        })
+      }
     }
 
     let beforeLoyalty = grossSubtotal - promotionDiscount - manualDiscount
