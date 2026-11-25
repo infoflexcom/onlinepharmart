@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import type { InfoflexBridge } from '@shared/bridge'
 import type { PublicUser } from '@shared/auth/types'
+import './seats.css'
 
 /**
  * Users and Seats — the Admin's screen for who may sign in.
@@ -47,6 +48,7 @@ export function UsersAndSeats({ bridge, currentUser }: Props) {
   /** The seat whose password form is open, or the seat being renamed. */
   const [passwordSeat, setPasswordSeat] = useState<SeatView | null>(null)
   const [renaming, setRenaming] = useState<SeatView | null>(null)
+  const [limitsFor, setLimitsFor] = useState<SeatView | null>(null)
 
   const refresh = useCallback(async (): Promise<void> => {
     const snapshot = await bridge.getTeamSnapshot()
@@ -112,7 +114,7 @@ export function UsersAndSeats({ bridge, currentUser }: Props) {
   }
 
   return (
-    <div className="page">
+    <div className="seats-screen">
       <header className="page-heading">
         <div>
           <span className="eyebrow">ADMIN ONLY · SERVER</span>
@@ -130,7 +132,10 @@ export function UsersAndSeats({ bridge, currentUser }: Props) {
           {SIZED.map(({ role, label: roleLabel }) => {
             const entry = counts.find((candidate) => candidate.role === role)
             const atCap = entry?.licenceCap !== null && entry?.licenceCap !== undefined && (entry?.seats ?? 0) >= entry.licenceCap
-            const atFloor = (entry?.seats ?? 0) <= entry!.activeAccounts
+            // Both sides default, because on the first render the snapshot has not arrived and `counts` is empty. The
+            // non-null assertion this replaces threw on mount, which is a blank screen the moment an Admin opened it —
+            // found by mounting the component, not by reading it.
+            const atFloor = (entry?.seats ?? 0) <= (entry?.activeAccounts ?? 0)
             return (
               <div className="seat-count" key={role}>
                 <span className="seat-count__role">{roleLabel}</span>
@@ -175,6 +180,16 @@ export function UsersAndSeats({ bridge, currentUser }: Props) {
                   <button type="button" className="link-button" disabled={busy} onClick={() => setPasswordSeat(seat)}>
                     {seat.needsPassword ? 'Set password' : 'Reset password'}
                   </button>
+                  <button type="button" className="link-button" disabled={busy} onClick={() => setLimitsFor(seat)}>Limits</button>
+                  {seat.role !== 'ADMIN' || !seat.isActive ? (
+                    <button type="button" className="link-button" disabled={busy}
+                      onClick={() => void run(
+                        () => bridge.setSeatActive(seat.id, !seat.isActive),
+                        seat.isActive ? `${seat.fullName} can no longer sign in.` : `${seat.fullName} can sign in again.`,
+                      )}>
+                      {seat.isActive ? 'Deactivate' : 'Activate'}
+                    </button>
+                  ) : null}
                 </td>
               </tr>
             ))}
@@ -228,6 +243,37 @@ export function UsersAndSeats({ bridge, currentUser }: Props) {
             <div className="form-actions">
               <button type="button" className="secondary-button" onClick={() => setRenaming(null)}>Cancel</button>
               <button type="submit" className="primary-button" disabled={busy}>{busy ? 'Saving…' : 'Save name'}</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {limitsFor && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="limits-heading">
+          <form className="modal" onSubmit={async (event) => {
+            event.preventDefault()
+            const form = new FormData(event.currentTarget)
+            const permissions = {
+              allowWholesale: form.get('allowWholesale') === 'on',
+              allowCreditSales: form.get('allowCreditSales') === 'on',
+              // Basis points, entered as a percentage: a shopkeeper thinks in percent and the schema stores hundredths
+              // of a percent, so the conversion lives here where the label is, not silently in the service.
+              maxDiscountBasisPoints: Math.round(Number(form.get('maxDiscount') ?? 0) * 100),
+              returnLimitMinor: BigInt(String(form.get('returnLimit') ?? '0').replace(/[^0-9]/gu, '') || '0'),
+            }
+            await run(() => bridge.setSeatPermissions(limitsFor.id, permissions), 'Limits saved.')
+            setLimitsFor(null)
+          }}>
+            <h2 id="limits-heading">Limits for {limitsFor.fullName}</h2>
+            <p>These narrow what the role already allows. They never add a permission the role does not have: an Account given a 20% ceiling still cannot edit a product.</p>
+            <label className="toggle"><input type="checkbox" name="allowWholesale" defaultChecked={limitsFor.permissions.allowWholesale} /><span><b>Allow wholesale prices</b><small>Off means this person sees and sells retail prices only.</small></span></label>
+            <label className="toggle"><input type="checkbox" name="allowCreditSales" defaultChecked={limitsFor.permissions.allowCreditSales} /><span><b>Allow credit sales</b><small>Off means every sale must be paid for at the counter.</small></span></label>
+            <label className="field"><span>Maximum discount (%)</span><input name="maxDiscount" type="number" min={0} max={100} step="0.01" defaultValue={limitsFor.permissions.maxDiscountBasisPoints / 100} /></label>
+            <label className="field"><span>Return limit (minor units of the shop currency)</span><input name="returnLimit" inputMode="numeric" defaultValue={limitsFor.permissions.returnLimitMinor.toString()} /></label>
+            <p className="field-hint">A return above this amount needs the Admin's approval.</p>
+            <div className="form-actions">
+              <button type="button" className="secondary-button" onClick={() => setLimitsFor(null)}>Cancel</button>
+              <button type="submit" className="primary-button" disabled={busy}>{busy ? 'Saving…' : 'Save limits'}</button>
             </div>
           </form>
         </div>

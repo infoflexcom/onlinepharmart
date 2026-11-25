@@ -1,5 +1,5 @@
 import type {
-  AppPage, AssignableRole, CreateUserInput, LoginInput, NavigationItem, PublicUser, UpdateUserInput,
+  AppPage, AssignableRole, CreateUserInput, LoginInput, NavigationItem, PublicUser, UpdateUserInput, UserPermissions,
 } from './auth/types'
 import type { RoleSeatCount, SeatCountChange, TeamSettingsInput, TeamSnapshot } from '../services/team-service'
 
@@ -141,6 +141,10 @@ export interface InfoflexBridge {
   /** Set or reset a seat's password. This is what turns "Needs password" into a sign-in. */
   setSeatPassword(userId: string, password: string, confirmPassword: string): Promise<void>
   updateTeamSettings(input: TeamSettingsInput): Promise<void>
+  /** Deactivate or reactivate a seat. Deactivating ends any open session for that person. */
+  setSeatActive(userId: string, isActive: boolean): Promise<void>
+  /** The four per-user limits. They narrow a role; they can never widen it. */
+  setSeatPermissions(userId: string, permissions: UserPermissions): Promise<void>
   /** The fixed, read-only description of each role, derived from the capability table. */
   getRoleSummary(): Promise<Array<{ role: AssignableRole; summary: string }>>
 

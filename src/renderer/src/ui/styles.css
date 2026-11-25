@@ -191,6 +191,52 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .text-button--danger { color: #a3453e; }
 .setup-footnote { margin-top: 24px; color: #87909b; font-size: 10px; text-align: center; }
 
+/* First-run setup, step 4: team size.
+   The three counts sit side by side so the Admin compares them at a glance, and collapses to one column where they
+   would otherwise be too narrow to read the licence cap in. */
+.field-grid--team { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.seat-stepper { display: flex; min-width: 0; flex-direction: column; gap: 11px; padding: 16px 16px 15px; border: 1px solid #e1e5ec; border-radius: 11px; background: #fbfcfd; }
+.seat-stepper__heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.seat-stepper__heading strong { color: var(--ink); font-size: 13px; font-weight: 750; letter-spacing: -.01em; }
+.seat-stepper__controls { display: flex; align-items: stretch; gap: 8px; }
+/* The number is a real <input type=number>, not a display: the customer can type a count rather than click twelve
+   times, and the licence cap still clamps what is accepted. */
+.seat-stepper__controls input {
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  padding: 0 4px;
+  border: 1px solid #d9dde3;
+  border-radius: 7px;
+  outline: none;
+  background: #fff;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.seat-stepper__controls input:focus { border-color: var(--navy); box-shadow: 0 0 0 3px rgba(31, 63, 115, .12); }
+.seat-stepper__controls button {
+  flex: 0 0 38px;
+  width: 38px;
+  border: 1px solid #d9dde3;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--navy);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+.seat-stepper__controls button:hover:not(:disabled) { background: #eef2f7; border-color: var(--navy); }
+.seat-stepper__controls button:disabled { cursor: not-allowed; opacity: .45; }
+.seat-cap { display: block; color: #8a7028; font-size: 10px; font-weight: 700; letter-spacing: .02em; }
+.seat-cap[data-at-cap="true"] { color: #a3453e; }
+.seat-note, .seat-stepper__note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.seat-note { max-width: 660px; }
+@media (max-width: 900px) { .field-grid--team { grid-template-columns: minmax(0, 1fr); } }
+
 /* Login and activation */
 .login-screen { position: relative; display: grid; min-height: 100vh; place-items: center; overflow: auto; background: radial-gradient(ellipse at 20% 10%, rgba(201, 162, 75, .19), transparent 38%), linear-gradient(148deg, #142d52 0%, #1f3f73 55%, #12294a 100%); }
 .login-overlay { position: absolute; inset: 0; background: url('/logo-source.png') center / min(900px, 86vw) auto no-repeat; opacity: .055; mix-blend-mode: screen; pointer-events: none; }
@@ -262,7 +308,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .access-note { margin-top: 18px !important; color: #966247 !important; }
 
 /* Admin settings and user management */
-.settings-stack, .user-management { display: flex; flex-direction: column; gap: 17px; }
+.settings-stack { display: flex; flex-direction: column; gap: 17px; }
 .management-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 2px; }
 .management-heading__actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 8px; }
 .management-heading h2, .management-card__header h2 { margin: 6px 0 5px; color: var(--ink); font-size: 22px; letter-spacing: -.035em; }

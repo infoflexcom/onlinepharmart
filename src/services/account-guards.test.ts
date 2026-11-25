@@ -160,61 +160,61 @@ describe('the idle timeout is enforced by the session, not by the window', () =>
   })
 })
 
-describe('one active login per account', () => {
-  /**
-   * Driven through the real host, because the rule lives in the session map it owns. A test that only read the setting
-   * would pass with the rule unimplemented — which is exactly what the first version of this file did, and why the
-   * host now has `invalidateSessions(userId, keep)`.
-   */
-  async function hostFixture() {
-    const { default: Database } = await import('better-sqlite3')
-    const { DesktopHostController } = await import('../main/desktop-host-controller')
-    const { SetupService } = await import('./setup-service')
-    const { UserService } = await import('./user-service')
-    const { ShopService } = await import('./shop-service')
-    const { TeamService } = await import('./team-service')
-    const database = new Database(':memory:')
-    migrateDatabase(database)
-    const shop = new SQLiteShopRepository(database, false)
-    const users = new SQLiteUserRepository(database)
-    const policy = { licenseId: 't', edition: 'PHARMACY' as const, defaultCurrencyCode: null, lockCurrency: false }
-    const teamForSetup = new TeamService(database, () => new Date('2026-11-17T09:00:00.000Z'))
-    const setup = new SetupService(
-      shop, users, shop, { getVerifiedPolicy: () => policy }, () => new Date('2026-11-17T09:00:00.000Z'),
-      undefined, null,
-      {
-        readCaps: () => ({ account: null, user: null, supervisor: null }),
-        // The same bootstrap the real host supplies, so first-run creates the seats it was asked for.
-        createSeats: (input, actor) => {
-          teamForSetup.setSeatCount({ role: 'ACCOUNT', seats: input.account }, actor)
-          teamForSetup.setSeatCount({ role: 'USER', seats: input.user }, actor)
-          teamForSetup.setSeatCount({ role: 'SUPERVISOR', seats: input.supervisor }, actor)
-        },
+/**
+ * Driven through the real host, because the rule lives in the session map it owns. A test that only read the setting
+ * would pass with the rule unimplemented — which is exactly what the first version of this file did, and why the
+ * host now has `invalidateSessions(userId, keep)`.
+ */
+async function hostFixture() {
+  const { default: Database } = await import('better-sqlite3')
+  const { DesktopHostController } = await import('../main/desktop-host-controller')
+  const { SetupService } = await import('./setup-service')
+  const { UserService } = await import('./user-service')
+  const { ShopService } = await import('./shop-service')
+  const { TeamService } = await import('./team-service')
+  const database = new Database(':memory:')
+  migrateDatabase(database)
+  const shop = new SQLiteShopRepository(database, false)
+  const users = new SQLiteUserRepository(database)
+  const policy = { licenseId: 't', edition: 'PHARMACY' as const, defaultCurrencyCode: null, lockCurrency: false }
+  const teamForSetup = new TeamService(database, () => new Date('2026-11-17T09:00:00.000Z'))
+  const setup = new SetupService(
+    shop, users, shop, { getVerifiedPolicy: () => policy }, () => new Date('2026-11-17T09:00:00.000Z'),
+    undefined, null,
+    {
+      readCaps: () => ({ account: null, user: null, supervisor: null }),
+      // The same bootstrap the real host supplies, so first-run creates the seats it was asked for.
+      createSeats: (input, actor) => {
+        teamForSetup.setSeatCount({ role: 'ACCOUNT', seats: input.account }, actor)
+        teamForSetup.setSeatCount({ role: 'USER', seats: input.user }, actor)
+        teamForSetup.setSeatCount({ role: 'SUPERVISOR', seats: input.supervisor }, actor)
       },
-    )
-    const auth = new AuthService(
-      users, shop, { deviceName: 'PC', ipAddress: null }, () => new Date('2026-11-17T09:00:00.000Z'), () => 1_000_000,
-      { app: 'client', allowAdminOnClients: () => true },
-    )
-    const team = teamForSetup
-    const host = new DesktopHostController(
-      shop, users, setup, auth, new UserService(users, shop), new ShopService(shop), () => 1_000_000, '0.1.0-test',
-      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, team, 'client',
-    )
-    await host.initialize()
-    await host.completeFirstRun({
-      admin: { fullName: 'Ada Admin', username: 'ada', password: PASSWORD, confirmPassword: PASSWORD },
-      profile: { name: 'Harbor Health', address: '', phone: '' },
-      currency: (await import('../currency/catalog')).getCurrency('NGN')!,
-      display: (await import('../currency/money')).defaultDisplayOptions((await import('../currency/catalog')).getCurrency('NGN')!),
-      currencyConfirmed: true,
-      teamSize: { account: 1, user: 0, supervisor: 0 },
-    } as never)
-    const seat = database.prepare("SELECT id FROM users WHERE role = 'ACCOUNT'").get() as { id: string }
-    await team.setSeatPassword(seat.id, PASSWORD, PASSWORD, 'ada')
-    return { host, team, database, seat }
-  }
+    },
+  )
+  const auth = new AuthService(
+    users, shop, { deviceName: 'PC', ipAddress: null }, () => new Date('2026-11-17T09:00:00.000Z'), () => 1_000_000,
+    { app: 'client', allowAdminOnClients: () => true },
+  )
+  const team = teamForSetup
+  const host = new DesktopHostController(
+    shop, users, setup, auth, new UserService(users, shop), new ShopService(shop), () => 1_000_000, '0.1.0-test',
+    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, team, 'client',
+  )
+  await host.initialize()
+  await host.completeFirstRun({
+    admin: { fullName: 'Ada Admin', username: 'ada', password: PASSWORD, confirmPassword: PASSWORD },
+    profile: { name: 'Harbor Health', address: '', phone: '' },
+    currency: (await import('../currency/catalog')).getCurrency('NGN')!,
+    display: (await import('../currency/money')).defaultDisplayOptions((await import('../currency/catalog')).getCurrency('NGN')!),
+    currencyConfirmed: true,
+    teamSize: { account: 1, user: 0, supervisor: 0 },
+  } as never)
+  const seat = database.prepare("SELECT id FROM users WHERE role = 'ACCOUNT'").get() as { id: string }
+  await team.setSeatPassword(seat.id, PASSWORD, PASSWORD, 'ada')
+  return { host, team, database, seat }
+}
 
+describe('one active login per account', () => {
   it('ends the first session when the same account signs in from a second PC', async () => {
     const { host } = await hostFixture()
     await host.login(1, { username: 'account1', password: PASSWORD })
@@ -240,6 +240,71 @@ describe('one active login per account', () => {
   it('defaults to on, so a shop that never visits the screen is protected', async () => {
     const { team } = await hostFixture()
     expect(team.getSnapshot().singleLoginPerAccount).toBe(true)
+  })
+})
+
+describe('deactivating a seat ends the session it was using', () => {
+  /**
+   * Two separate mechanisms, both pinned here, because it is easy to credit the wrong one.
+   *
+   * 1. `resolveCurrentUser` re-reads the user row on every call and refuses one that is inactive or locked. This is the
+   *    guard that actually protects the till: the deactivated person cannot act, immediately, and it would still be so
+   *    if nothing ever deleted their session.
+   * 2. `setSeatActive` deletes the session outright. Without it, mechanism 1 leaves a refused-but-present session in the
+   *    map, and switching the seat back on resurrects it — signing in somebody who never re-authenticated.
+   *
+   * Disabling (2) leaves the first two tests passing and fails only the third, which is how that split was found; the
+   * third test is the one that earns the extra line of code.
+   */
+  it('signs the deactivated person out at once', async () => {
+    const { host, team, seat } = await hostFixture()
+    // The Admin has to be signed in to deactivate anybody; sender 0 is the Admin's window here.
+    await host.login(0, { username: 'ada', password: PASSWORD })
+    await host.login(1, { username: 'account1', password: PASSWORD })
+    expect(host.getCurrentUser(1), 'signed in before the change').not.toBeNull()
+
+    host.setSeatActive(0, seat.id, false)
+
+    expect(host.getCurrentUser(1), 'the open session must end when the seat is deactivated').toBeNull()
+    expect(team.canSignIn(seat.id), 'and they cannot sign back in').toBe(false)
+  })
+
+  it('does not disturb a different person signed in at the same time', async () => {
+    const { host, database, team, seat } = await hostFixture()
+    // A second seat, so the test is about *whose* session ends and not about sessions ending in general.
+    team.setSeatCount({ role: 'ACCOUNT', seats: 2 }, 'ada')
+    const other = database.prepare("SELECT id, username FROM users WHERE role = 'ACCOUNT' AND id != ?").get(seat.id) as { id: string; username: string }
+    await team.setSeatPassword(other.id, PASSWORD, PASSWORD, 'ada')
+
+    await host.login(0, { username: 'ada', password: PASSWORD })
+    await host.login(1, { username: 'account1', password: PASSWORD })
+    await host.login(2, { username: other.username, password: PASSWORD })
+    expect(host.getCurrentUser(2), 'both signed in first').not.toBeNull()
+
+    host.setSeatActive(0, seat.id, false)
+
+    expect(host.getCurrentUser(1), 'the deactivated person is out').toBeNull()
+    expect(host.getCurrentUser(2), 'the colleague is untouched').not.toBeNull()
+  })
+
+  it('refuses the deactivated person at the host, not only in the team service', async () => {
+    const { host, database, seat } = await hostFixture()
+    await host.login(0, { username: 'ada', password: PASSWORD })
+    await host.login(1, { username: 'account1', password: PASSWORD })
+    // Deactivate through the row rather than the host, so nothing here can invalidate the session: what is being tested
+    // is that the host refuses an inactive user on its own, on the next call.
+    database.prepare('UPDATE users SET is_active = 0 WHERE id = ?').run(seat.id)
+    expect(host.getCurrentUser(1), 'the host must re-check the row, not trust the session it holds').toBeNull()
+  })
+
+  it('reactivating does not sign anybody back in, because that would be a session nobody asked for', async () => {
+    const { host, seat } = await hostFixture()
+    await host.login(0, { username: 'ada', password: PASSWORD })
+    await host.login(1, { username: 'account1', password: PASSWORD })
+    host.setSeatActive(0, seat.id, false)
+    host.setSeatActive(0, seat.id, true)
+    // The seat is usable again, but the person still has to sign in on their own PC.
+    expect(host.getCurrentUser(1)).toBeNull()
   })
 })
 

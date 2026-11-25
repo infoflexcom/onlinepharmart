@@ -1218,3 +1218,111 @@ file **byte-identical to its input**: ImageMagick accepted every argument and dr
 hand — the file exists, it is 512×512 — passed. The test therefore asserts the two sets differ from each other and from
 the unbadged source, and reads the ICO directory back to confirm it holds seven distinct sizes rather than seven copies
 of 256. Both assertions were verified to fail when the badge is suppressed.
+
+## Two guards, and the test that told them apart
+
+Deactivating a seat has to stop that person working. There are two ways to do it, and this codebase now has both — which
+is only defensible because a test says what each one is for.
+
+`resolveCurrentUser` re-reads the user row on every call and refuses one that is inactive or locked. That is the guard
+that protects the till: a deactivated person cannot act, immediately, and would still be unable to if nothing ever
+deleted their session.
+
+`setSeatActive` additionally deletes the session. On its own that looks redundant, and the first test written for it
+proved nothing: disabling the line left the test green. The reason is that the lazy guard already covered it. What the
+deletion actually earns is the *reactivation* case — a session left in the map, merely refused, comes back to life the
+moment the seat is switched on again, signing in somebody who never re-authenticated.
+
+So the tests are written as a pair, and each guard was disabled in turn:
+
+| Line removed | Test that fails |
+|---|---|
+| `if (!isActive) this.invalidateSessions(userId)` | only "reactivating does not sign anybody back in" |
+| `!current.isActive` in `resolveCurrentUser` | only "refuses the deactivated person at the host" |
+
+The lesson is about the tests, not the feature. A guard-disabling check that comes out green has not shown the guard is
+unnecessary — it has shown that *this test* does not reach the guard. The honest response is to ask what the line is
+really for and write the test that finds out, not to delete the line because nothing appeared to need it.
+
+## The Users and Seats screen replaced an older screen, and the older one had to go
+
+`UserManagement.tsx` already did part of this job: per-user wholesale, discount, credit and return limits. `UsersAndSeats`
+was written around the brief's seat model and did not carry those four fields across, and for a while both files existed
+with only one of them routed. That is the worst of the three possible states — the code that was actually used was
+missing a feature, and the code that had the feature was dead.
+
+The limits are now on the seat screen, and `UserManagement.tsx` is deleted along with the `.user-management` selector
+that styled it. Deleting rather than leaving it unreferenced is deliberate: an orphaned screen that still compiles is the
+one a future edit revives by accident, and its copy of the validation rules would drift from the live one. The rules
+themselves are not duplicated either — `setSeatPermissions` calls `UserService`'s `validatePermissions`, so the two
+screens could not have accepted different values even while both existed.
+
+## A class name is not checked by the compiler, so the stylesheet is
+
+The seat screen and the setup's team-size step were written with **31 class names that no stylesheet defined**. Nothing
+failed. `tsc` does not read CSS, Vite bundles the components happily, and the screens render — as unstyled HTML: a table
+with no borders, badges that are plain text, a modal with no backdrop, stepper buttons at whatever size the browser
+chose. It is the quietest way to ship a visibly broken screen, and it was found by hand only because the screens were
+being looked at.
+
+`css-coverage.test.ts` now derives every class every renderer component asks for and checks it against every stylesheet.
+Two details make it trustworthy rather than decorative:
+
+- **The component list is walked from the tree, not written out.** A hand-written list of screens would stop covering
+  exactly the screen somebody adds next, which is the one most likely to get this wrong.
+- **Comparison operands are stripped before extraction.** A `className` expression mixes the classes to apply with the
+  values being compared — `tab === 'onsite' ? 'is-active' : ''`. The first version of the scan reported 22 missing
+  classes, 8 of which were `onsite`, `grace` and `RETAIL`: state literals, not class names. A test that cries wolf on
+  eight false positives gets switched off.
+
+Fourteen genuinely unstyled classes remain, in six files this phase did not touch. They are listed in the test with a
+reason each, and the test fails if any of them becomes styled or if a seventeenth appears — the list can only shrink.
+Writing them down is what keeps them from being mistaken for a decision.
+
+## The PC a seat last signed in from is read from the audit trail, not stored
+
+The seat table shows which machine each person last used. There are two candidate sources and both are already written:
+`sessions.pc_name`, and the `device_name` on every `auth.login.succeeded` audit row.
+
+`sessions.pc_name` is the wrong one, and not for a subtle reason: the desktop host does not write it. It is populated by
+the client API, so it is empty for exactly the sign-ins this screen lists. Storing a third copy on the seat was the other
+option, and was rejected because a denormalised "last PC" is a second thing to keep in step with the login that changes
+it — and the day the two disagree, nobody can say which is right.
+
+So it is derived: the most recent successful sign-in row for that username, matched on the recorded login time so a
+person who moved between machines shows the machine they last used. The host writes `LOCAL` when it has no machine name,
+which is filtered out, because showing `LOCAL` in a column headed "PC" is worse than showing nothing.
+
+## The screen that crashed on mount, found only by mounting it
+
+`UsersAndSeats.tsx` read the licence floor as:
+
+```ts
+const atFloor = (entry?.seats ?? 0) <= entry!.activeAccounts
+```
+
+`counts` begins as an empty array and is filled by an effect after the first render, so on that first render `entry` is
+`undefined` and the non-null assertion throws. The screen did not degrade — it rendered nothing at all. Every line beside
+it used `entry?.` correctly, which is why reading the file did not reveal it: the bug is only visible if you know that the
+first render happens before the data arrives.
+
+Nothing caught it. `tsc` accepts `!` by definition — that is what the operator is for. The service tests pass, because the
+service is correct and the crash is in the component. The build succeeds. The screen would have been a blank panel the
+first time an Admin opened it, on a machine, in front of a customer.
+
+`UsersAndSeats.test.tsx` mounts the component into jsdom and found it immediately: all 17 tests failed with the same
+`TypeError`. Restoring the assertion fails all 17 again, so the fix is load-bearing rather than incidental.
+
+Two things follow, and both are now rules here rather than intentions:
+
+- **A screen this phase builds gets a mount test.** Not a snapshot, and not a service test with a component-shaped name:
+  something that renders it and asserts on the markup a person would meet. The service tests prove the rules; only a mount
+  proves the screen survives contact with an empty first render.
+- **A non-null assertion in a component is a claim about timing, not about types.** `!` says "this is populated by now",
+  and in a component that fetches on mount, "by now" is exactly the case that is false. Where the value genuinely may be
+  absent, `?.` with a default is not defensive padding — it is the correct description of the first render.
+
+The same file records two smaller lessons about driving React from a test, both of which cost a failed run before they
+were understood: `onChange` is the DOM `input` event and not `change`; and a *controlled* input ignores a direct
+assignment to `.value`, because React compares against the value it last rendered. Writing through the prototype's native
+setter is what makes the change visible. Neither is a product defect, and both would have looked like one.

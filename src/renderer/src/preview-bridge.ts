@@ -622,6 +622,7 @@ export function createPreviewBridge(): InfoflexBridge {
           id: user.id, seatNo: null, role: user.role === 'CASHIER' ? 'USER' as const : user.role,
           fullName: user.fullName, username: user.username, needsPassword: !passwordSetAt,
           isActive: user.isActive, isLocked: user.isLocked, lastLoginAt: null, lastPc: null,
+          permissions: user.permissions,
         })),
         counts: (['ADMIN', 'SUPERVISOR', 'ACCOUNT', 'USER'] as const).map((role) => ({
           role,
@@ -664,6 +665,19 @@ export function createPreviewBridge(): InfoflexBridge {
       entry.passwordSetAt = Date.now()
     },
     async updateTeamSettings(input) { requireAdmin(); Object.assign(previewTeamSettings, input) },
+    async setSeatActive(userId, isActive) {
+      requireAdmin()
+      const entry = [...accounts.values()].find(({ user }) => user.id === userId)
+      if (!entry) throw new Error('That seat no longer exists.')
+      entry.user.isActive = isActive
+    },
+    async setSeatPermissions(userId, permissions) {
+      requireAdmin()
+      const entry = [...accounts.values()].find(({ user }) => user.id === userId)
+      if (!entry) throw new Error('That seat no longer exists.')
+      if (entry.user.role === 'ADMIN') throw new Error('The Admin has no per-user limits.')
+      entry.user.permissions = permissions
+    },
     async getRoleSummary() {
       requireAdmin()
       // Kept short in the preview; the desktop host returns the full sentences from `TeamService.roleSummary()`.

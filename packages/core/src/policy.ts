@@ -114,6 +114,8 @@ export const POLICY = {
   'ipc:team:set-seat-password': entry(ADMIN, 'Setting a password is the Admin\'s alone; there is no self sign-up.'),
   'ipc:team:update-settings': entry(ADMIN, 'The toggles on this screen change how everyone signs in.'),
   'ipc:team:get-role-summary': entry(ADMIN, 'The role summary is part of the Admin\'s own screen.'),
+  'ipc:team:set-seat-active': entry(ADMIN, 'Deactivating an account is an Admin act, whichever screen asks.'),
+  'ipc:team:set-seat-permissions': entry(ADMIN, 'A discount ceiling or credit limit is the Admin\'s to set.'),
 
   // ── Desktop IPC: approvals ──────────────────────────────────────────────────────────────────────────────
   'ipc:approvals:list-pending': entry(ADMIN_SUPERVISOR, 'A supervisor reviews pending requests.'),

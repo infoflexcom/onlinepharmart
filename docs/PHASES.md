@@ -1378,3 +1378,35 @@ Nothing in this phase has been executed on Windows. No installer has been built,
 login page has been signed in on a real PC, and the vendor's Ed25519 private key is not in this repository, so first-run
 setup was exercised against a stubbed licence provider rather than a minted licence. Those items are on
 `docs/RELEASE-CHECKLIST.md` as owed, and the DONE WHEN table below marks them "needs manual check on real hardware".
+
+### Added after the first pass: three things the screen was missing
+
+The phase was reported complete, and then read back against the brief line by line. Three requirements were not met, and
+all three were the kind that no test would have caught on its own.
+
+**The per-user limits had been dropped.** `UserManagement.tsx` already carried wholesale, maximum discount, credit sales
+and return limit. `UsersAndSeats.tsx` was written around the seat model and did not carry them across — and both files
+were left in the tree with only one routed. The limits are now on the seat screen, the old screen is deleted, and its
+`.user-management` selector with it. The validation is not duplicated: `setSeatPermissions` calls `UserService`'s
+`validatePermissions`, so the two screens could not have disagreed even while both existed.
+
+**Deactivation was missing.** The brief lists it among the seat actions. It is now `setSeatActive`, which keeps the
+password so reactivation does not need a new one, refuses to deactivate the last active Admin, and ends the open session.
+
+**The "PC" column was always empty.** It read `lastPc: null` unconditionally. It is now derived from the audit trail's
+`device_name` on the most recent successful sign-in — see the decision record for why not `sessions.pc_name`, which the
+desktop host never writes.
+
+**And the screen crashed on mount.** `entry!.activeAccounts` threw on the first render, before the snapshot arrives, so
+the screen was blank whenever an Admin opened it. `tsc` accepts a non-null assertion by definition and no service test can
+see a component, so nothing caught it. Found by mounting the component into jsdom — see the decision record. `UsersAndSeats.test.tsx`
+now renders the screen and asserts on the markup a person meets: the *Needs password* badge, the dead "Add one" button at
+the licence cap, the percentage-to-basis-points conversion in the limits modal, the read-only role summary, and the refusal
+message reaching the screen rather than being swallowed.
+
+**And 31 class names had no stylesheet.** Both new screens rendered as unstyled HTML: a table with no borders, badges as
+plain text, a modal with no backdrop. `tsc` does not check CSS and the build does not care, so nothing failed. The styles
+are written (`seats.css`, plus the team-size step in `styles.css`) and `css-coverage.test.ts` now derives every class
+every component asks for and checks it against every stylesheet, so the next screen cannot do this silently. Fourteen
+genuinely unstyled classes remain in six files this phase did not touch; they are listed in that test with a reason each,
+and the list can only shrink.

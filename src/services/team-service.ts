@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { hash as bcryptHash } from 'bcryptjs'
 import type Database from 'better-sqlite3'
 import { ASSIGNABLE_ROLES, type AssignableRole } from '../shared/auth/types'
-import type { PublicUser } from '../shared/auth/types'
+import type { PublicUser, UserPermissions } from '../shared/auth/types'
+import { validatePermissions } from './user-service'
 import { defaultPermissions } from '../shared/auth/policy'
 import type { AuditEvent } from '../shared/shop/types'
 
@@ -45,6 +46,8 @@ export interface SeatView {
   lastLoginAt: string | null
   /** The PC the account last signed in from, when the host has recorded one. */
   lastPc: string | null
+  /** What this person may do within their role. Narrows the role; never widens it. */
+  permissions: UserPermissions
 }
 
 export interface TeamSnapshot {
@@ -72,6 +75,7 @@ interface UserRow {
   seat_no: number | null
   password_set_at: string | null
   last_login_at: string | null
+  locked_at: string | null
 }
 
 /**
@@ -96,7 +100,8 @@ export class TeamService {
   /** Everything the Users and Seats screen needs, in one read. */
   getSnapshot(): TeamSnapshot {
     const seats = (this.database.prepare(`
-      SELECT u.id, u.full_name, u.username, u.role, u.is_active, u.seat_no, u.password_set_at, u.last_login_at
+      SELECT u.id, u.full_name, u.username, u.role, u.is_active, u.seat_no, u.password_set_at, u.last_login_at,
+        u.locked_at
       FROM users u ORDER BY u.seat_no IS NULL, u.seat_no, u.username
     `).all() as UserRow[]).map((row) => this.toSeat(row))
 
@@ -372,7 +377,7 @@ export class TeamService {
   /** An account that holds a password, or a clear refusal. */
   private requireUser(userId: string): UserRow {
     const row = this.database.prepare(
-      'SELECT id, full_name, username, role, is_active, seat_no, password_set_at, last_login_at FROM users WHERE id = ?',
+      'SELECT id, full_name, username, role, is_active, seat_no, password_set_at, last_login_at, locked_at FROM users WHERE id = ?',
     ).get(userId) as UserRow | undefined
     if (!row) throw new Error('That seat no longer exists. Reload the Users and Seats screen.')
     return row
@@ -391,6 +396,12 @@ export class TeamService {
 
   private toSeat(row: UserRow): SeatView {
     const role = row.role === 'CASHIER' ? 'USER' : row.role
+    const permissions = this.database.prepare(`
+      SELECT allow_wholesale, max_discount_pct, allow_credit_sales, return_limit
+      FROM user_permissions WHERE user_id = ?
+    `).get(row.id) as {
+      allow_wholesale: number; max_discount_pct: number; allow_credit_sales: number; return_limit: number
+    } | undefined
     return {
       id: row.id,
       seatNo: row.seat_no,
@@ -399,10 +410,106 @@ export class TeamService {
       username: row.username,
       needsPassword: row.password_set_at === null,
       isActive: row.is_active === 1,
-      isLocked: false,
+      isLocked: row.locked_at !== null,
       lastLoginAt: row.last_login_at,
-      lastPc: null,
+      lastPc: this.lastPcFor(row.username, row.last_login_at),
+      permissions: {
+        allowWholesale: permissions?.allow_wholesale === 1,
+        maxDiscountBasisPoints: permissions?.max_discount_pct ?? 0,
+        allowCreditSales: permissions?.allow_credit_sales === 1,
+        // SQLite may hand back a BigInt for a large integer; the interface is a bigint, so normalise rather than pass
+        // whatever the driver chose.
+        returnLimitMinor: BigInt(permissions?.return_limit ?? 0),
+      },
     }
+  }
+
+  /**
+   * The PC this person last signed in from.
+   *
+   * Derived from the audit trail rather than stored on the seat, because the audit row already records the device name
+   * and the time of every sign-in — a second column would be a second thing to keep in step, and the one time it
+   * disagreed nobody would know which was right. `sessions.pc_name` is the other candidate and is the wrong one: it is
+   * written by the client API and not by the desktop host, so it is empty for the very sign-ins this screen shows.
+   *
+   * Matched on the username and *the* recorded login time, so a person who signed in from three machines over a week
+   * gets the machine of their most recent sign-in rather than whichever row happens to sort first.
+   */
+  private lastPcFor(username: string, lastLoginAt: string | null): string | null {
+    if (!lastLoginAt) return null
+    const row = this.database.prepare(`
+      SELECT device_name FROM audit_log
+      WHERE action = 'auth.login.succeeded' AND actor = ?
+      ORDER BY created_at DESC, rowid DESC LIMIT 1
+    `).get(username) as { device_name: string } | undefined
+    const name = row?.device_name?.trim()
+    // 'LOCAL' is what the host writes when it has no machine name; showing it would be worse than showing nothing.
+    return name && name !== 'LOCAL' ? name : null
+  }
+
+  /**
+   * Deactivate or reactivate a seat.
+   *
+   * Deactivating is what makes lowering a seat count honest, and the reverse of the password rule: a deactivated seat
+   * keeps its password so it can be switched back on without the Admin inventing a new one.
+   */
+  setSeatActive(userId: string, isActive: boolean, actor: string): void {
+    const user = this.requireUser(userId)
+    if (user.role === 'ADMIN' && !isActive) {
+      // There must always be somebody who can administer the shop. `UserService` already refuses to deactivate the last
+      // Admin; refusing here as well means a direct service call cannot strand the installation.
+      const admins = this.database.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'ADMIN' AND is_active = 1")
+        .get() as { n: number }
+      if (admins.n <= 1) throw new Error('There must be at least one active Admin. Create another Admin account first.')
+    }
+    this.database.transaction(() => {
+      this.database.prepare('UPDATE users SET is_active = ?, updated_at = ? WHERE id = ?')
+        .run(isActive ? 1 : 0, this.now().toISOString(), userId)
+      this.audit(actor, user.username, isActive ? 'team.seat.activated' : 'team.seat.deactivated', { userId })
+    }).immediate()
+  }
+
+  /**
+   * Change what one person may do within their role.
+   *
+   * These are the brief's four per-user limits: wholesale, maximum discount, credit sales and return limit. They narrow
+   * what a role already allows and can never widen it — a `USER` given a discount ceiling still cannot take payment,
+   * because the role gate is checked first and this only ever subtracts. Validation reuses `UserService`'s rules rather
+   * than restating them, so the Users and Seats screen and the older account screen cannot accept different values.
+   */
+  setSeatPermissions(userId: string, permissions: UserPermissions, actor: string): void {
+    validatePermissions(permissions)
+    const user = this.requireUser(userId)
+    if (user.role === 'ADMIN') {
+      // An Admin is unbounded by definition; a row here would suggest a limit that nothing enforces.
+      throw new Error('The Admin has no per-user limits. Change the role instead if this person should be limited.')
+    }
+    this.database.transaction(() => {
+      this.database.prepare(`
+        INSERT INTO user_permissions (user_id, allow_wholesale, max_discount_pct, allow_credit_sales, return_limit)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+          allow_wholesale = excluded.allow_wholesale,
+          max_discount_pct = excluded.max_discount_pct,
+          allow_credit_sales = excluded.allow_credit_sales,
+          return_limit = excluded.return_limit
+      `).run(
+        userId,
+        permissions.allowWholesale ? 1 : 0,
+        permissions.maxDiscountBasisPoints,
+        permissions.allowCreditSales ? 1 : 0,
+        Number(permissions.returnLimitMinor),
+      )
+      this.audit(actor, user.username, 'team.seat.permissions_changed', {
+        userId,
+        allowWholesale: permissions.allowWholesale,
+        maxDiscountBasisPoints: permissions.maxDiscountBasisPoints,
+        allowCreditSales: permissions.allowCreditSales,
+        // Recorded as a string: a bigint is not JSON-serialisable, and silently writing `{}` would lose the one field a
+        // dispute about a return limit would turn on.
+        returnLimitMinor: permissions.returnLimitMinor.toString(),
+      })
+    }).immediate()
   }
 
   private audit(actor: string, target: string, action: string, metadata: Record<string, unknown>): void {

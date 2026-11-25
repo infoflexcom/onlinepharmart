@@ -1,5 +1,5 @@
 import type {
-  AppPage, AssignableRole, CreateUserInput, LoginInput, NavigationItem, PublicUser, UpdateUserInput,
+  AppPage, AssignableRole, CreateUserInput, LoginInput, NavigationItem, PublicUser, UpdateUserInput, UserPermissions,
 } from '../shared/auth/types'
 import type {
   BackupResult,
@@ -299,6 +299,23 @@ export class DesktopHostController {
   async setSeatPassword(senderId: number, userId: string, password: string, confirmPassword: string): Promise<void> {
     const admin = this.requireAdmin(senderId)
     await this.requireTeam().setSeatPassword(userId, password, confirmPassword, admin.username)
+  }
+
+  setSeatActive(senderId: number, userId: string, isActive: boolean): void {
+    const admin = this.requireAdmin(senderId)
+    this.requireTeam().setSeatActive(userId, isActive, admin.username)
+    // Two guards, and it matters which does what. `resolveCurrentUser` already refuses an inactive user on every call,
+    // so a deactivated person cannot keep working whether or not this line runs — that is the guard that protects the
+    // till. This line is the other half: it *deletes* the session rather than leaving it in the map being refused. A
+    // session left in the map resurrects the moment the seat is switched back on, signing somebody in who never
+    // re-authenticated. Verified by disabling this line: the deactivation tests still pass and the reactivation test
+    // fails, which is precisely the distinction.
+    if (!isActive) this.invalidateSessions(userId)
+  }
+
+  setSeatPermissions(senderId: number, userId: string, permissions: UserPermissions): void {
+    const admin = this.requireAdmin(senderId)
+    this.requireTeam().setSeatPermissions(userId, permissions, admin.username)
   }
 
   updateTeamSettings(senderId: number, input: TeamSettingsInput): void {

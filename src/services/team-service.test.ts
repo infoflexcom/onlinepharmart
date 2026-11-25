@@ -312,3 +312,165 @@ describe('the Admin approval PIN is stored hashed and never in the clear', () =>
     await expect(team.setApprovalPin('482913', '482913', 'admin')).resolves.toBeUndefined()
   })
 })
+
+describe('a seat can be deactivated and reactivated', () => {
+  it('deactivates without losing the password, so reactivation does not need a new one', async () => {
+    const { database, team } = fresh()
+    team.setSeatCount({ role: 'ACCOUNT', seats: 1 }, 'admin')
+    const seat = database.prepare("SELECT id FROM users WHERE role = 'ACCOUNT'").get() as { id: string }
+    await team.setSeatPassword(seat.id, 'harbour-light-7', 'harbour-light-7', 'admin')
+
+    team.setSeatActive(seat.id, false, 'admin')
+    let row = database.prepare('SELECT is_active, password_set_at FROM users WHERE id = ?').get(seat.id) as { is_active: number; password_set_at: string | null }
+    expect(row.is_active).toBe(0)
+    expect(row.password_set_at, 'the password is kept').not.toBeNull()
+    expect(team.canSignIn(seat.id)).toBe(false)
+
+    team.setSeatActive(seat.id, true, 'admin')
+    row = database.prepare('SELECT is_active FROM users WHERE id = ?').get(seat.id) as { is_active: number; password_set_at: string | null }
+    expect(row.is_active).toBe(1)
+    expect(team.canSignIn(seat.id), 'the same password works again').toBe(true)
+  })
+
+  it('audits both directions', () => {
+    const { database, team } = fresh()
+    team.setSeatCount({ role: 'USER', seats: 1 }, 'admin')
+    const seat = database.prepare("SELECT id FROM users WHERE role = 'USER'").get() as { id: string }
+    team.setSeatActive(seat.id, false, 'admin')
+    team.setSeatActive(seat.id, true, 'admin')
+    const actions = (database.prepare('SELECT action FROM audit_log ORDER BY rowid').all() as Array<{ action: string }>)
+      .map((row) => row.action)
+    expect(actions).toContain('team.seat.deactivated')
+    expect(actions).toContain('team.seat.activated')
+  })
+
+  it('refuses to deactivate the last active Admin, which would strand the shop', () => {
+    const { team } = fresh()
+    // The fixture's 'admin-1' is the only Admin.
+    expect(() => team.setSeatActive('admin-1', false, 'admin'))
+      .toThrow(/at least one active Admin/u)
+  })
+
+  it('allows deactivating an Admin when another active Admin exists', () => {
+    const { database, team } = fresh()
+    database.prepare(`
+      INSERT INTO users (id, username, password_hash, role, is_active, full_name, password_set_at)
+      VALUES ('admin-2', 'ada2', 'hash', 'ADMIN', 1, 'Second Admin', '2026-01-01T00:00:00.000Z')
+    `).run()
+    expect(() => team.setSeatActive('admin-1', false, 'admin')).not.toThrow()
+  })
+})
+
+describe('per-user limits narrow a role and never widen it', () => {
+  it('stores the four limits the brief lists', () => {
+    const { database, team } = fresh()
+    team.setSeatCount({ role: 'ACCOUNT', seats: 1 }, 'admin')
+    const seat = database.prepare("SELECT id FROM users WHERE role = 'ACCOUNT'").get() as { id: string }
+    team.setSeatPermissions(seat.id, {
+      allowWholesale: true, maxDiscountBasisPoints: 1250, allowCreditSales: true, returnLimitMinor: 500_000n,
+    }, 'admin')
+    const row = database.prepare('SELECT * FROM user_permissions WHERE user_id = ?').get(seat.id) as Record<string, number>
+    expect(row.allow_wholesale).toBe(1)
+    expect(row.max_discount_pct).toBe(1250)
+    expect(row.allow_credit_sales).toBe(1)
+    expect(row.return_limit).toBe(500_000)
+  })
+
+  it('shows them back on the seat, so the screen and the sale agree', () => {
+    const { database, team } = fresh()
+    team.setSeatCount({ role: 'USER', seats: 1 }, 'admin')
+    const seat = database.prepare("SELECT id FROM users WHERE role = 'USER'").get() as { id: string }
+    team.setSeatPermissions(seat.id, {
+      allowWholesale: false, maxDiscountBasisPoints: 725, allowCreditSales: true, returnLimitMinor: 123_456n,
+    }, 'admin')
+    const view = team.getSnapshot().seats.find((entry) => entry.id === seat.id)!
+    expect(view.permissions).toMatchObject({
+      allowWholesale: false, maxDiscountBasisPoints: 725, allowCreditSales: true, returnLimitMinor: 123_456n,
+    })
+  })
+
+  it('does not widen the role: a limit on a USER grants nothing the USER lacked', async () => {
+    const { database, team } = fresh()
+    team.setSeatCount({ role: 'USER', seats: 1 }, 'admin')
+    const seat = database.prepare("SELECT id FROM users WHERE role = 'USER'").get() as { id: string }
+    team.setSeatPermissions(seat.id, {
+      allowWholesale: true, maxDiscountBasisPoints: 10_000, allowCreditSales: true, returnLimitMinor: 999_999_999n,
+    }, 'admin')
+    // The permissions row is maximal, and the role is still USER — which cannot take payment, print or process returns.
+    const { can } = await import('../../packages/core/src/capabilities')
+    expect(can('USER', 'take_payment')).toBe(false)
+    expect(can('USER', 'print_documents')).toBe(false)
+    expect(can('USER', 'build_order')).toBe(true)
+  })
+
+  it('audits the change, with the return limit as a string rather than a lossy number', () => {
+    const { database, team } = fresh()
+    team.setSeatCount({ role: 'ACCOUNT', seats: 1 }, 'admin')
+    const seat = database.prepare("SELECT id FROM users WHERE role = 'ACCOUNT'").get() as { id: string }
+    team.setSeatPermissions(seat.id, {
+      allowWholesale: true, maxDiscountBasisPoints: 500, allowCreditSales: false, returnLimitMinor: 900_719_925_474_099n,
+    }, 'admin')
+    const row = database.prepare("SELECT metadata_json FROM audit_log WHERE action = 'team.seat.permissions_changed'")
+      .get() as { metadata_json: string }
+    const metadata = JSON.parse(row.metadata_json)
+    expect(metadata.returnLimitMinor).toBe('900719925474099')
+    expect(metadata.maxDiscountBasisPoints).toBe(500)
+  })
+
+  it('refuses impossible limits rather than storing them', () => {
+    const { database, team } = fresh()
+    team.setSeatCount({ role: 'ACCOUNT', seats: 1 }, 'admin')
+    const seat = database.prepare("SELECT id FROM users WHERE role = 'ACCOUNT'").get() as { id: string }
+    expect(() => team.setSeatPermissions(seat.id, {
+      allowWholesale: true, maxDiscountBasisPoints: 20_000, allowCreditSales: false, returnLimitMinor: 0n,
+    }, 'admin')).toThrow(/between 0% and 100%/u)
+    expect(() => team.setSeatPermissions(seat.id, {
+      allowWholesale: true, maxDiscountBasisPoints: 0, allowCreditSales: false, returnLimitMinor: -1n,
+    }, 'admin')).toThrow(/non-negative/u)
+  })
+
+  it('refuses to put a limit on the Admin, which would suggest a rule nothing enforces', () => {
+    const { team } = fresh()
+    expect(() => team.setSeatPermissions('admin-1', {
+      allowWholesale: false, maxDiscountBasisPoints: 0, allowCreditSales: false, returnLimitMinor: 0n,
+    }, 'admin')).toThrow(/Admin has no per-user limits/u)
+  })
+})
+
+describe('the PC a seat last signed in from comes from the audit trail', () => {
+  it('reports the machine named on the most recent successful sign-in', () => {
+    const { database, team } = fresh()
+    team.setSeatCount({ role: 'ACCOUNT', seats: 1 }, 'admin')
+    const seat = database.prepare("SELECT id, username FROM users WHERE role = 'ACCOUNT'").get() as { id: string; username: string }
+    database.prepare("UPDATE users SET last_login_at = '2026-11-17T10:00:00.000Z' WHERE id = ?").run(seat.id)
+    database.prepare(`
+      INSERT INTO audit_log (id, actor, action, metadata_json, device_name, ip_address, created_at)
+      VALUES ('a1', ?, 'auth.login.succeeded', '{}', 'TILL-FRONT', '10.0.0.5', '2026-11-16T10:00:00.000Z'),
+             ('a2', ?, 'auth.login.succeeded', '{}', 'TILL-BACK', '10.0.0.6', '2026-11-17T10:00:00.000Z')
+    `).run(seat.username, seat.username)
+    const view = team.getSnapshot().seats.find((entry) => entry.id === seat.id)!
+    // The most recent, not the first row.
+    expect(view.lastPc).toBe('TILL-BACK')
+  })
+
+  it('reports nothing for a seat that has never signed in', () => {
+    const { team } = fresh()
+    team.setSeatCount({ role: 'USER', seats: 1 }, 'admin')
+    const view = team.getSnapshot().seats.find((seat) => seat.role === 'USER')!
+    expect(view.lastPc).toBeNull()
+    expect(view.lastLoginAt).toBeNull()
+  })
+
+  it('does not show the placeholder the host writes when it has no machine name', () => {
+    const { database, team } = fresh()
+    team.setSeatCount({ role: 'ACCOUNT', seats: 1 }, 'admin')
+    const seat = database.prepare("SELECT id, username FROM users WHERE role = 'ACCOUNT'").get() as { id: string; username: string }
+    database.prepare("UPDATE users SET last_login_at = '2026-11-17T10:00:00.000Z' WHERE id = ?").run(seat.id)
+    database.prepare(`
+      INSERT INTO audit_log (id, actor, action, metadata_json, device_name, ip_address, created_at)
+      VALUES ('a3', ?, 'auth.login.succeeded', '{}', 'LOCAL', NULL, '2026-11-17T10:00:00.000Z')
+    `).run(seat.username)
+    // 'LOCAL' is the host's stand-in for "no name"; showing it would be worse than showing nothing.
+    expect(team.getSnapshot().seats.find((entry) => entry.id === seat.id)!.lastPc).toBeNull()
+  })
+})

@@ -57,6 +57,8 @@ const bridge: InfoflexBridge = {
   ),
   updateTeamSettings: (input) => ipcRenderer.invoke('team:update-settings', input),
   getRoleSummary: () => ipcRenderer.invoke('team:get-role-summary'),
+  setSeatActive: (userId, isActive) => ipcRenderer.invoke('team:set-seat-active', userId, isActive),
+  setSeatPermissions: (userId, permissions) => ipcRenderer.invoke('team:set-seat-permissions', userId, permissions),
 
   createUser: (input) => ipcRenderer.invoke('users:create', input),
   updateUser: (id, input) => ipcRenderer.invoke('users:update', id, input),

@@ -164,6 +164,12 @@ export function registerDesktopIpc(
   ))
   handle('team:update-settings', (event, input) => host.updateTeamSettings(sender(event), input as never))
   handle('team:get-role-summary', (event) => host.getRoleSummary(sender(event)))
+  handle('team:set-seat-active', (event, userId, isActive) => (
+    host.setSeatActive(sender(event), userId as string, isActive as boolean)
+  ))
+  handle('team:set-seat-permissions', (event, userId, permissions) => (
+    host.setSeatPermissions(sender(event), userId as string, permissions as never)
+  ))
   handle('users:create', (event, input) => host.createUser(sender(event), input as CreateUserInput))
   handle('users:update', (event, id, input) => host.updateUser(sender(event), id as string, input as UpdateUserInput))
   handle('users:deactivate', (event, id) => host.deactivateUser(sender(event), id as string))

@@ -271,7 +271,7 @@ export function SetupScreen({ bridge, settings, context, productName, onComplete
                     <div className="seat-stepper" key={entry.key}>
                       <div className="seat-stepper__heading">
                         <strong>{entry.label}</strong>
-                        {cap !== null && <span className="seat-cap">{cap === 0 ? 'Not on this licence' : `Up to ${cap}`}</span>}
+                        {cap !== null && <span className="seat-cap" data-at-cap={String(cap > 0 && value >= cap)}>{cap === 0 ? 'Not on this licence' : `Up to ${cap}`}</span>}
                       </div>
                       <p className="seat-stepper__note">{entry.summary}</p>
                       <div className="seat-stepper__controls">

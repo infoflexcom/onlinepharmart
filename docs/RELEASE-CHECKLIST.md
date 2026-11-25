@@ -860,3 +860,14 @@ a second PC, or the vendor's signing key, and are written down so they cannot be
   `password_set_at` for all of them), no seat count is lost, and the four new settings arrive with the documented
   defaults — supervisor cost **off**, one login per account **on**, Admin on clients **off**, order expiry **120**
   minutes.
+- [ ] **`needs manual check on real hardware` — the Users and Seats screen renders as designed.** It is styled and the
+  classes are checked against the stylesheets by `css-coverage.test.ts`, but no browser has drawn it. Check the seat
+  cards, the people table at a narrow till resolution (the PC and last-login columns clip rather than push the actions
+  off-screen), the three modals, and the badges at 125% scaling.
+- [ ] **`needs manual check on real hardware` — the limits modal accepts and holds real values.** Set a 12.5% discount
+  ceiling and a return limit on an Account, save, reopen, and confirm both came back. Then ring up a sale above the
+  ceiling and confirm it is refused at the till, which is the only place that proves the limit reaches the sale and not
+  merely the screen.
+- [ ] **`needs manual check on real hardware` — deactivating a seat stops that person mid-shift.** Sign in on a client PC
+  as an Account, deactivate the seat from the server, and confirm the till refuses the next action immediately rather
+  than at the idle timeout. Reactivate and confirm the person must sign in again rather than resuming where they were.

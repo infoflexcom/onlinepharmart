@@ -112,4 +112,51 @@ describe('the IPC layer obeys the permission table', () => {
     expect(() => channels.get('backup:restore')!(event, {})).toThrow(/restricted to the Admin/)
     expect(restore).not.toHaveBeenCalled()
   })
+
+  /**
+   * The two seat channels this phase added, checked the same way as every other Admin-only channel.
+   *
+   * These are the ones worth singling out, because they are the channels that can lock a colleague out of the shop:
+   * deactivating a seat ends that person's session immediately. If the gate did not run before the handler, a
+   * Supervisor who could reach it could close the till from the till.
+   */
+  it('refuses the seat channels to every role but the Admin, without calling the handler', () => {
+    for (const role of ['SUPERVISOR', 'ACCOUNT', 'USER', 'CASHIER'] as const) {
+      const channels = new Map<string, Registered['listener']>()
+      const setSeatActive = vi.fn()
+      const setSeatPermissions = vi.fn()
+      register(channels, {
+        getCurrentUser: () => ({ id: 'u3', fullName: 'Jo', username: 'jo', role, isActive: true, isLocked: false, permissions: {} }) as never,
+        setSeatActive, setSeatPermissions,
+      })
+      expect(() => channels.get('team:set-seat-active')!(event, 'seat-1', false), `${role} deactivating a seat`)
+        .toThrow(/restricted to the Admin/)
+      expect(() => channels.get('team:set-seat-permissions')!(event, 'seat-1', {}), `${role} changing limits`)
+        .toThrow(/restricted to the Admin/)
+      expect(setSeatActive, `${role} reached the handler`).not.toHaveBeenCalled()
+      expect(setSeatPermissions, `${role} reached the handler`).not.toHaveBeenCalled()
+    }
+  })
+
+  it('refuses the seat channels to a signed-out caller, before the handler', () => {
+    const channels = new Map<string, Registered['listener']>()
+    const setSeatActive = vi.fn()
+    register(channels, { getCurrentUser: () => null, setSeatActive })
+    expect(() => channels.get('team:set-seat-active')!(event, 'seat-1', false)).toThrow(/session has expired/)
+    expect(setSeatActive).not.toHaveBeenCalled()
+  })
+
+  it('lets the Admin through both seat channels', () => {
+    const channels = new Map<string, Registered['listener']>()
+    const setSeatActive = vi.fn()
+    const setSeatPermissions = vi.fn()
+    register(channels, {
+      getCurrentUser: () => ({ id: 'u1', fullName: 'Ada', username: 'ada', role: 'ADMIN', isActive: true, isLocked: false, permissions: {} }) as never,
+      setSeatActive, setSeatPermissions,
+    })
+    channels.get('team:set-seat-active')!(event, 'seat-1', false)
+    channels.get('team:set-seat-permissions')!(event, 'seat-1', { allowWholesale: true })
+    expect(setSeatActive).toHaveBeenCalledTimes(1)
+    expect(setSeatPermissions).toHaveBeenCalledTimes(1)
+  })
 })

@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { basename } from 'node:path'
+import { basename, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 /**
@@ -49,6 +49,15 @@ const RUNTIME_FILES = new Set([
   'electron-v45.3.3-win32-x64.zip',
 ])
 
+/**
+ * Files that were deleted on purpose and are named in prose *because* they were deleted.
+ *
+ * A decision record that cannot name the file it removed cannot explain the removal. `UserManagement.tsx` was replaced
+ * by the seat screen and deleted rather than left unreferenced; naming it is what stops somebody re-adding it. The test
+ * below requires each entry to be genuinely absent, so this set cannot be used to excuse a file that ought to exist.
+ */
+const REMOVED_FILES = new Set(['UserManagement.tsx'])
+
 /** Files produced by a build rather than committed; `build-studio.ts` copies or writes each of them. */
 const GENERATED = new Set([
   'preload.js', 'ui.js', 'main.js',
@@ -75,6 +84,7 @@ describe('the documentation describes this repository', () => {
     const missing = documentedFiles().filter(({ path }) => {
       if (path.startsWith('http') || path.startsWith('~')) return false
       if (RUNTIME_FILES.has(basename(path)) || GENERATED.has(basename(path))) return false
+      if (REMOVED_FILES.has(basename(path))) return false
       // Named only to record that it does not exist; see the test below.
       if (path === 'vendor-config.json') return false
       if (existsSync(path)) return false
@@ -176,6 +186,14 @@ describe('the documentation describes this repository', () => {
     // Every step is a checkbox the person can tick, and there are enough of them to be a real script.
     const steps = gate.match(/^- \[ \]/gmu) ?? []
     expect(steps.length).toBeGreaterThan(40)
+  })
+
+  it('keeps the removed-file list honest: every entry is genuinely gone from the tree', () => {
+    // Without this, REMOVED_FILES would be a way to make the check above pass for a file that simply went missing.
+    for (const name of REMOVED_FILES) {
+      expect(knownBasenames.has(name), `${name} is listed as removed but is still tracked`).toBe(false)
+      expect(existsSync(join('src', 'renderer', 'src', 'ui', name)), `${name} is listed as removed but is on disk`).toBe(false)
+    }
   })
 
   it('never documents a file that is stated not to exist', () => {
