@@ -10,6 +10,7 @@ import { ProductInventoryService } from './product-inventory-service'
 import { PointOfSaleService } from './point-of-sale-service'
 import { ReturnService } from './return-service'
 import { PrintGateService, PrintRefusedError } from './print-gate-service'
+import { can } from '../../packages/core/src/capabilities'
 
 /**
  * The print gate: who may print, what is recorded when they do, and what a reprint looks like.
@@ -194,6 +195,38 @@ describe('the print endpoint is closed to everybody else', () => {
     expect(log[0]!.printedByName).toBe('Amaka Account')
     expect(() => harness.gate.print({ kind: 'SALE', documentId: sale.saleId, layout: 'THERMAL_80' }, SUPERVISOR))
       .toThrow(PrintRefusedError)
+  })
+
+  it('is called as each of the four roles, and only two of them get a document', () => {
+    // The brief asks for this by name: a test that calls the print path as each role. Which roles are allowed is
+    // derived from `can()` rather than written out here, so the expectation cannot drift from the capability table it
+    // enforces — if a role is ever given `print_documents`, this test moves with it instead of quietly contradicting it.
+    for (const actor of [ADMIN, ACCOUNT, PICKER, SUPERVISOR]) {
+      const harness = createHarness()
+      const sale = completedSale(harness)
+      // `can()` takes only the four real roles; the legacy `CASHIER` row resolves to USER everywhere else, and
+      // resolving it here rather than widening `can()` keeps one alias rule instead of two.
+      const mayPrint = can(actor.role === 'CASHIER' ? 'USER' : actor.role, 'print_documents')
+      if (mayPrint) {
+        const ticket = harness.gate.print({ kind: 'SALE', documentId: sale.saleId, layout: 'THERMAL_80' }, actor)
+        expect(ticket.copyNumber, `${actor.role} should get a first copy`).toBe(1)
+        expect(ticket.duplicate).toBe(false)
+      } else {
+        expect(
+          () => harness.gate.print({ kind: 'SALE', documentId: sale.saleId, layout: 'THERMAL_80' }, actor),
+          `${actor.role} must be refused at the print endpoint`,
+        ).toThrowError(PrintRefusedError)
+        // A refused print leaves no row behind. A log entry for a document that was never produced would be a lie in
+        // the one record whose whole purpose is saying what was printed, by whom, and from where.
+        expect(harness.gate.listPrintLog(ADMIN), `${actor.role} must leave no log row`).toHaveLength(0)
+      }
+      harness.database.close()
+    }
+    // Asserted outright as well, so a change to the capability table cannot make the loop above pass by shrinking
+    // what it checks. These are the two roles the brief names.
+    const allowed = (actor: PublicUser): boolean => can(actor.role === 'CASHIER' ? 'USER' : actor.role, 'print_documents')
+    expect([ADMIN, ACCOUNT, PICKER, SUPERVISOR].filter(allowed).map((actor) => actor.role))
+      .toEqual(['ADMIN', 'ACCOUNT'])
   })
 
   it('refuses the print log to a picker, who audits nothing', () => {

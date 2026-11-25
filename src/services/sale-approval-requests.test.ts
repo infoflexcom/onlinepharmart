@@ -318,6 +318,103 @@ describe('a sale that crosses a limit an Admin can lift', () => {
       harness.close()
     }
   })
+
+  it('raises a request when a credit sale would exceed the customer’s limit, and completes it once accepted', async () => {
+    const harness = createHost()
+    try {
+      await harness.signInAdmin()
+      const product = harness.makeProduct()
+      const customer = harness.host.createPosCustomer(1, {
+        name: 'Ada Customer', phone: '', email: '', address: '', creditLimit: '50.00', enrolLoyalty: false,
+      })
+
+      // A 100.00 basket put entirely on account against a 50.00 limit.
+      const key = 'apr-credit-loop-0001'
+      const attempt = () => harness.host.completePosSale(1, {
+        idempotencyKey: key, saleType: 'RETAIL',
+        items: [{ productId: product.id, quantity: '1' }],
+        payments: [{ method: 'CREDIT', amount: '' }],
+        customerId: customer.id,
+      })
+
+      expect(() => attempt()).toThrowError(/credit limit/u)
+      expect(harness.saleCount()).toBe(0)
+      // A refused credit sale must not leave the customer owing money for goods they never got.
+      expect(harness.database.prepare('SELECT balance FROM customers WHERE id = ?').get(customer.id))
+        .toEqual({ balance: 0 })
+
+      const pending = harness.host.listPendingApprovals(1)
+      expect(pending).toHaveLength(1)
+      expect(pending[0]!.kind).toBe('CREDIT')
+      // The Admin is asked about the excess — 100.00 requested against a 50.00 limit — not about the whole sale.
+      expect(pending[0]!.amountMinor).toBe('5000')
+
+      await adminApprovesEverything(harness)
+      const completed = attempt()
+      expect(completed.receipt.receiptNumber).toMatch(/^R-/u)
+      expect(harness.saleCount()).toBe(1)
+      // The debt is recorded once. A retry that quietly sold twice would show 200.00 here.
+      expect(harness.database.prepare('SELECT balance FROM customers WHERE id = ?').get(customer.id))
+        .toEqual({ balance: 10_000 })
+    } finally {
+      harness.close()
+    }
+  })
+
+  it('asks the Admin for the whole amount when a customer has no credit limit at all', async () => {
+    const harness = createHost()
+    try {
+      await harness.signInAdmin()
+      const product = harness.makeProduct()
+      const customer = harness.host.createPosCustomer(1, {
+        name: 'No Limit Customer', phone: '', email: '', address: '', creditLimit: '0', enrolLoyalty: false,
+      })
+
+      expect(() => harness.host.completePosSale(1, {
+        idempotencyKey: 'apr-credit-nolimit-0001', saleType: 'RETAIL',
+        items: [{ productId: product.id, quantity: '1' }],
+        payments: [{ method: 'CREDIT', amount: '' }],
+        customerId: customer.id,
+      })).toThrowError(/credit limit/u)
+
+      const pending = harness.host.listPendingApprovals(1)
+      expect(pending).toHaveLength(1)
+      // With no ceiling there is nothing to measure an excess against, so the whole 100.00 on account is what the
+      // Admin is being asked to authorize. Reporting an excess of zero here would make the request look trivial.
+      expect(pending[0]!.amountMinor).toBe('10000')
+    } finally {
+      harness.close()
+    }
+  })
+
+  it('refuses a credit sale larger than the one the Admin approved', async () => {
+    const harness = createHost()
+    try {
+      await harness.signInAdmin()
+      const product = harness.makeProduct()
+      const customer = harness.host.createPosCustomer(1, {
+        name: 'Ada Customer', phone: '', email: '', address: '', creditLimit: '50.00', enrolLoyalty: false,
+      })
+      const key = 'apr-credit-amount-0001'
+      const sell = (quantity: string) => harness.host.completePosSale(1, {
+        idempotencyKey: key, saleType: 'RETAIL',
+        items: [{ productId: product.id, quantity }],
+        payments: [{ method: 'CREDIT', amount: '' }],
+        customerId: customer.id,
+      })
+
+      expect(() => sell('1')).toThrowError(/credit limit/u)
+      await adminApprovesEverything(harness)
+
+      // The Admin authorized putting 100.00 on account against a 50.00 limit. Two units is 200.00, a different
+      // question, and a yes to the first is not a yes to the second.
+      expect(() => sell('2')).toThrowError(/credit limit/u)
+      expect(harness.saleCount()).toBe(0)
+      expect(harness.host.listPendingApprovals(1)).toHaveLength(1)
+    } finally {
+      harness.close()
+    }
+  })
 })
 
 describe('what counts as an approval for a given attempt', () => {

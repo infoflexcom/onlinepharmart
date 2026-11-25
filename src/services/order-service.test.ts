@@ -470,6 +470,42 @@ describe('two Accounts finalizing one order produce exactly one sale', () => {
       idempotencyKey: '   ', payments: [{ method: 'CASH', amount: cashFor(order.totalMinor, 2) }],
     }, ACCOUNT, 'PHARMACY')).toThrow(/needs an idempotency key/u)
   })
+
+  it('refuses a picker and a SUPERVISOR at the payment endpoint, and lets an Account through', () => {
+    // The brief asks for both ends of this to be tested: no print endpoint and no payment endpoint for these two
+    // roles. The print half is in `print-gate-service.test.ts`; this is the payment half, called as each role rather
+    // than asserted from a table, because a capability row can be right while the service forgets to consult it.
+    for (const actor of [PICKER, SUPERVISOR]) {
+      const harness = createHarness()
+      const product = receiveStock(harness, createProduct(harness, 'PHARMACY'), 'PHARMACY', '10')
+      const order = oneLineOrder(harness, product, '1', PICKER)
+      expect(
+        () => harness.orders.finalizeOrder(order.id, {
+          idempotencyKey: `refused-${actor.role.toLowerCase()}-0001`,
+          payments: [{ method: 'CASH', amount: cashFor(order.totalMinor, 2) }],
+        }, actor, 'PHARMACY'),
+        `${actor.role} must be refused at the payment endpoint`,
+      ).toThrow(/role cannot/u)
+      // Refused means nothing happened: the order is still awaiting payment and its stock is still held, not sold.
+      // Read from the row rather than through the service, because the service would rightly refuse to show this order
+      // to a SUPERVISOR at all, and "you may not read it" would then be standing in for "nothing changed".
+      expect(harness.database.prepare('SELECT status FROM orders WHERE id = ?').get(order.id))
+        .toEqual({ status: 'PENDING' })
+      expect(stockOf(harness, product.id).reserved).toBe(1_000n)
+      harness.database.close()
+    }
+
+    // And the role that is meant to get through does, on the same order shape.
+    const harness = createHarness()
+    const product = receiveStock(harness, createProduct(harness, 'PHARMACY'), 'PHARMACY', '10')
+    const order = oneLineOrder(harness, product, '1', PICKER)
+    const result = harness.orders.finalizeOrder(order.id, {
+      idempotencyKey: 'allowed-account-0001',
+      payments: [{ method: 'CASH', amount: cashFor(order.totalMinor, 2) }],
+    }, ACCOUNT, 'PHARMACY')
+    expect(result.order.status).toBe('PAID')
+    harness.database.close()
+  })
 })
 
 describe('prices are re-checked at finalize', () => {
