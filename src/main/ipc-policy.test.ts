@@ -17,13 +17,16 @@ interface Registered {
   listener: (event: unknown, ...args: unknown[]) => unknown
 }
 
-function register(channels: Map<string, Registered['listener']>, overrides: Partial<DesktopHostController> = {}) {
+/** The shape the stub host is allowed to take: whatever members a given test needs, loosely typed. */
+type HostStub = Record<string, unknown>
+
+function register(channels: Map<string, Registered['listener']>, overrides: HostStub = {}) {
   const ipcMain = {
     handle: (channel: string, listener: Registered['listener']) => {
       channels.set(channel, listener)
     },
   }
-  // The controller is a large object; only the members a channel reaches are stubbed, and only per test.
+  // The controller is a large object; only the members a channel reaches are stubbed, per test and by name.
   const host = { getCurrentUser: () => null, ...overrides } as unknown as DesktopHostController
   registerDesktopIpc(ipcMain as never, host)
 }
@@ -69,7 +72,10 @@ describe('the IPC layer obeys the permission table', () => {
     const listSales = vi.fn(() => [])
     register(channels, { getCurrentUser: () => null, getShopSettings: getSettings, listSales })
     for (const channel of ['shop:get-settings', 'pos:list-sales', 'reports:get-accounting', 'backup:restore']) {
-      expect(() => channels.get(channel)!(event), channel).toThrow(/restricted to the Admin/)
+      // A signed-out caller is told its session ended, not that it lacks a role: that is the true reason, and it is
+      // the only one the caller can act on. The flat role sentence is reserved for a signed-in caller whose role is
+      // wrong, so that it cannot learn which role each channel would need.
+      expect(() => channels.get(channel)!(event), channel).toThrow(/session has expired/)
     }
     expect(getSettings).not.toHaveBeenCalled()
     expect(listSales).not.toHaveBeenCalled()

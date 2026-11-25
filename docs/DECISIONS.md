@@ -1045,3 +1045,72 @@ comparisons were each disabled in turn and the tests that caught them are named 
 was run against six addresses including a lookalike host. Where a check genuinely cannot be exercised on this machine —
 the copy into `release/installer-sources/`, because the signature gate stops the assembly first and is right to — the
 test injects the predicate and the documentation says that is what it does, rather than implying the copy ran.
+
+## The repository is not moved into `apps/` and `packages/` in one sweep
+
+**Decided:** the brief's target layout is adopted incrementally, in the direction it names. `/packages/core` is
+created and populated in this phase, because the permission table and the role vocabulary genuinely belong to both a
+client and a server. The physical `apps/server` and `apps/client` split is deferred, and the boundary it is meant to
+enforce is built now instead: only the server process may open the database, and a test proves it.
+
+**Why.** The brief's own MIGRATION RULE says to reuse what exists rather than rebuild it, and it outranks its
+directory list. A `git mv` of the tree is measured at 76 files outside `src/` that name an `src/…` path — three build
+configs, the NSIS script and its checker, the release assembler, the Build Studio, the cloud package, eight scripts and
+the documentation — plus roughly 800 relative imports inside `src/` whose depth would change, with the `@shared`,
+`@main` and `@renderer` aliases declared in three separate configs. Doing that in the same phase that introduces a new
+schema, a new policy table and a new ownership rule would make a failing test ambiguous: nobody could tell whether the
+data model or the moved import was at fault. And it would be done on an agent that cannot compile the installer, so a
+broken path would be found by the customer.
+
+**What keeps it honest:** `/packages/core` may not grow an I/O dependency. If something needs the filesystem, a socket
+or a database handle it does not belong in the shared package, and `packages/core/test/no-io.test.ts` walks the real
+import graph — including out of the package into `src/currency/` — to enforce that.
+
+## The permission table refuses what it does not name
+
+**Decided:** one declarative table in `packages/core/src/policy.ts` maps every action, HTTP route and IPC channel to
+the roles allowed to use it. A route or channel with **no entry is refused**, not allowed. The surface it is checked
+against is **derived from the code that registers the handlers**, never a hand-kept list.
+
+**Why absence is denial rather than a deny-list.** A deny-list fails open: forgetting to add a new route to it ships
+the route to everybody. An allow-list fails closed, and the failure is loud — the caller is refused and the coverage
+test names the route. The two ways this can go wrong are both covered: a route nobody policed fails the build
+(`policy-coverage.test.ts`), and a route nobody policed in a build that shipped anyway is refused at runtime by the
+registration wrapper.
+
+**Why the table is consulted at registration rather than by a global hook.** The first version used a global
+`onRequest` hook, and it was wrong twice over. It answered before the route's own pre-handler chain, so it returned
+403 to a caller the rate limiter was about to answer with a more accurate 429 after five failures; and it turned
+Fastify's own 404 for an unknown path into a 403, which tells an attacker that a path exists. A floor should refuse
+what nothing else refuses, not pre-empt a check with more to say. So the check wraps the route and runs **after** the
+route's own pre-handlers have had their say.
+
+## `CASHIER` is split into `ACCOUNT` and `USER`, and the old value still reads
+
+**Decided:** the role vocabulary is `ADMIN`, `SUPERVISOR`, `ACCOUNT`, `USER`. The stored value `CASHIER` is retained in
+the `users` CHECK constraint and resolved to `USER` by `resolveRole()` at every read. **No migration rewrites a
+`CASHIER` row.**
+
+**Why not rewrite the rows.** A rewrite is irreversible, and it would silently reclassify a real person's account
+during an upgrade nobody watched. Reading the alias costs one function call and can be undone by changing one map.
+
+**Why split rather than rename.** In a client/server shop, "a login that may exist" and "a person who may take an
+order and a payment" are different things, so the old role is genuinely two. Crucially, **both inherit everything the
+old cashier could do** — the split takes nothing away from anybody — and the tests assert that: `ACCOUNT` and `USER`
+can each quote a sale, complete a sale, hold a cart, raise a return and open a shift, and neither can administer.
+
+## The Supervisor becomes audit-only, in the services and not just in the table
+
+**Decided:** `SUPERVISOR` may resolve nothing in the approval queue and may approve no return. It gains two positive
+acts instead — an append-only `audit_signoffs` attestation and an `audit_flags` concern — and may read the audit
+surface (pending and recent approvals, the accounting report, the user list).
+
+**Why the service, not only the policy.** The manifest needs one authority per operation. Hiding a button in the
+interface is the thing the brief explicitly forbids; refusing the route is better; refusing the *operation* is right.
+A second caller added later — a client, a script, a future mobile route — inherits the table but not necessarily the
+route, so the rule has to live where the money moves.
+
+**What this deliberately breaks:** three tests asserted that a Supervisor could approve a return or decide a
+discount. They now assert the opposite, and the refusal is visible in the diff rather than the capability quietly
+disappearing. One test that used the Supervisor as its "somebody else" approver now uses a second Admin, which is also
+a truer picture of a shop with more than one administrator.

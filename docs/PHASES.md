@@ -19,6 +19,7 @@ separately in [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md) and is never marked d
 | 12 | Polish and test everything: one navy/gold/off-white palette across desktop and phone, optional demonstration datasets the Admin can load or remove, and the full unit / API-security / end-to-end test sweep with an honest pass/fail matrix | **DONE (software); emulator and hardware gates owed — see the matrix below** |
 | 13 | The graphical customer installer: `Infoflex Setup.exe` and `Infoflex Setup Offline.exe`, with a vendor password gate, a Region and Currency page, an accurate system check, verified downloads from an allowlist, offline install, and Repair/Update/Uninstall | **DONE (software); cannot be compiled or clicked in this environment — see the checklist below** |
 | 14 | Build Studio, the vendor's graphical tool: prerequisites and one-click build with no terminal, artefacts with checksums, the licence key generator, the `.iflpolicy` policy page, and the per-build currency/limit settings that reach the installer and the app | **DONE (software); Windows gate 6 owed** |
+| 16 | Client/server foundations: the four-role vocabulary and one declarative permission table enforced at both boundaries, migration 16's order/payment/device/audit tables, server-only database ownership proven by a static check | **DONE (software); 1 hardware gate owed** |
 
 ### Report surface delivered in Phases 6–7 (and re-verified at Phase 7 close-out)
 
@@ -1252,3 +1253,68 @@ be read` and reports two problems; with it restored the check passes. Reverting 
 **This is the fourth defect in this phase of the same family** — a check that runs, succeeds, and is not looking at the
 thing that matters. The pattern is now explicit in `docs/DECISIONS.md`: every guard added here has a test that disables
 the guard or removes the input and asserts the failure. A checker that has never been seen to fail is not evidence.
+
+## Phase 16 — Client/server foundations
+
+The product is moving from a single-PC point of sale to a shop **server** that owns the database and **clients** that
+hold nothing and speak to it over authenticated transport. This phase builds the data and permission foundations for
+that move and nothing else: no client executable, no new screen, no change to how a sale is rung up today.
+
+The architecture change itself — kept, changed and removed, and why the repository was not swept into `apps/` and
+`packages/` — is recorded first and separately in [ARCH_CHANGE_CLIENT_SERVER.md](ARCH_CHANGE_CLIENT_SERVER.md),
+because the phase rules require that document to exist before code changes, not after them.
+
+### What was built
+
+**`packages/core`**, the code a client and a server both need: the four-role vocabulary, the permission policy, the
+surface scanner, and re-exported money helpers. It imports no `node:` module, no `electron`, no `fastify` and no
+`better-sqlite3`, and `packages/core/test/no-io.test.ts` walks its real import graph to prove it.
+
+**One permission table.** `POLICY` in `packages/core/src/policy.ts` maps 107 IPC channels, 32 HTTP routes and the
+actions that have no transport of their own to the roles allowed to use them. Absence is denial: `authorize()` returns
+`no-policy` and the caller is refused. It is consulted in two places and nowhere else — the desktop `handle()` wrapper
+in `src/main/ipc.ts`, and the Fastify route registrations in `src/api/server.ts` and `src/api/mobile-admin-routes.ts`.
+
+**Migration 16**, additive, preserving every earlier table: `role_seats`, `client_devices`, `sessions`, `orders`,
+`order_items`, `order_events`, `reservations`, `document_sequences`, `print_log`, `audit_signoffs` and `audit_flags`;
+`users` rebuilt to widen the role CHECK and add `seat_no`; `sales` gaining `order_id`, `finalized_by` and
+`server_receipt_no`. Schema reference: [SCHEMA.md](SCHEMA.md).
+
+**The audit-only Supervisor.** `SUPERVISOR` lost its authority to approve returns and to resolve approvals, and that
+loss is in the services (`return-service.ts`, `approval-queue-service.ts`), not only in the table. A role that holds no
+operational authority cannot be the one granting it, so the rule lives where the operation happens.
+
+### The DONE WHEN list, as proved by the suite
+
+| Item | Result | How it is proved |
+| --- | --- | --- |
+| A migration plan exists | **pass — verified by tests** | `docs/ARCH_CHANGE_CLIENT_SERVER.md` plus the migration row in `docs/SCHEMA.md`, which `docs/docs-accuracy.test.ts` checks names every migration file that exists and no file that does not. |
+| The Server launches and creates the DB | **pass — verified by tests** | `src/db/database.test.ts` opens a real database through `openShopDatabase`, applies all 16 migrations and re-runs them idempotently. |
+| A test inserts and reads a record from each new table | **pass — verified by tests** | The same file inserts a row into every one of the 11 new tables and reads it back, and its table-coverage assertion is derived from the table list, so a new table with no row check fails it. |
+| Every registered route and IPC channel has a policy entry | **pass — verified by tests** | `packages/core/test/policy-coverage.test.ts` derives the surface from `src/main/ipc.ts` and `src/api/*.ts` and compares it against the table in both directions. |
+| A test fails when a policy entry is removed | **pass — verified by tests** | Two tests delete a real row from a copy of the table and assert exactly that name comes back unpoliced. Observed by hand as well: removing `ipc:pos:complete-sale` from `policy.ts` failed four tests. |
+| Existing currency tests still pass | **pass — verified by tests** | `src/currency/currency.test.ts` and the end-to-end currency suites run unchanged; `packages/core/src/money.ts` re-exports the one implementation rather than copying it. |
+| Existing licence tests still pass | **pass — verified by tests** | `src/license/` suites run unchanged. |
+| Clients cannot open the DB by any code path | **pass — verified by tests** | `packages/core/test/ownership.test.ts` scans every TypeScript file in the tree, tracked or not, and fails on a client-side import of the database module or `better-sqlite3`. Planted files in `src/renderer`, `src/preload`, `mobile/src` and `packages/core` are each caught, and a file outside every declared directory is reported rather than allowed. |
+| `docs/SCHEMA.md` written | **pass — verified by tests** | Updated and machine-checked by `docs/docs-accuracy.test.ts`. |
+| A client on a second PC reaching the server over the LAN | **needs manual check on real hardware** | Owed in [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md). No client executable exists yet; this phase builds the foundations the client will need. |
+
+### Two defects found while building this, both of the shape this project keeps meeting
+
+**The pragma that did nothing.** Rebuilding `users` needs foreign-key enforcement paused. `PRAGMA foreign_keys = OFF`
+inside the migration is a documented no-op inside a transaction, and the runner wraps every migration in one — so the
+first version of migration 16 looked correct, ran, and failed later with `FOREIGN KEY constraint failed` far from the
+cause. The fix is structural: a migration declares `setsForeignKeysOff`, the runner pauses enforcement *outside* the
+transaction, and after the rebuild it runs `PRAGMA foreign_key_check` before restoring enforcement, so a rebuild that
+orphaned a row is caught where it happened.
+
+**The check that could not see the file that mattered.** The database-ownership scan read `git ls-files` only. A
+brand-new client file that nobody had staged was invisible to it — and planting exactly such a file produced a green
+run. Fixed by unioning `git ls-files --others --exclude-standard`, which is the difference between "what has been
+committed" and "what is on disk and will be compiled".
+
+### What this phase does not do
+
+The physical `apps/server` and `apps/client` split, a client executable, order creation and finalisation over the API,
+reservation expiry sweeps, and the Admin approval PIN are designed in the architecture document and deliberately not
+built here. This phase is the foundation those rest on.

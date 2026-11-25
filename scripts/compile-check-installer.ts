@@ -107,7 +107,13 @@ function ensureMakensis(): void {
 
   // The default target stops at makensis. `install` would go on to compile the Windows plugins (AdvSplash, etc.), which
   // need <windows.h> and are irrelevant here -- only the compiler is being used.
-  run('scons', ['-Q', 'SKIPUTILS=all', 'SKIPSTUBS=all', `PREFIX=${DIST}`, `BUILD_PREFIX=${DIST}`], {
+  //
+  // `SKIPPLUGINS=all` is as load-bearing as the other two, and it was missing. Without it SCons's default target walks
+  // into `Contrib/AdvSplash` and friends, which are Windows DLLs: the build on this agent dies at
+  // `fatal error: windows.h: No such file or directory`, several minutes in, with a message about a header rather than
+  // about the thing the operator actually asked for. Nothing here loads a plugin; `prepareIncludes` writes one-byte
+  // stand-ins for exactly the four DLLs whose export tables makensis reads. So they are skipped, not built.
+  run('scons', ['-Q', 'SKIPUTILS=all', 'SKIPSTUBS=all', 'SKIPPLUGINS=all', `PREFIX=${DIST}`, `BUILD_PREFIX=${DIST}`], {
     cwd: nsisSource,
     env: { ...process.env, CPATH: join(zlibPrefix, 'include'), LIBRARY_PATH: join(zlibPrefix, 'lib') },
   })

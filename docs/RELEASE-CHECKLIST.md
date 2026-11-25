@@ -782,3 +782,29 @@ This is the whole promise of the tool and it cannot be proven anywhere but here:
 
 ### Packaging
 - [ ] `npm run dist:studio` on Windows produces `Infoflex Build Studio Setup.exe`; install it on a clean machine and confirm it opens without the project's `node_modules`.
+
+## Phase 16 — the client/server foundation (owed, not blocking)
+
+These are the items this phase could not prove on a build agent, written down so they cannot be mistaken for done.
+Everything software-checkable in Phase 16 is covered by `npm run check:phase16`; the entries below are the ones that
+need a second machine or real hardware.
+
+- [ ] **`needs manual check on real hardware` — a client on a second PC reaching the server over the LAN.** No client
+  executable exists yet, so this cannot be attempted. When one does, it must reach the data **only** through
+  authenticated HTTPS/WebSocket to the server, with no shared folder, no mapped drive and no SMB path on either
+  machine, and it must fail cleanly and say so plainly when the server is not running.
+- [ ] **`needs manual check on real hardware` — the server's database file is unreadable from a client machine.** On
+  the client PC, try to open `%APPDATA%\Infoflex\infoflex.sqlite` (and its `-wal`/`-shm` companions) directly: the path
+  must not exist there, because the file lives only on the server machine. Then confirm the client still shows data,
+  which proves it is coming over the API and not from a local copy.
+- [ ] **`needs manual check on real hardware` — an upgrade of a live shop database through migration 16.** On a copy of
+  a real v15 database, run the upgrade and confirm: every existing account survives with its own role, a `CASHIER`
+  account still signs in and can reach the till (it is treated as `USER`), the `ROLE_SEATS` row shows the licence's
+  seats, and no completed sale's receipt number changed.
+- [ ] **`needs manual check on real hardware` — two clients and one server do not corrupt stock.** Ring up a sale on
+  two clients at the same moment against a product with one unit left: exactly one must succeed, the other must be
+  refused with a readable message, and the stock must read zero rather than minus one. This is the optimistic-locking
+  guarantee, and it is the one thing a single-process test cannot demonstrate.
+- [ ] **`needs manual check on real hardware` — a revoked client device is refused at its next request.** Approve a
+  client, confirm it works, revoke it on the server, and confirm the client's very next request is refused rather than
+  continuing on a cached session.

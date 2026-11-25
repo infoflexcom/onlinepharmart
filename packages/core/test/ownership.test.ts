@@ -11,16 +11,27 @@ import { findClientDatabaseAccess, findUnclassifiedDatabaseAccess } from '../src
  * build a mutated input for the "does it fail" tests below.
  */
 
+/**
+ * Every TypeScript source in the working tree, **tracked or not**.
+ *
+ * The first version of this used `git ls-files` alone, and was therefore blind to exactly the file that matters
+ * most: a brand-new client file that nobody has staged yet. Planting such a file and finding the check still green
+ * is how that was discovered. `git ls-files --others --exclude-standard` is unioned in so the scan covers what is
+ * actually on disk, which is what will be committed and what a build would compile.
+ */
 function treeSources(): Map<string, string> {
-  const tracked = execFileSync('git', ['ls-files'], { encoding: 'utf8' }).split('\n').filter(Boolean)
+  const run = (args: string[]): string[] =>
+    execFileSync('git', args, { encoding: 'utf8' }).split('\n').filter(Boolean)
+  const listed = [...run(['ls-files']), ...run(['ls-files', '--others', '--exclude-standard'])]
   const files = new Map<string, string>()
-  for (const file of tracked) {
+  for (const file of listed) {
     if (!/\.(ts|tsx)$/u.test(file)) continue
     if (/\.test\.tsx?$/u.test(file)) continue
+    if (file.startsWith('node_modules/')) continue
     try {
       files.set(file, readFileSync(file, 'utf8'))
     } catch {
-      // A tracked file that is not on disk cannot be scanned; `docs-accuracy` catches missing files separately.
+      // A listed file that is not on disk cannot be scanned; a deleted-but-staged file is not a security question.
     }
   }
   return files
