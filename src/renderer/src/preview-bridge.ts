@@ -89,7 +89,24 @@ const previewLicense: LicenseSummary = {
   maximumOnsitePeriodYears: null, licenseServerUrl: null, message: 'Browser preview only; desktop licensing is enforced by the Electron host.',
 }
 
-type PreviewAccount = { user: PublicUser; passwordHash: string; failedAttempts: number }
+type PreviewAccount = {
+  user: PublicUser
+  passwordHash: string
+  failedAttempts: number
+  /** When the seat was given a password. Absent means "needs password", exactly as `users.password_set_at`. */
+  passwordSetAt?: number
+}
+
+/** The preview's stand-in for the settings migration 17 adds. Defaults match the real ones. */
+const previewTeamSettings = {
+  supervisorSeesCost: false,
+  singleLoginPerAccount: true,
+  allowAdminOnClients: false,
+  orderExpiryMinutes: 120,
+}
+
+/** Seat counts the preview has been asked for, so raising a count twice does not look like a different shop. */
+const previewSeatTargets: Partial<Record<'ADMIN' | 'SUPERVISOR' | 'ACCOUNT' | 'USER', number>> = {}
 
 /** Memory-only demonstration adapter for the browser preview. Desktop IPC uses SQLite host services. */
 function normalizePreviewUsername(value: string): string {
@@ -159,6 +176,11 @@ export function createPreviewBridge(): InfoflexBridge {
       vendorCurrencyLocked: false,
       initialCurrency,
       productName: previewProductName(edition),
+      // The browser preview has no licence, so it names no caps and offers the same starting team size as a real
+      // install. Keeping these here rather than in the screen means the preview exercises the same shape the desktop
+      // host returns, which is the only way the preview is worth having.
+      seatCaps: { account: null, user: null, supervisor: null },
+      seatDefaults: { account: 1, user: 1, supervisor: 0 },
     }
   }
 
@@ -428,6 +450,8 @@ export function createPreviewBridge(): InfoflexBridge {
         appVersion: '0.1.0',
         edition,
         runtime: 'preview',
+        // The browser preview stands for the Server: there is no client machine to hand anybody over to.
+        appRole: 'server',
       },
       settings: structuredClone(settings),
       setupContext: context(),
@@ -586,6 +610,71 @@ export function createPreviewBridge(): InfoflexBridge {
       return request
     },
     async listUsers() { requireAdmin(); return [...accounts.values()].map(({ user }) => publicAccount(user)) },
+
+    // ─── Team size and seats, in the browser preview ────────────────────────────────────────────────────────────
+    // These mirror the real `TeamService` rules rather than stubbing them out, because the preview's only value is
+    // that a person can see and use the screen without a Windows machine. The caps come from `previewSeatCaps`, which
+    // the preview sets to no cap (null), exactly as a licence that names none.
+    async getTeamSnapshot() {
+      requireAdmin()
+      return {
+        seats: [...accounts.values()].map(({ user, passwordSetAt }) => ({
+          id: user.id, seatNo: null, role: user.role === 'CASHIER' ? 'USER' as const : user.role,
+          fullName: user.fullName, username: user.username, needsPassword: !passwordSetAt,
+          isActive: user.isActive, isLocked: user.isLocked, lastLoginAt: null, lastPc: null,
+        })),
+        counts: (['ADMIN', 'SUPERVISOR', 'ACCOUNT', 'USER'] as const).map((role) => ({
+          role,
+          seats: [...accounts.values()].filter(({ user }) => user.role === role).length,
+          activeAccounts: [...accounts.values()].filter(({ user }) => user.role === role && user.isActive).length,
+          licenceCap: null,
+        })),
+        supervisorSeesCost: previewTeamSettings.supervisorSeesCost,
+        singleLoginPerAccount: previewTeamSettings.singleLoginPerAccount,
+        allowAdminOnClients: previewTeamSettings.allowAdminOnClients,
+        orderExpiryMinutes: previewTeamSettings.orderExpiryMinutes,
+      }
+    },
+    async setSeatCount(change) {
+      requireAdmin()
+      // The preview has no seat rows to grow; it reports the count it was asked for so the screen behaves, and says
+      // plainly in its own message that seat creation is a desktop-host action.
+      const snapshot = await this.getTeamSnapshot()
+      const current = snapshot.counts.find((entry) => entry.role === change.role)!
+      if (change.seats < current.activeAccounts) {
+        throw new Error(`${current.activeAccounts} active ${change.role.toLowerCase()} account(s) use a seat. Deactivate one first.`)
+      }
+      previewSeatTargets[change.role] = change.seats
+      return snapshot.counts.map((entry) => (entry.role === change.role ? { ...entry, seats: change.seats } : entry))
+    },
+    async renameSeat(userId, fullName) {
+      requireAdmin()
+      const entry = [...accounts.values()].find(({ user }) => user.id === userId)
+      if (!entry) throw new Error('That seat no longer exists.')
+      if (!fullName.trim()) throw new Error('Enter the name of the person using this seat.')
+      entry.user.fullName = fullName.trim()
+    },
+    async setSeatPassword(userId, password, confirmPassword) {
+      requireAdmin()
+      validatePreviewPassword(password, confirmPassword)
+      const entry = [...accounts.values()].find(({ user }) => user.id === userId)
+      if (!entry) throw new Error('That seat no longer exists.')
+      entry.passwordHash = await bcryptHash(password, 10)
+      entry.user.isActive = true
+      entry.passwordSetAt = Date.now()
+    },
+    async updateTeamSettings(input) { requireAdmin(); Object.assign(previewTeamSettings, input) },
+    async getRoleSummary() {
+      requireAdmin()
+      // Kept short in the preview; the desktop host returns the full sentences from `TeamService.roleSummary()`.
+      return [
+        { role: 'ACCOUNT' as const, summary: 'Takes payment, prints documents, processes returns and reports the day.' },
+        { role: 'USER' as const, summary: 'Picks goods and builds orders. Cannot print, take payment, process returns or see reports.' },
+        { role: 'SUPERVISOR' as const, summary: 'Read-only audit and stock viewer.' },
+        { role: 'ADMIN' as const, summary: 'Every function, including users and settings.' },
+      ]
+    },
+
     async createUser(input: CreateUserInput) {
       requireAdmin()
       validatePreviewPassword(input.password, input.confirmPassword)

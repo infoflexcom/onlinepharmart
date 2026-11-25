@@ -140,12 +140,26 @@ export interface BackupManifest {
   rowCounts: Record<string, number>
 }
 
+/**
+ * How many accounts of each role the Admin wants at first run.
+ *
+ * ADMIN is absent on purpose: the brief says one Admin exists by default, and the Admin is the account being created
+ * on this very form.
+ */
+export interface TeamSizeInput {
+  account: number
+  user: number
+  supervisor: number
+}
+
 export interface FirstRunInput {
   admin: AdminAccountInput
   profile: ShopProfile
   currency: CurrencyDefinition
   display: MoneyDisplayOptions
   currencyConfirmed: boolean
+  /** Optional so an older caller, and every existing test, keeps working: absent means no extra seats. */
+  teamSize?: TeamSizeInput
 }
 
 export interface SetupContext {
@@ -157,6 +171,13 @@ export interface SetupContext {
   vendorCurrencyLocked: boolean
   initialCurrency: CurrencyDefinition
   productName: string
+  /**
+   * The licence's seat caps, so the setup form can show them and refuse before the customer submits. `null` means the
+   * licence names no cap, which is different from zero.
+   */
+  seatCaps: { account: number | null; user: number | null; supervisor: number | null }
+  /** What the team-size steppers start at. */
+  seatDefaults: TeamSizeInput
 }
 
 export interface AppInfo {
@@ -165,6 +186,12 @@ export interface AppInfo {
   appVersion: string
   edition: Edition | null
   runtime: 'desktop' | 'preview'
+  /**
+   * Which application this is. The login page shows a different rule on each: the Server accepts only the Admin and
+   * tells everyone else to use the client app; a client accepts the staff roles. `preview` is a server, because the
+   * browser preview has no client to hand over to.
+   */
+  appRole: 'server' | 'client'
 }
 
 export interface BootstrapData {

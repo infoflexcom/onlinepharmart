@@ -5,6 +5,7 @@ import { MAX_SQLITE_MINOR_UNITS } from '../shared/auth/policy'
 import type { Edition } from '../editions'
 import type { AuditEvent } from '../shared/shop/types'
 import { normalizeUsername, validatePasswordPair } from './setup-service'
+import { isAssignableRole } from '../shared/auth/types'
 import type { ShopRepository } from './contracts/shop-repository'
 import type { UserRepository } from './contracts/user-repository'
 import { canAccessPageForRole } from './permissions'
@@ -209,7 +210,9 @@ function normalizeFullName(value: string): string {
 }
 
 function validateRoleForEdition(role: UserRole, edition: Edition): void {
-  if (role !== 'ADMIN' && role !== 'SUPERVISOR' && role !== 'CASHIER') throw new Error('Choose a valid user role.')
+  // The four roles the brief names. `CASHIER` is still accepted so an existing shop can re-save an untouched account,
+  // but no screen offers it — `ASSIGNABLE_ROLES` is what the creation form reads, and it omits the alias.
+  if (!isAssignableRole(role) && role !== 'CASHIER') throw new Error('Choose a valid user role.')
   if (role === 'SUPERVISOR' && !editionSupportsSupervisor(edition)) {
     throw new Error('Supervisor accounts are only available in the supermarket edition.')
   }

@@ -32,6 +32,12 @@ export const ONSITE_PERIOD_CHOICES: readonly (number | null)[] = [null, 1, 2, 3,
 export interface BuildProfile {
   format: typeof BUILD_PROFILE_FORMAT
   version: typeof BUILD_PROFILE_VERSION
+  /**
+   * Which application this build produces. The brief ships a Server and a Client as separate installers, with separate
+   * icons and different sign-in rules, so the choice belongs in the profile the vendor fills in rather than in a
+   * filename. Absent means `server`, which is what every profile written before this field existed produced.
+   */
+  appRole?: 'server' | 'client'
   /** The build's version string, shown in the installer's welcome page and the app's About box. */
   appVersion: string
   /** The currency the installer's list opens on, and the app's first-run default when nothing else applies. */
@@ -86,6 +92,11 @@ export interface BuildPrerequisitePin {
   fetchedAt: string
 }
 
+/** The role a profile names, defaulting to `server` for a profile written before the field existed. */
+export function appRoleFromBuildProfile(profile: BuildProfile): 'server' | 'client' {
+  return profile.appRole === 'client' ? 'client' : 'server'
+}
+
 export interface BuildProfileProblem {
   field: keyof BuildProfile | 'format' | 'version' | 'prerequisite'
   message: string
@@ -97,6 +108,7 @@ export function defaultBuildProfile(): BuildProfile {
     format: BUILD_PROFILE_FORMAT,
     version: BUILD_PROFILE_VERSION,
     appVersion: '0.1.0',
+    appRole: 'server',
     defaultCurrencyCode: 'NGN',
     lockCurrency: false,
     maximumOnsitePeriodYears: null,

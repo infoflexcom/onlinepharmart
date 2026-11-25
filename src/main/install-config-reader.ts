@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { join, win32 } from 'node:path'
-import { installConfigPath, parseInstallConfig, type InstallConfig } from '../../installer/src/install-config'
+import {
+  appRoleFromInstallConfig, installConfigPath, parseInstallConfig, type AppRole, type InstallConfig,
+} from '../../installer/src/install-config'
 import type { CurrencyDefinition } from '../currency/catalog'
 import {
   BUILD_PROFILE_FILENAME, parseBuildProfile, type BuildProfile,
@@ -157,4 +159,28 @@ export function resolveInstallerCurrency(sources: InstallConfigSources): Install
     customCurrency: customCurrencyFromConfig(config),
     buildProfile: null,
   }
+}
+
+/**
+ * Which application this installation is, read from the installer's file.
+ *
+ * Deliberately a separate read from the currency one rather than another field on `InstallerCurrencyResolution`: the
+ * currency may legitimately be overridden by an environment variable during a support call, but the application role
+ * may not be. A server temporarily pretending to be a client would refuse its own Admin; a client pretending to be a
+ * server would open the database, which is the one thing the architecture forbids. So the role comes from the file the
+ * installer wrote, and nowhere else.
+ *
+ * A missing or unreadable file means `server`, which is what every build before the split was, and which cannot leave a
+ * shop without a working Admin login.
+ */
+export function readAppRole(sources: Pick<InstallConfigSources, 'programData' | 'readFile'>): AppRole {
+  if (!sources.programData) return 'server'
+  const read = sources.readFile ?? ((target: string) => readFileSync(target, 'utf8'))
+  let text: string
+  try {
+    text = read(installConfigPath(sources.programData))
+  } catch {
+    return 'server'
+  }
+  return appRoleFromInstallConfig(parseInstallConfig(text))
 }

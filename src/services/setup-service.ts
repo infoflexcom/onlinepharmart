@@ -10,6 +10,7 @@ import type { SetupPreferencesRepository } from './contracts/setup-repository'
 import type { UserRepository } from './contracts/user-repository'
 import { normalizeShopProfile, validateMoneyDisplay } from './shop-service'
 import type { BuildProfile } from '../../installer/src/build-profile'
+import type { TeamSizeInput } from '../shared/shop/types'
 
 const BCRYPT_ROUNDS = 12
 const ADMIN_PERMISSIONS = defaultPermissions('ADMIN')
@@ -17,6 +18,20 @@ const ADMIN_PERMISSIONS = defaultPermissions('ADMIN')
 export interface FirstRunResult {
   settings: ShopSettings
   admin: PublicUser
+}
+
+export interface SeatBootstrap {
+  /** The licence's caps for the three sized roles. `null` means the licence names none. */
+  readCaps(): { account: number | null; user: number | null; supervisor: number | null }
+  /**
+   * Create the requested seats inside the caller's transaction.
+   *
+   * Supplied as a function so `SetupService` does not depend on `TeamService` directly: the setup service already has
+   * one job, and the seat rules live in one place. It is called **inside** the same transaction as the Admin and the
+   * settings, because a half-finished first run that created an Admin but no seats would leave the shop unable to
+   * match the team size it chose.
+   */
+  createSeats(input: TeamSizeInput, actor: string): void
 }
 
 export class SetupService {
@@ -35,6 +50,8 @@ export class SetupService {
      * installer, would otherwise get a free choice here — which would make the vendor's lock meaningless.
      */
     private readonly buildProfile: BuildProfile | null = null,
+    /** Seat creation for first-run team size. Absent means this build creates the Admin only. */
+    private readonly seats: SeatBootstrap | null = null,
   ) {}
 
   async getSetupContext(): Promise<SetupContext> {
@@ -79,6 +96,11 @@ export class SetupService {
       vendorCurrencyLocked,
       initialCurrency,
       productName: productNameForEdition(edition),
+      seatCaps: this.seats?.readCaps() ?? { account: null, user: null, supervisor: null },
+      // A shop with no opinion starts with one Account and one User, so the two halves of the order-to-receipt
+      // workflow work out of the box. A Supervisor is not created until somebody asks for one: the role audits, and an
+      // audit account nobody uses is a seat the shop paid for and forgot.
+      seatDefaults: { account: 1, user: 1, supervisor: 0 },
     }
   }
 
@@ -135,6 +157,24 @@ export class SetupService {
         ...admin,
         passwordHash,
       })
+
+      // Seats, in the same transaction. The caps are re-checked here rather than trusted from the form: the form is a
+      // screen, and this is the write.
+      const teamSize = normaliseTeamSize(input.teamSize)
+      if (this.seats && (teamSize.account > 0 || teamSize.user > 0 || teamSize.supervisor > 0)) {
+        const caps = this.seats.readCaps()
+        for (const [key, value, label] of [
+          ['account', teamSize.account, 'Account'],
+          ['user', teamSize.user, 'User'],
+          ['supervisor', teamSize.supervisor, 'Supervisor'],
+        ] as const) {
+          const cap = caps[key]
+          if (cap !== null && value > cap) {
+            throw new Error(`This licence allows ${cap} ${label} ${cap === 1 ? 'account' : 'accounts'}. Choose ${cap} or fewer.`)
+          }
+        }
+        this.seats.createSeats(teamSize, username)
+      }
       this.shopRepository.appendAudit({
         actor: username,
         action: 'first_run.setup.completed',
@@ -174,6 +214,28 @@ function assertFirstRunInput(input: FirstRunInput): void {
   if (!input.currency || typeof input.currency !== 'object') throw new Error('Choose a valid shop currency.')
   if (!input.display || typeof input.display !== 'object') throw new Error('Choose valid amount display options.')
   if (typeof input.currencyConfirmed !== 'boolean') throw new Error('Confirm the shop currency before continuing.')
+}
+
+/**
+ * Read the team size off the form, refusing anything that is not a whole number of seats.
+ *
+ * Absent means "no extra seats", so an older caller — and the rest of this repository's tests — keeps working. The
+ * three fields are clamped individually rather than as a group: a shop may want five Users and one Account.
+ */
+export function normaliseTeamSize(input: TeamSizeInput | undefined): TeamSizeInput {
+  if (!input) return { account: 0, user: 0, supervisor: 0 }
+  const read = (value: unknown, label: string): number => {
+    if (value === undefined || value === null) return 0
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 500) {
+      throw new Error(`Enter a whole number of ${label} seats, between 0 and 500.`)
+    }
+    return value
+  }
+  return {
+    account: read(input.account, 'Account'),
+    user: read(input.user, 'User'),
+    supervisor: read(input.supervisor, 'Supervisor'),
+  }
 }
 
 function canonicalCurrency(input: CurrencyDefinition): CurrencyDefinition {

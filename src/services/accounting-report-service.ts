@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { can } from '../../packages/core/src/capabilities'
+import { isRole } from '../../packages/core/src/roles'
 import type Database from 'better-sqlite3'
 import { parseMoneyExact } from '../currency/parse'
 import { roundHalfUp } from '../currency/money'
@@ -155,7 +157,9 @@ export class AccountingReportService {
   }
 
   getDashboard(input: ReportPeriodInput, actor: ReportActor, edition: Edition): AccountingReport {
-    validateActor(actor)
+    // Reading the day's accounts is the one place authority matters. The shift and drawer methods below call
+    // `validateActor` only, because an ACCOUNT counting its own drawer is not reading a report.
+    requireReportViewer(actor)
     validateEdition(edition)
     const period = normalizePeriod(input, this.now())
     const settings = this.shop.readSettings()
@@ -1445,12 +1449,35 @@ function assertSqliteInteger(value: bigint, label: string): void {
   if (value > MAX_SQLITE_INTEGER || value < -MAX_SQLITE_INTEGER) throw new Error(`${label} exceeds the supported integer range.`)
 }
 
+/**
+ * A real, identified person.
+ *
+ * This checks *identity*, not authority: it is used both by the report readers and by the shift and drawer methods that
+ * an ACCOUNT calls for its own till. It previously hard-coded `['ADMIN', 'SUPERVISOR', 'CASHIER']`, which silently
+ * excluded ACCOUNT — the role the brief makes the till role — from opening its own cashier shift. Reading the roles
+ * from the table instead means a future role is not forgotten here.
+ */
 function validateActor(actor: ReportActor): void {
   if (!actor || typeof actor.id !== 'string' || !actor.id.trim()
     || typeof actor.username !== 'string' || !actor.username.trim()
-    || !['ADMIN', 'SUPERVISOR', 'CASHIER'].includes(actor.role)) {
+    || !isRole(actor.role)) {
     throw new Error('A valid signed-in report user is required.')
   }
+}
+
+/**
+ * Authority to read the shop's accounts.
+ *
+ * Separate from `validateActor` on purpose. The brief gives reports to the Admin and to ACCOUNT and to nobody else, and
+ * `view_reports` is the capability the policy row for the accounting report already uses — so this reads the same
+ * answer rather than a second list. The shift methods do *not* call this: an ACCOUNT's own drawer is not a report.
+ */
+function requireReportViewer(actor: ReportActor): void {
+  validateActor(actor)
+  // A legacy CASHIER row resolves to USER at every read, and a USER has no reports. `can` takes the four real roles,
+  // so the alias is resolved here rather than being passed through.
+  const role = actor.role === 'CASHIER' ? 'USER' : actor.role
+  if (!can(role, 'view_reports')) throw new Error('You do not have permission to view reports.')
 }
 
 function requireAdmin(actor: ReportActor): void {

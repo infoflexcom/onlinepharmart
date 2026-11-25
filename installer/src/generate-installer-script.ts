@@ -4,7 +4,8 @@ import {
   currencyExample, INSTALLER_MAX_PASSWORD_ATTEMPTS, INSTALLER_PASSWORD_HASH,
 } from './installer-policy'
 import {
-  buildDefaultCurrency, defaultBuildProfile, installerDefaultCurrencyIndex, validateBuildProfile, type BuildProfile,
+  appRoleFromBuildProfile, buildDefaultCurrency, defaultBuildProfile, installerDefaultCurrencyIndex, validateBuildProfile,
+  type BuildProfile,
 } from './build-profile'
 import { ALLOWED_DOWNLOAD_HOSTS, ALLOWLISTED_COMPONENTS, type AllowlistedComponent } from './download-allowlist'
 import { INSTALL_CONFIG_DIRECTORY, INSTALL_CONFIG_FILENAME } from './install-config'
@@ -113,6 +114,9 @@ export function generateInstallerHeader(profile: BuildProfile = defaultBuildProf
 ; generated and read by nothing until this phase, so the file recorded the packaging version instead.
 !define INSTALLER_APP_VERSION ${nsisString(profile.appVersion)}
 !define CUR_DEFAULT_EXAMPLE ${nsisString(currencyExample(defaultCurrencyDefinition))}
+; Which application this installer lays down. The app reads it back from install-config.json to know whether it owns
+; the database, and the two builds ship separate icons -- see docs/BRANDING-ASSETS.md.
+!define INSTALLER_APP_ROLE ${nsisString(appRoleFromBuildProfile(profile))}
 !define INSTALLER_CONFIG_DIR ${nsisString(INSTALL_CONFIG_DIRECTORY)}
 !define INSTALLER_CONFIG_FILE ${nsisString(INSTALL_CONFIG_FILENAME)}
 !define MOBILE_PORT 43110

@@ -63,7 +63,7 @@ describe('every registered channel and route has a policy entry', () => {
   it('refuses a route the moment its policy row is removed, which is the point of the table', async () => {
     // Mutate a copy of the policy rather than the imported frozen module: same code path, one key missing.
     const { authorize: decide } = await import('../src/index')
-    const key = 'ipc:pos:complete-sale'
+    const key = 'ipc:pos:quote-sale'
     expect(decide(key, 'USER', true).allowed).toBe(true)
     // Simulate removal by asking for a key that is one character different, i.e. the typo an author would make.
     const outcome = decide(`${key}-removed`, 'USER', true)
@@ -125,9 +125,14 @@ describe('the policy table is internally sound', () => {
 
 describe('the supervisor is audit-only', () => {
   it('may review the audit surface', () => {
-    for (const key of ['ipc:approvals:list-pending', 'ipc:approvals:list-recent', 'ipc:reports:get-accounting', 'ipc:users:list']) {
+    // `ipc:reports:get-accounting` was in this list and is not any more. The brief gives a Supervisor "Audit and Stock
+    // (view)" and its own capability note says it may export *audit* reports but holds no other report — so the
+    // accounting report is ACCOUNT and ADMIN only. The assertion moved with the brief rather than the row being
+    // widened back to keep an older test green.
+    for (const key of ['ipc:approvals:list-pending', 'ipc:approvals:list-recent', 'ipc:users:list']) {
       expect(authorize(key, 'SUPERVISOR', true).allowed, key).toBe(true)
     }
+    expect(authorize('ipc:reports:get-accounting', 'SUPERVISOR', true).allowed).toBe(false)
   })
 
   it('may not act on money, stock, returns, discounts, voids or configuration', () => {
@@ -148,12 +153,21 @@ describe('the supervisor is audit-only', () => {
   })
 })
 
-describe('the till roles inherit what the old cashier could do', () => {
-  it('lets ACCOUNT and USER take orders and payments', () => {
+describe('the till roles are split by what they may do', () => {
+  it('lets both ACCOUNT and USER build an order, which is what a USER exists for', () => {
     for (const role of ['ACCOUNT', 'USER'] as const) {
-      for (const key of ['ipc:pos:quote-sale', 'ipc:pos:complete-sale', 'ipc:pos:hold-cart', 'ipc:returns:create', 'ipc:reports:open-cashier-shift']) {
+      for (const key of ['ipc:pos:quote-sale', 'ipc:pos:hold-cart']) {
         expect(authorize(key, role, true).allowed, `${role} ${key}`).toBe(true)
       }
+    }
+  })
+
+  it('lets only ACCOUNT take payment, print and process returns, which is the split this phase introduced', () => {
+    // Superseded deliberately: the earlier phase let both roles do these, matching the old cashier. The brief now says
+    // a USER "CANNOT print anything, take payment, process returns", so the assertions moved with it.
+    for (const key of ['ipc:pos:complete-sale', 'ipc:pos:print-receipt', 'ipc:returns:create', 'ipc:reports:open-cashier-shift']) {
+      expect(authorize(key, 'ACCOUNT', true).allowed, `ACCOUNT ${key}`).toBe(true)
+      expect(authorize(key, 'USER', true).allowed, `USER ${key}`).toBe(false)
     }
   })
 
@@ -169,7 +183,11 @@ describe('the till roles inherit what the old cashier could do', () => {
 describe('the deprecated CASHIER alias resolves and is never treated as unknown', () => {
   it('maps to USER, not to a refusal', () => {
     expect(resolveRole('CASHIER')).toBe('USER')
-    expect(resolveRole('CASHIER') && authorize('ipc:pos:complete-sale', resolveRole('CASHIER'), true).allowed).toBe(true)
+    // The alias resolves to a real role rather than being refused. That role is USER, which may build an order but
+    // may not take payment — so the alias lands on the narrower set of capabilities, not the old cashier's powers.
+    expect(resolveRole('CASHIER')).not.toBeNull()
+    expect(authorize('ipc:pos:quote-sale', resolveRole('CASHIER'), true).allowed).toBe(true)
+    expect(authorize('ipc:pos:complete-sale', resolveRole('CASHIER'), true).allowed).toBe(false)
   })
 
   it('refuses a role nobody recognises', () => {

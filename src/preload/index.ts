@@ -49,6 +49,15 @@ const bridge: InfoflexBridge = {
   pendingApprovalCount: () => ipcRenderer.invoke('approvals:pending-count'),
   resolveApproval: (requestId, decision) => ipcRenderer.invoke('approvals:resolve', requestId, decision),
   listUsers: () => ipcRenderer.invoke('users:list'),
+  getTeamSnapshot: () => ipcRenderer.invoke('team:get-snapshot'),
+  setSeatCount: (change) => ipcRenderer.invoke('team:set-seats', change),
+  renameSeat: (userId, fullName) => ipcRenderer.invoke('team:rename-seat', userId, fullName),
+  setSeatPassword: (userId, password, confirmPassword) => (
+    ipcRenderer.invoke('team:set-seat-password', userId, password, confirmPassword)
+  ),
+  updateTeamSettings: (input) => ipcRenderer.invoke('team:update-settings', input),
+  getRoleSummary: () => ipcRenderer.invoke('team:get-role-summary'),
+
   createUser: (input) => ipcRenderer.invoke('users:create', input),
   updateUser: (id, input) => ipcRenderer.invoke('users:update', id, input),
   deactivateUser: (id) => ipcRenderer.invoke('users:deactivate', id),

@@ -773,6 +773,7 @@ function defaultBuildProfile() {
     format: BUILD_PROFILE_FORMAT,
     version: BUILD_PROFILE_VERSION,
     appVersion: "0.1.0",
+    appRole: "server",
     defaultCurrencyCode: "NGN",
     lockCurrency: false,
     maximumOnsitePeriodYears: null,

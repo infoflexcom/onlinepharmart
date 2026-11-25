@@ -3,7 +3,7 @@ import { formatMoney } from '@shared/currency/money'
 import type { AppPage, NavigationItem, PublicUser } from '@shared/auth/types'
 import type { InfoflexBridge } from '@shared/bridge'
 import type { BootstrapData, ShopSettings } from '@shared/shop/types'
-import { UserManagement } from './UserManagement'
+import { UsersAndSeats } from './UsersAndSeats'
 import { SettingsScreen } from './SettingsScreen'
 import { InventoryWorkspace } from './InventoryWorkspace'
 import { PosWorkspace } from './PosWorkspace'
@@ -73,7 +73,7 @@ export function AppShell({ bridge, bootstrap, onLogout, onSettingsUpdated }: Pro
               : activePage === 'returns'
                 ? <ReturnsWorkspace bridge={bridge} bootstrap={bootstrap} user={user} />
                 : activePage === 'users' && user.role === 'ADMIN'
-                ? <UserManagement bridge={bridge} usersCurrency={bootstrap.settings.currency} display={bootstrap.settings.display} edition={bootstrap.setupContext.edition} currentUser={user} />
+                ? <UsersAndSeats bridge={bridge} currentUser={user} />
                 : activePage === 'reports'
                   ? <ReportsWorkspace bridge={bridge} bootstrap={bootstrap} user={user} />
                   : activePage === 'mobile' && user.role === 'ADMIN'

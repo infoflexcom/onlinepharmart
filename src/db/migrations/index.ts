@@ -15,6 +15,7 @@ import { migrateOperationalSettings } from './013_operational_settings'
 import { migrateMobileLogin } from './014_mobile_login'
 import { migrateDemoDataRemoval } from './015_demo_data_removal'
 import { migrateClientServerFoundation, migrateClientServerAuditAndSales } from './016_client_server_foundation'
+import { migrateSeatsAndPasswords } from './017_seats_and_passwords'
 
 export interface Migration {
   version: number
@@ -54,5 +55,10 @@ export const MIGRATIONS: readonly Migration[] = [
       migrateClientServerFoundation(database)
       migrateClientServerAuditAndSales(database)
     },
+  },
+  {
+    version: 17,
+    name: 'team-seats-password-state-and-screen-settings',
+    up: migrateSeatsAndPasswords,
   },
 ]

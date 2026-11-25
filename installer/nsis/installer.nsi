@@ -1305,6 +1305,9 @@ Function InstallApplication
       Call EscapeJson
       StrCpy $CurrencyDecimalJson $3
 
+      ; Which application this install is. The app reads this before it opens a database or shows a login page, so a
+      ; client can never believe it owns the data. Written from the build profile the vendor chose.
+      FileWrite $1 "  $\"appRole$\": $\"${INSTALLER_APP_ROLE}$\",$\r$\n"
       FileWrite $1 "  $\"writtenAt$\": $\"$\",$\r$\n"
       ${If} ${INFOPLEX_OFFLINE} == 1
         FileWrite $1 "  $\"installerKind$\": $\"offline$\",$\r$\n"

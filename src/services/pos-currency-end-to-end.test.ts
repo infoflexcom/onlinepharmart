@@ -68,7 +68,12 @@ async function createHost(currencyCode: string) {
   const license = { getVerifiedPolicy: () => ({ licenseId: 'e2e', edition: 'BOTH' as const, defaultCurrencyCode: null, lockCurrency: false }) }
   let ids = 0
   const setup = new SetupService(repository, userRepository, repository, license, () => new Date(NOW), () => `e2e-user-${++ids}`)
-  const auth = new AuthService(userRepository, repository, { deviceName: 'E2E-PC', ipAddress: null }, () => new Date(NOW), () => NOW)
+  // Client PC: these tests sign in Cashiers and Supervisors, which a server install correctly refuses. The role is
+  // declared here rather than the rule being relaxed, so the sign-in scoping stays enforced in every fixture that does
+  // not need to exercise a server.
+  const auth = new AuthService(userRepository, repository, { deviceName: 'E2E-PC', ipAddress: null }, () => new Date(NOW), () => NOW,
+    { app: 'client', allowAdminOnClients: () => true },
+  )
   const shopService = new ShopService(repository, { deviceName: 'E2E-PC', ipAddress: null }, () => new Date(NOW), () => `e2e-audit-${++ids}`)
   const userService = new UserService(userRepository, repository, () => new Date(NOW), () => `e2e-managed-${++ids}`)
   const inventory = new ProductInventoryService(database, repository, { deviceName: 'E2E-PC', now: () => NOW, newId: () => `e2e-inv-${++ids}` })

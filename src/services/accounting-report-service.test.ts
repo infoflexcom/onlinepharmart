@@ -18,8 +18,13 @@ const ADMIN: PublicUser = {
   id: 'report-admin', fullName: 'Report Admin', username: 'reportadmin', role: 'ADMIN', isActive: true, isLocked: false,
   permissions: { allowWholesale: true, maxDiscountBasisPoints: 10_000, allowCreditSales: true, returnLimitMinor: 9_000_000_000_000n },
 }
+/**
+ * The till role. `ACCOUNT`, not the deprecated `CASHIER`: the brief gives the day's report to ACCOUNT, and a CASHIER
+ * row resolves to USER, which has no reports. Naming the role the brief names keeps this fixture about the reports
+ * rather than about the alias.
+ */
 const CASHIER: PublicUser = {
-  id: 'report-cashier', fullName: 'Report Cashier', username: 'reportcashier', role: 'CASHIER', isActive: true, isLocked: false,
+  id: 'report-cashier', fullName: 'Report Cashier', username: 'reportcashier', role: 'ACCOUNT', isActive: true, isLocked: false,
   permissions: { allowWholesale: false, maxDiscountBasisPoints: 2_000, allowCreditSales: true, returnLimitMinor: 9_000_000_000_000n },
 }
 

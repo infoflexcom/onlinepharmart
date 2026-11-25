@@ -1,4 +1,8 @@
-import type { AppPage, CreateUserInput, LoginInput, NavigationItem, PublicUser, UpdateUserInput } from './auth/types'
+import type {
+  AppPage, AssignableRole, CreateUserInput, LoginInput, NavigationItem, PublicUser, UpdateUserInput,
+} from './auth/types'
+import type { RoleSeatCount, SeatCountChange, TeamSettingsInput, TeamSnapshot } from '../services/team-service'
+
 import type { CurrencyDefinition } from './currency/catalog'
 import type { MoneyDisplayOptions } from './currency/money'
 import type {
@@ -127,6 +131,19 @@ export interface InfoflexBridge {
   deactivateUser(id: string): Promise<void>
   resetPassword(id: string, password: string, confirmPassword: string): Promise<void>
   unlockUser(id: string): Promise<PublicUser>
+  // ─── Team size and seats ──────────────────────────────────────────────────────────────────────────────────────
+  // Every one of these is Admin-only on the server. They are on the bridge because the Users and Seats screen is the
+  // Admin's; nothing else calls them.
+  getTeamSnapshot(): Promise<TeamSnapshot>
+  /** Change how many seats a role has. Refused above the licence cap and below the active accounts. */
+  setSeatCount(change: SeatCountChange): Promise<RoleSeatCount[]>
+  renameSeat(userId: string, fullName: string): Promise<void>
+  /** Set or reset a seat's password. This is what turns "Needs password" into a sign-in. */
+  setSeatPassword(userId: string, password: string, confirmPassword: string): Promise<void>
+  updateTeamSettings(input: TeamSettingsInput): Promise<void>
+  /** The fixed, read-only description of each role, derived from the capability table. */
+  getRoleSummary(): Promise<Array<{ role: AssignableRole; summary: string }>>
+
   getInventoryOverview(search?: string): Promise<InventoryOverview>
   saveProduct(draft: ProductDraft): Promise<ProductRecord>
   importProductsCsv(contents: string): Promise<ProductImportReport>

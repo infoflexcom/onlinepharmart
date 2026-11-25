@@ -103,6 +103,7 @@ export function App() {
       settings={bootstrap.settings}
       productName={bootstrap.appInfo.productName}
       appVersion={bootstrap.appInfo.appVersion}
+      appRole={bootstrap.appInfo.appRole}
       onLogin={() => { void refresh().catch((caught: unknown) => setError(errorMessage(caught))) }}
     />
   } else {

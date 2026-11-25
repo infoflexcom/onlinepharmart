@@ -154,6 +154,16 @@ export function registerDesktopIpc(
   })
 
   handle('users:list', (event) => host.listUsers(sender(event)))
+  // Team size and seats. Admin-only in the policy table; the host re-checks with `requireAdmin`, so the row is not the
+  // only guard.
+  handle('team:get-snapshot', (event) => host.getTeamSnapshot(sender(event)))
+  handle('team:set-seats', (event, change) => host.setSeatCount(sender(event), change as never))
+  handle('team:rename-seat', (event, userId, fullName) => host.renameSeat(sender(event), userId as string, fullName as string))
+  handle('team:set-seat-password', (event, userId, password, confirmPassword) => (
+    host.setSeatPassword(sender(event), userId as string, password as string, confirmPassword as string)
+  ))
+  handle('team:update-settings', (event, input) => host.updateTeamSettings(sender(event), input as never))
+  handle('team:get-role-summary', (event) => host.getRoleSummary(sender(event)))
   handle('users:create', (event, input) => host.createUser(sender(event), input as CreateUserInput))
   handle('users:update', (event, id, input) => host.updateUser(sender(event), id as string, input as UpdateUserInput))
   handle('users:deactivate', (event, id) => host.deactivateUser(sender(event), id as string))

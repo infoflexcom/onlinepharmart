@@ -50,7 +50,9 @@
     "release:prerequisite": "tsx scripts/release-prerequisite.ts",
     "check:phase15": "npm run typecheck && npm test && npm run installer:script && npm run installer:check && npm run installer:compile && npm run build:studio && npm run cloud:package && npm run release:scan && npm run release:assemble:dev && npm run build:web && npm run build:mobile && npm run build",
     "installer:compile": "tsx scripts/compile-check-installer.ts",
-    "check:phase16": "npm run typecheck && npm test && npm run installer:script && npm run installer:check && npm run installer:compile && npm run build:studio && npm run cloud:package && npm run release:scan && npm run release:assemble:dev && npm run build:web && npm run build:mobile && npm run build"
+    "check:phase16": "npm run typecheck && npm test && npm run installer:script && npm run installer:check && npm run installer:compile && npm run build:studio && npm run cloud:package && npm run release:scan && npm run release:assemble:dev && npm run build:web && npm run build:mobile && npm run build",
+    "icons": "tsx scripts/generate-app-icons.ts",
+    "check:phase17": "npm run typecheck && npm run icons && npm test && npm run installer:script && npm run installer:check && npm run installer:compile && npm run build:studio && npm run cloud:package && npm run release:scan && npm run release:assemble:dev && npm run build:web && npm run build:mobile && npm run build"
   },
   "dependencies": {
     "@fastify/websocket": "^11.3.7",

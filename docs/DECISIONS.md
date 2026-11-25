@@ -1114,3 +1114,107 @@ route, so the rule has to live where the money moves.
 discount. They now assert the opposite, and the refusal is visible in the diff rather than the capability quietly
 disappearing. One test that used the Supervisor as its "somebody else" approver now uses a second Admin, which is also
 a truer picture of a shop with more than one administrator.
+
+## The role split is enforced by capability, and the menus are derived from the capability table
+
+**Decided (phase 17):** `packages/core/src/capabilities.ts` holds a named `Capability` vocabulary and one set per
+non-Admin role. Every role-sensitive row in `policy.ts` is written with `withCapability(...)` or `rolesWith(...)` rather
+than a hand-written list, and `canAccessPageForRole()` reads the same sets through a page→capability table. A page or
+channel with no entry is **refused**, not allowed.
+
+**Why this replaced the literals.** Three separate copies of the same rule had drifted apart:
+
+| Copy | What it said | What the brief says |
+| --- | --- | --- |
+| `policy.ts` role constants | `USER` could complete a sale, print receipts, raise returns and read reports | A `USER` "cannot print anything, take payment, process returns … or see reports" |
+| `shared/auth/policy.ts` page list | a `SUPERVISOR` could open almost every page; a `USER` could open Returns and Reports | Supervisor is "Audit and Stock (view)"; User is "Pick goods, My orders" |
+| `accounting-report-service.ts` | `['ADMIN','SUPERVISOR','CASHIER']` — excluding `ACCOUNT` entirely | Account sees the day's report |
+
+Each copy was individually reasonable and together they were wrong in both directions. The literals were replaced with
+one table and the tests moved with the brief.
+
+**What this deliberately breaks, and why each break is a correction rather than a regression:**
+
+- `USER` loses selling, printing, returns and reports. Nine policy rows changed. Every one is asserted in
+  `packages/core/test/capabilities.test.ts` and `policy-coverage.test.ts`, and the assertions that used to require the
+  wider authority now require the refusal.
+- `SUPERVISOR` loses the accounting report. It keeps the audit surface, its sign-offs and flags, and stock — including
+  batches and expiry.
+- `ACCOUNT` gains `view_reports`. Its absence was a genuine omission: the report rows are written
+  `withCapability('view_reports')`, so without the entry an Account would have been refused the very screen the role
+  exists to read.
+- Reading stock (`getInventoryOverview`) moved from the `products` page to the `stock` page. It was gated on "may edit
+  products", which withheld stock from the two roles that exist to look at it. The product *export* stayed on `products`
+  deliberately: it carries supplier cost columns.
+
+## A seat is a real row with no password, not a placeholder count
+
+**Decided:** first-run setup creates `users` rows for the team size the Admin chose, with `password_set_at` null, no
+usable password hash, and `is_active = 0`. A seat without a password cannot sign in — enforced by the account row, the
+`AuthService` check, and `TeamService.canSignIn()`, which are three independent guards.
+
+**Why not a count.** "How many Users may this shop have" and "who are they" are different questions. A count would leave
+the Admin with nothing to name, and the first person to be given a password would need a second, different code path to
+create their row. A real row means one creation path, one table to read, and a seat that can be renamed and prepared in
+advance of the person starting.
+
+**Why the hash is a placeholder rather than empty.** The seat's stored hash is `!no-password!<uuid>`, deliberately not a
+bcrypt string. If a future bug flipped `is_active` for such a seat, no comparison could succeed against it. The tests
+assert the shape.
+
+**Licence caps are `NULL` for "no cap", never `0`.** Zero forbids the role outright. The distinction is tested in both
+directions, because "the cap is 0" and "there is no cap" reading the same would make a licence silently disable a role.
+
+## The Server and the Client are told apart by the installer, not by a setting
+
+**Decided:** `install-config.json` carries `appRole`, written by the NSIS script from a build-profile field, read once at
+startup before the database opens. It cannot be overridden by an environment variable, unlike the currency.
+
+**Why not a setting.** A setting is something a client could be pointed at. The single most important property of the
+architecture is that **only the server opens the database**, and an install that could be argued into believing it is a
+server would break that. A file the installer wrote, on a machine the installer chose, is the right authority.
+
+**Why `server` for a file that says nothing.** Every build before this split was the server, and a shop locked out of
+its own Admin login because of an unread field would be a worse failure than either misreading.
+
+## The login refusal is one sentence for every cause
+
+**Decided:** a correct password on the wrong application, a wrong password, a deactivated account, a seat with no
+password and a username that does not exist all produce the identical message. The reason is written to the audit log
+instead, where only the Admin can read it.
+
+**Why the password is checked first.** Refusing a non-Admin on a client PC before comparing the password would let
+somebody learn that an Admin username exists there without knowing the password, and the timing would differ from a
+wrong-password attempt — the two leaks the "never reveals whether a username exists" rule exists to prevent.
+
+**What is proven and what is not.** `src/services/login-app-scoping.test.ts` asserts the messages are byte-identical
+across the five causes. It does **not** measure timing, because a timing assertion on bcrypt in CI is a flaky test that
+tells you nothing about a real PC under load. Constant-time behaviour rests on the comparison being done
+unconditionally against a dummy hash, which is in the code and readable; timing on real hardware is on
+`docs/RELEASE-CHECKLIST.md`.
+
+## The approval PIN is a bcrypt hash, and there is no PIN lockout
+
+**Decided:** `settings.approval_pin_hash` holds a bcrypt hash at the same cost as a password. There is no failed-PIN
+counter.
+
+**Why no lockout.** The Admin is physically present when an approval PIN is typed, in front of whoever is waiting. A
+lockout would lock the Admin out of their own shop mid-transaction while the person who caused it waited. The cost
+factor is what makes a 4–8 digit space impractical to walk, and the PIN space is small enough that a *fast* hash would
+be a lookup table.
+
+**Why it did not exist before this phase.** Migration 13 recorded only `supervisor_pin_required` and
+`supervisor_pin_length` — whether a PIN was needed and how long it was. Nothing stored the PIN, so the rule could be
+switched on and honoured by nothing. That is now a stored hash and a `verifyApprovalPin()` that returns false when none
+is set.
+
+## The Server and Client icons differ by a badge, generated by a script that is tested against silence
+
+**Decided:** `scripts/generate-app-icons.ts` composes a `SERVER` or `TILL` badge onto the existing transparent logo. The
+brand does not change between the two; only the launcher icon does, because that is where the two sit side by side.
+
+**Why a script and a test rather than six `convert` commands in a README.** The first version of this script produced a
+file **byte-identical to its input**: ImageMagick accepted every argument and drew nothing. Every check a person makes by
+hand — the file exists, it is 512×512 — passed. The test therefore asserts the two sets differ from each other and from
+the unbadged source, and reads the ICO directory back to confirm it holds seven distinct sizes rather than seven copies
+of 256. Both assertions were verified to fail when the badge is suppressed.

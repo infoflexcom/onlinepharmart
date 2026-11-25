@@ -1318,3 +1318,63 @@ committed" and "what is on disk and will be compiled".
 The physical `apps/server` and `apps/client` split, a client executable, order creation and finalisation over the API,
 reservation expiry sweeps, and the Admin approval PIN are designed in the architecture document and deliberately not
 built here. This phase is the foundation those rest on.
+
+## Phase 17 — first-run setup, seats, authentication and the branded login pages
+
+**Status: built and tested in this repository; nothing in it has run on Windows.**
+
+### What was built
+
+**First-run setup gains a team size (step 4).** Admin, store details and currency already existed and already ran in one
+transaction. This phase adds the counts for ACCOUNT, USER and SUPERVISOR: steppers showing the licence's cap, clamped at
+that cap so the customer cannot type a number the server will refuse, with a plain explanation of each role beside it.
+Seats are created **inside the same transaction** as the Admin and settings, because a half-finished setup that created
+an Admin but no seats would look complete and would not match the team the shop had just chosen. `SetupService` takes a
+`SeatBootstrap` rather than depending on `TeamService` directly, so the cap and floor rules live in one place.
+
+**Users and Seats screen, Server only, Admin only.** Seat counts up and down (never above the licence cap, never below
+the active accounts — both refusals name the number in the way), rename, set/reset password, three shop-wide toggles
+("Supervisor can see cost", "One active login per account", "Allow Admin sign-in on client PCs"), the order-expiry
+window, and a fixed read-only role summary derived from the capability table. A seat with no password shows as
+**Needs password** and cannot sign in.
+
+**The role rules were realigned to the brief, and nine policy rows changed.** See the decision record: the `USER` role
+loses selling, printing, returns and reports; `SUPERVISOR` loses the accounting report; `ACCOUNT` gains `view_reports`.
+Menu permissions are now derived from the same capability sets rather than a third hand-written list.
+
+**Sign-in is scoped by application.** The installer records whether it laid down the Server or the Client, the app reads
+that before it opens a database, and `AuthService` refuses the wrong role on the wrong application with the **same
+sentence** as every other failure. The reason goes to the audit log. "Allow Admin sign-in on client PCs" is read on
+every attempt, so switching it on needs no restart.
+
+**Account guards.** Lockout after five failures (already present; now tested, including that clearing the row alone is
+*not* enough — the rate limiter must be cleared too, and the host's unlock does both). Idle auto-logout (already
+present; now pinned to the host's arithmetic rather than a parallel copy). One active login per account, which was in
+the schema and read by nothing — implemented this phase, sparing the session that just signed in.
+
+**The Admin approval PIN is now stored.** Migration 13 recorded only whether a PIN was required and how long it was;
+nothing stored the PIN itself, so the rule could be switched on and honoured by nothing. It is now a bcrypt hash, with
+no PIN lockout and a stated reason.
+
+**Server and Client icon sets.** Generated from the existing logo with a `SERVER` / `TILL` badge, seven ICO sizes each,
+plus PNGs and the two NSIS bitmaps. Two Electron Builder configurations point at them, and a parity test fails if either
+drifts from `package.json` in any key other than the nine it is allowed to differ in.
+
+### Two defects this phase found in its own work
+
+**The icon generator that drew nothing.** The first version composed the badge through ImageMagick's parenthesised
+composite and wrote a file **byte-identical to the input**. Every argument was accepted, nothing was drawn, and every
+check a person would make by hand passed. Fixed by drawing directly, and the test now asserts the two sets differ — then
+verified by suppressing the badge and watching three tests fail.
+
+**The report service that excluded the role it was for.** `validateActor` hard-coded `['ADMIN','SUPERVISOR','CASHIER']`,
+which excludes `ACCOUNT` — the role the brief makes the till role — from opening its own cashier shift and reading its
+own day. Replaced with an identity check (`validateActor`) and a separate authority check (`requireReportViewer`) reading
+`view_reports`, because the two are different questions and conflating them had already caused one bug.
+
+### What is not done, and why
+
+Nothing in this phase has been executed on Windows. No installer has been built, no icon has been drawn by Explorer, no
+login page has been signed in on a real PC, and the vendor's Ed25519 private key is not in this repository, so first-run
+setup was exercised against a stubbed licence provider rather than a minted licence. Those items are on
+`docs/RELEASE-CHECKLIST.md` as owed, and the DONE WHEN table below marks them "needs manual check on real hardware".

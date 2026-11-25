@@ -40,7 +40,11 @@ async function createFixture() {
   const license: LicensePolicyProvider = { getVerifiedPolicy: () => POLICY }
   const now = () => new Date('2026-11-17T12:00:00.000Z')
   const setup = new SetupService(shop, users, shop, license, now)
-  const auth = new AuthService(users, shop, { deviceName: 'PC', ipAddress: null }, now, () => 1_000_000)
+  // This fixture signs in a Cashier as well as the Admin, so it stands for a client PC — the only kind of install where
+  // a Cashier may sign in at all. Declaring the role keeps the sign-in rules under test rather than working around them.
+  const auth = new AuthService(users, shop, { deviceName: 'PC', ipAddress: null }, now, () => 1_000_000, {
+    app: 'client', allowAdminOnClients: () => true,
+  })
   const shopService = new ShopService(shop, { deviceName: 'PC', ipAddress: null }, now)
   const userService = new UserService(users, shop, now)
   const backup = new BackupService(shop, {

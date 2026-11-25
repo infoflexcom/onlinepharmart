@@ -2,7 +2,7 @@ import { useMemo, useState, type ChangeEvent, type FormEvent } from 'react'
 import { CUSTOM_CURRENCY_OPTION, CURRENCIES, createCustomCurrency, getCurrency, type CurrencyDefinition } from '@shared/currency/catalog'
 import { defaultDisplayOptions, formatMoney, type MoneyDisplayOptions } from '@shared/currency/money'
 import type { InfoflexBridge } from '@shared/bridge'
-import type { FirstRunInput, ShopSettings, SetupContext } from '@shared/shop/types'
+import type { FirstRunInput, ShopSettings, SetupContext, TeamSizeInput } from '@shared/shop/types'
 
 interface Props {
   bridge: InfoflexBridge
@@ -11,6 +11,30 @@ interface Props {
   productName: string
   onComplete: () => void
 }
+
+/**
+ * The three roles the Admin sizes, with the explanation the brief asks for in plain words.
+ *
+ * The role names come from `SIZED_ROLES` rather than being written here, so renaming a role or adding a fourth is one
+ * edit; only the sentences, which are editorial, live in this file.
+ */
+const TEAM_ROLES: ReadonlyArray<{ key: 'account' | 'user' | 'supervisor'; label: string; summary: string }> = [
+  {
+    key: 'account',
+    label: 'Account',
+    summary: 'Takes payment and finalises orders. Prints receipts and invoices, processes returns, and counts their own cash at the end of the day.',
+  },
+  {
+    key: 'user',
+    label: 'User',
+    summary: 'Picks goods and builds an order for the Account to finish. Cannot print, take payment or process returns.',
+  },
+  {
+    key: 'supervisor',
+    label: 'Supervisor',
+    summary: 'Reads the audit trail and checks stock. Writes nothing except audit notes. Cannot sell or approve.',
+  },
+]
 
 export function SetupScreen({ bridge, settings, context, productName, onComplete }: Props) {
   const initialCurrency = context.initialCurrency
@@ -35,6 +59,9 @@ export function SetupScreen({ bridge, settings, context, productName, onComplete
   const [currencySearch, setCurrencySearch] = useState('')
   const [display, setDisplay] = useState<MoneyDisplayOptions>(settings.currencyConfirmed ? settings.display : defaultDisplayOptions(initialCurrency))
   const [currencyConfirmed, setCurrencyConfirmed] = useState(false)
+  // Team size. Seeded from the setup context so the form arrives with a workable shop — one Account for the till and
+  // one User for the floor — rather than with zeroes the customer has to notice and change.
+  const [teamSize, setTeamSize] = useState<TeamSizeInput>(context.seatDefaults)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -130,6 +157,7 @@ export function SetupScreen({ bridge, settings, context, productName, onComplete
         currency: selectedCurrency,
         display,
         currencyConfirmed,
+        teamSize,
       }
       await bridge.completeFirstRun(input)
       onComplete()
@@ -231,6 +259,41 @@ export function SetupScreen({ bridge, settings, context, productName, onComplete
                 </div>
               </div>
               <label className="confirmation"><input type="checkbox" checked={currencyConfirmed} onChange={(event) => setCurrencyConfirmed(event.target.checked)} /><span>I confirm this is the currency for this shop. Currency locks after the first sale, purchase, return, or stock valuation.</span></label>
+            </section>
+
+            <section className="form-section" aria-labelledby="team-heading">
+              <div className="section-heading"><span className="section-number">04</span><div><h3 id="team-heading">Team size</h3><p>How many people will use this shop? Each becomes a seat with its own sign-in. You can change these later, but not below the accounts already in use, and never above what your licence allows.</p></div></div>
+              <div className="field-grid field-grid--team">
+                {TEAM_ROLES.map((entry) => {
+                  const cap = context.seatCaps[entry.key]
+                  const value = teamSize[entry.key]
+                  return (
+                    <div className="seat-stepper" key={entry.key}>
+                      <div className="seat-stepper__heading">
+                        <strong>{entry.label}</strong>
+                        {cap !== null && <span className="seat-cap">{cap === 0 ? 'Not on this licence' : `Up to ${cap}`}</span>}
+                      </div>
+                      <p className="seat-stepper__note">{entry.summary}</p>
+                      <div className="seat-stepper__controls">
+                        <button type="button" aria-label={`One fewer ${entry.label}`} disabled={saving || value <= 0} onClick={() => setTeamSize((current) => ({ ...current, [entry.key]: Math.max(0, current[entry.key] - 1) }))}>−</button>
+                        <input
+                          aria-label={`Number of ${entry.label} seats`}
+                          type="number" min={0} max={cap ?? 500} inputMode="numeric" value={value}
+                          onChange={(event) => {
+                            const next = Number(event.target.value)
+                            // Clamped at the cap rather than merely warned about: the server refuses either way, and a
+                            // field that lets the customer type a refused number only to fail on submit wastes their time.
+                            const clamped = Number.isFinite(next) ? Math.min(Math.max(Math.trunc(next), 0), cap ?? 500) : 0
+                            setTeamSize((current) => ({ ...current, [entry.key]: clamped }))
+                          }}
+                        />
+                        <button type="button" aria-label={`One more ${entry.label}`} disabled={saving || (cap !== null && value >= cap)} onClick={() => setTeamSize((current) => ({ ...current, [entry.key]: Math.min(current[entry.key] + 1, cap ?? 500) }))}>+</button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+              <p className="seat-note">Each new seat starts with no password, shown as <b>Needs password</b> on the Users and Seats screen. A seat without a password cannot sign in. Give it a name and a password before that person starts.</p>
             </section>
 
             {error && <div className="form-error" role="alert"><span>!</span>{error}</div>}

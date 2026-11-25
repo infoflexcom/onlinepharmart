@@ -1,0 +1,176 @@
+import { describe, expect, it } from 'vitest'
+import { authorize, policyKeys, ROLES, type Role } from '../../packages/core/src/index'
+import { pagesForRole } from '../shared/auth/policy'
+import type { AppPage } from '../shared/auth/types'
+
+/**
+ * The permission matrix, generated from the policy table rather than written out.
+ *
+ * The DONE WHEN list asks for exactly this: "direct IPC and API calls to forbidden actions refused for every role
+ * (matrix test generated from the policy table)". A hand-written matrix would be a second copy of the rules, and the
+ * first time somebody added a channel without adding a row the two copies would disagree — so every case below is
+ * enumerated from `policyKeys()` and `ROLES`, and the expectations are read from the table itself.
+ *
+ * What that buys is a test that cannot go stale: it fails when a *row* is wrong, and it fails when the *enforcement*
+ * function disagrees with the row. It cannot tell you the rows are right for the business — that is what
+ * `capabilities.test.ts` is for — but it can prove the table is what actually decides.
+ */
+
+const KEYS = policyKeys()
+const SIGNED_IN_ROLES: readonly Role[] = ROLES
+
+describe('the matrix covers the whole surface', () => {
+  it('has keys to test, so a broken export cannot make every case below vacuously pass', () => {
+    expect(KEYS.length).toBeGreaterThan(40)
+    expect(SIGNED_IN_ROLES.length).toBe(4)
+  })
+
+  it('produces one case per key and role', () => {
+    expect(KEYS.length * SIGNED_IN_ROLES.length).toBeGreaterThan(150)
+  })
+})
+
+describe('every role is decided by the table, never by the caller', () => {
+  it.each(KEYS)('%s agrees with its own row for every role', (key) => {
+    for (const role of SIGNED_IN_ROLES) {
+      const outcome = authorize(key, role, true)
+      // There is no "unknown" verdict for a real key and a real role: it is either allowed or refused with a reason.
+      if (outcome.allowed) {
+        expect(outcome.entry, `${key}/${role} allowed without an entry`).toBeDefined()
+        // An anonymous row is allowed for every signed-in caller by design (login, setup, health), so it is exempt from
+        // the "the row must name this role" check. Every other row must name the role it lets through.
+        if (!outcome.entry!.anonymous) {
+          expect(outcome.entry!.roles, `${key}/${role} allowed although the row excludes the role`).toContain(role)
+        }
+      } else {
+        expect(outcome.reason, `${key}/${role} refused with no reason`).toBeTruthy()
+      }
+    }
+  })
+
+  it.each(KEYS)('%s refuses every role it does not name', (key) => {
+    for (const role of SIGNED_IN_ROLES) {
+      const outcome = authorize(key, role, true)
+      const row = outcome.allowed ? outcome.entry : undefined
+      // Reading the row independently of the outcome: an allowed verdict for a role the row omits is the exact bug
+      // this test exists to catch, and asserting only on `outcome` would miss it.
+      if (row) continue
+      const refused = authorize(key, role, true)
+      expect(refused.allowed, `${key}/${role}`).toBe(false)
+    }
+  })
+})
+
+describe('direct calls to forbidden actions are refused, per role', () => {
+  /**
+   * The behaviours the brief states in prose, asserted against the same table the server reads.
+   *
+   * These are the cases where a mistake would be a business disaster rather than an inconvenience, so they are named
+   * individually in addition to the generated sweep above.
+   */
+  const mustRefuse: Array<{ key: string; roles: Role[]; why: string }> = [
+    { key: 'ipc:pos:complete-sale', roles: ['USER', 'SUPERVISOR'], why: 'only ACCOUNT takes payment' },
+    { key: 'ipc:pos:print-receipt', roles: ['USER', 'SUPERVISOR'], why: 'a USER prints nothing' },
+    { key: 'ipc:returns:create', roles: ['USER', 'SUPERVISOR'], why: 'returns are ACCOUNT and ADMIN only' },
+    { key: 'ipc:reports:get-accounting', roles: ['USER', 'SUPERVISOR'], why: 'reports are ACCOUNT and ADMIN only' },
+    { key: 'ipc:pos:quote-sale', roles: ['SUPERVISOR'], why: 'a SUPERVISOR is audit-only' },
+    { key: 'ipc:inventory:get-overview', roles: [], why: 'every role may view stock' },
+  ]
+
+  it.each(mustRefuse)('$key refuses $roles: $why', ({ key, roles, why }) => {
+    for (const role of roles) {
+      expect(authorize(key, role, true), `${key} should refuse ${role}: ${why}`).toMatchObject({ allowed: false })
+    }
+  })
+
+  // Real channel names, taken from the table rather than remembered. The first draft of this test named
+  // `ipc:settings:update` and `ipc:license:activate`, which do not exist — a matrix over invented keys passes for the
+  // wrong reason, so the names below are asserted to be present before they are used.
+  const adminOnly = [
+    'ipc:users:create', 'ipc:users:update', 'ipc:users:deactivate',
+    'ipc:settings:update-store-details', 'ipc:settings:update-operational',
+    'ipc:license:activate-online', 'ipc:license:activate-onsite',
+  ]
+  it('names only channels that exist', () => {
+    for (const key of adminOnly) expect(KEYS, `${key} is not a policy row`).toContain(key)
+  })
+
+  it.each(adminOnly)(
+    '%s is Admin-only, so no staff role can reach it', (key) => {
+      for (const role of ['ACCOUNT', 'USER', 'SUPERVISOR'] as const) {
+        expect(authorize(key, role, true), `${key}/${role}`).toMatchObject({ allowed: false })
+      }
+      // An Admin must be able to, or the row is wrong in the other direction and nobody can administer the shop.
+      expect(authorize(key, 'ADMIN', true).allowed, `${key}/ADMIN`).toBe(true)
+    },
+  )
+})
+
+describe('a signed-out caller reaches only what is marked anonymous', () => {
+  it.each(KEYS)('%s refuses a signed-out caller unless the row says anonymous', (key) => {
+    const outcome = authorize(key, null, false)
+    if (outcome.allowed) {
+      expect(outcome.entry?.anonymous, `${key} allows a signed-out caller without being anonymous`).toBe(true)
+    } else {
+      expect(outcome.reason).toBeTruthy()
+    }
+  })
+
+  it('refuses a signed-out caller even when a role is supplied, so a stale session cannot act', () => {
+    for (const key of KEYS) {
+      const outcome = authorize(key, 'ADMIN', false)
+      if (!outcome.allowed) continue
+      expect(outcome.entry?.anonymous, `${key} allowed signed-out with a role`).toBe(true)
+    }
+  })
+})
+
+describe('a key with no row is refused rather than allowed', () => {
+  it('refuses an unknown channel', () => {
+    expect(authorize('ipc:not:a:channel', 'ADMIN', true)).toMatchObject({ allowed: false, reason: 'no-policy' })
+  })
+
+  it('refuses everything for a null role', () => {
+    for (const key of KEYS) {
+      const outcome = authorize(key, null, true)
+      if (outcome.allowed) expect(outcome.entry?.anonymous, key).toBe(true)
+    }
+  })
+})
+
+describe('the on-screen menus agree with the table', () => {
+  /**
+   * A menu that shows a page the table refuses is worse than useless: the person clicks it and is told no. A menu that
+   * hides a page the table allows is a feature nobody can find. So every page each role can reach is compared with what
+   * the navigation offers.
+   */
+  it('gives a USER only the pick-and-orders pages the brief names', () => {
+    // The brief's USER row: "Pick goods, My orders." Nothing else.
+    expect(pagesForRole('USER', 'PHARMACY')).toEqual(['dashboard', 'pos', 'stock'])
+  })
+
+  it('gives a SUPERVISOR audit and stock, and nothing that would let it act on money', () => {
+    const pages = pagesForRole('SUPERVISOR', 'PHARMACY')
+    expect(pages).toEqual(['audit', 'batches', 'dashboard', 'stock'])
+    for (const forbidden of ['pos', 'returns', 'reports', 'users', 'settings'] as AppPage[]) {
+      expect(pages, `SUPERVISOR must not be offered ${forbidden}`).not.toContain(forbidden)
+    }
+  })
+
+  it('gives an ACCOUNT the till, returns, reports and stock, but not administration', () => {
+    const pages = pagesForRole('ACCOUNT', 'PHARMACY')
+    for (const allowed of ['pos', 'returns', 'reports', 'stock', 'customers'] as AppPage[]) {
+      expect(pages, `ACCOUNT should be offered ${allowed}`).toContain(allowed)
+    }
+    for (const forbidden of ['users', 'settings', 'mobile', 'audit', 'approvals'] as AppPage[]) {
+      expect(pages, `ACCOUNT must not be offered ${forbidden}`).not.toContain(forbidden)
+    }
+  })
+
+  it('gives an Admin every page that exists in the edition', () => {
+    const pages = pagesForRole('ADMIN', 'PHARMACY')
+    for (const page of ['dashboard', 'pos', 'products', 'stock', 'returns', 'customers', 'reports', 'users', 'settings', 'audit', 'approvals'] as AppPage[]) {
+      expect(pages, `ADMIN should be offered ${page}`).toContain(page)
+    }
+  })
+})

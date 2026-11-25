@@ -1,4 +1,6 @@
-import type { AppPage, CreateUserInput, LoginInput, NavigationItem, PublicUser, UpdateUserInput } from '../shared/auth/types'
+import type {
+  AppPage, AssignableRole, CreateUserInput, LoginInput, NavigationItem, PublicUser, UpdateUserInput,
+} from '../shared/auth/types'
 import type {
   BackupResult,
   BackupStatus,
@@ -15,6 +17,10 @@ import type { Edition } from '../editions'
 import { AuthService, toPublicUser } from '../services/auth-service'
 import { ShopService } from '../services/shop-service'
 import { SetupService } from '../services/setup-service'
+import type {
+  RoleSeatCount, SeatCountChange, TeamService, TeamSettingsInput, TeamSnapshot,
+} from '../services/team-service'
+import type { AppRole } from '../../installer/src/install-config'
 import { UserService } from '../services/user-service'
 import type { UserRepository } from '../services/contracts/user-repository'
 import type { ShopRepository } from '../services/contracts/shop-repository'
@@ -120,6 +126,13 @@ export class DesktopHostController {
     private readonly backup?: BackupService,
     private readonly approvals?: ApprovalQueueService,
     private readonly demoData?: DemoDataService,
+    /**
+     * Team size and seats. Optional so every existing fixture keeps constructing the host unchanged; a host without it
+     * reports the seat channels as unavailable rather than silently pretending there are no seats.
+     */
+    private readonly team?: TeamService,
+    /** Which application this is. A client refuses the Admin at login unless the shop allows it. */
+    private readonly appRole: AppRole = 'server',
   ) {}
 
   async initialize(): Promise<void> {
@@ -147,6 +160,7 @@ export class DesktopHostController {
         appVersion: this.appVersion,
         edition: setupContext.edition,
         runtime: 'desktop' as const,
+        appRole: this.appRole,
       },
       settings: visibleSettings,
       setupContext,
@@ -201,6 +215,10 @@ export class DesktopHostController {
     this.editionCache = context.edition
     if (this.users.countUsers() === 0) throw new Error('Complete first-run setup before signing in.')
     const user = await this.auth.login(input)
+    // "One active login per account", on by default. Applying it *after* a successful sign-in, not before, means a
+    // failed attempt never evicts somebody else's working session — otherwise anybody who typed a colleague's username
+    // wrongly would log them out.
+    if (this.singleLoginPerAccount()) this.invalidateSessions(user.id, senderId)
     this.sessions.set(senderId, { userId: user.id, lastActivityAt: this.now() })
     return user
   }
@@ -259,6 +277,50 @@ export class DesktopHostController {
     return this.userService.listUsers(this.requireSignedIn(senderId))
   }
 
+  // ─── Team size and seats ─────────────────────────────────────────────────────────────────────────────────────
+  // Every method here is Admin-only, matching the policy rows. The check is `requireAdmin`, so a direct call from a
+  // client or an IPC frame that skipped the policy table is still refused.
+
+  getTeamSnapshot(senderId: number): TeamSnapshot {
+    this.requireAdmin(senderId)
+    return this.requireTeam().getSnapshot()
+  }
+
+  setSeatCount(senderId: number, change: SeatCountChange): RoleSeatCount[] {
+    const admin = this.requireAdmin(senderId)
+    return this.requireTeam().setSeatCount(change, admin.username)
+  }
+
+  renameSeat(senderId: number, userId: string, fullName: string): void {
+    const admin = this.requireAdmin(senderId)
+    this.requireTeam().renameSeat(userId, fullName, admin.username)
+  }
+
+  async setSeatPassword(senderId: number, userId: string, password: string, confirmPassword: string): Promise<void> {
+    const admin = this.requireAdmin(senderId)
+    await this.requireTeam().setSeatPassword(userId, password, confirmPassword, admin.username)
+  }
+
+  updateTeamSettings(senderId: number, input: TeamSettingsInput): void {
+    const admin = this.requireAdmin(senderId)
+    this.requireTeam().updateSettings(input, admin.username)
+  }
+
+  getRoleSummary(senderId: number): Array<{ role: AssignableRole; summary: string }> {
+    this.requireAdmin(senderId)
+    return this.requireTeam().roleSummary()
+  }
+
+  /** The application this process is, so the login screen can show the right rule and the right refusal. */
+  getHostAppRole(): AppRole {
+    return this.appRole
+  }
+
+  private requireTeam(): TeamService {
+    if (!this.team) throw new Error('Team management is not available in this build.')
+    return this.team
+  }
+
   async createUser(senderId: number, input: CreateUserInput): Promise<PublicUser> {
     const actor = this.requireSignedIn(senderId)
     return this.userService.createUser(actor, input, this.requireEdition())
@@ -291,7 +353,10 @@ export class DesktopHostController {
   }
 
   getInventoryOverview(senderId: number, search = ''): InventoryOverview {
-    const { actor, edition } = this.requireInventoryAccess(senderId, 'products')
+    // Reading stock, not editing products. The brief gives every shop role "Stock (view)" — an ACCOUNT and a USER may
+    // see quantities, and a SUPERVISOR may see all stock including batches. Gating this on the products page meant
+    // "may edit products", which would have withheld stock from the two roles that exist to look at it.
+    const { actor, edition } = this.requireInventoryAccess(senderId, 'stock')
     return this.requireInventoryService().getOverview(actor, edition, search)
   }
 
@@ -316,6 +381,8 @@ export class DesktopHostController {
   }
 
   exportProductsCsv(senderId: number): string {
+    // Deliberately on 'products' (edit rights) rather than 'stock' (view): the export includes supplier cost columns,
+    // which a USER and an ACCOUNT must never see. This is the one inventory read that is not a plain view.
     const { actor, edition } = this.requireInventoryAccess(senderId, 'products')
     return this.requireInventoryService().exportProductsCsv(actor, edition)
   }
@@ -890,9 +957,30 @@ export class DesktopHostController {
     return toPublicUser(current)
   }
 
-  private invalidateSessions(userId: string): void {
+  /**
+   * Whether the shop has asked for one active login per account.
+   *
+   * Read from the settings row on every call rather than captured, so turning the toggle off in the Users and Seats
+   * screen takes effect at the next sign-in without a restart. A shop whose whole team works from one account across
+   * two desks can switch this off; one that does not gets the protection by default.
+   */
+  private singleLoginPerAccount(): boolean {
+    // Asked of the service that owns the setting, rather than reading the column here: a host that read its own copy
+    // of a rule drifts from the service the Users and Seats screen writes through, and the customer sees a toggle that
+    // does nothing. Absent `TeamService` (an older fixture) means the default, which is on.
+    const settings = this.team?.getSnapshot()
+    return settings ? settings.singleLoginPerAccount : true
+  }
+
+  /**
+   * Drop every session for an account, optionally sparing one.
+   *
+   * `keep` is the sender that just signed in. Sparing it is what makes "log the other one out" possible without
+   * logging out the person doing it, which would be a very confusing way to be told you may only have one session.
+   */
+  private invalidateSessions(userId: string, keep?: number): void {
     for (const [senderId, session] of this.sessions) {
-      if (session.userId === userId) this.sessions.delete(senderId)
+      if (session.userId === userId && senderId !== keep) this.sessions.delete(senderId)
     }
   }
 }

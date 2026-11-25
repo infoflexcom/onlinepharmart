@@ -11,6 +11,7 @@ import { SQLiteShopRepository } from '../db/sqlite-shop-repository'
 import { SQLiteUserRepository } from '../db/sqlite-user-repository'
 import { AuthService } from '../services/auth-service'
 import { ShopService } from '../services/shop-service'
+import { TeamService } from '../services/team-service'
 import { SetupService } from '../services/setup-service'
 import { readBuildProfile, resolveResourcesPath } from './install-config-reader'
 import { UserService } from '../services/user-service'
@@ -31,7 +32,7 @@ import { createWindowsFirewallProbe } from './mobile-firewall'
 import { KeepRunningController } from './keep-running'
 import { verifyPassword } from './password-verifier'
 import { friendlyHostName } from '../shared/mobile/host-name'
-import { resolveInstallerCurrency } from './install-config-reader'
+import { readAppRole, resolveInstallerCurrency } from './install-config-reader'
 
 const DEFAULT_APP_NAME = 'Infoflex'
 app.setName(DEFAULT_APP_NAME)
@@ -151,10 +152,15 @@ app.whenReady().then(async () => {
   // The installer's Region and Currency page wrote its answer to ProgramData; this is where the app picks it up
   // so the setup screen arrives with the customer's own currency already selected. An explicit environment
   // variable still wins, for vendor testing and for a support call that has to pin a currency.
+  const programDataPath = process.env.ProgramData ?? process.env.PROGRAMDATA ?? null
   const installerChoice = resolveInstallerCurrency({
     environmentOverride: process.env.INFOFLEX_INSTALLER_CURRENCY ?? null,
-    programData: process.env.ProgramData ?? process.env.PROGRAMDATA ?? null,
+    programData: programDataPath,
   })
+  // Whether this installation is the Server or a Client. The installer wrote it into the same file as the currency,
+  // and it decides two things the brief is explicit about: only the Server opens the database, and each login page
+  // accepts only its own roles. Read once at startup, before the database or any window exists.
+  const appRole = readAppRole({ programData: programDataPath })
   if (installerChoice.problem) console.warn(installerChoice.problem)
   if (installerChoice.code) {
     try {
@@ -185,8 +191,31 @@ app.whenReady().then(async () => {
   if (buildProfile) {
     console.info(`Build profile: currency ${buildProfile.defaultCurrencyCode}${buildProfile.lockCurrency ? ' (locked)' : ''}, version ${buildProfile.appVersion}`)
   }
-  const setupService = new SetupService(repository, userRepository, repository, licenseManager, undefined, undefined, buildProfile)
-  const authService = new AuthService(userRepository, repository, auditContext)
+  // Seat administration for team size, and the bootstrap that lets first-run setup create the seats it promised.
+  const teamService = new TeamService(database)
+  const setupService = new SetupService(
+    repository, userRepository, repository, licenseManager, undefined, undefined, buildProfile,
+    {
+      readCaps: () => {
+        const caps = teamService.readCounts()
+        const read = (role: 'ACCOUNT' | 'USER' | 'SUPERVISOR') => caps.find((entry) => entry.role === role)?.licenceCap ?? null
+        return { account: read('ACCOUNT'), user: read('USER'), supervisor: read('SUPERVISOR') }
+      },
+      createSeats: (input, actor) => {
+        // Seat counts are set first so the rows the seats live in exist, then the seats are created by the same
+        // service the Users and Seats screen uses — one implementation of the cap and floor rules, not two.
+        teamService.setSeatCount({ role: 'ACCOUNT', seats: input.account }, actor)
+        teamService.setSeatCount({ role: 'USER', seats: input.user }, actor)
+        teamService.setSeatCount({ role: 'SUPERVISOR', seats: input.supervisor }, actor)
+      },
+    },
+  )
+  const teamServiceRef = teamService
+  const authService = new AuthService(userRepository, repository, auditContext, undefined, undefined, {
+    app: appRole,
+    // Read on every attempt rather than captured, so switching this on takes effect without restarting the app.
+    allowAdminOnClients: () => teamServiceRef.getSnapshot().allowAdminOnClients,
+  })
   const userService = new UserService(userRepository, repository)
   const inventoryService = new ProductInventoryService(database, repository, { deviceName: hostname() })
   const pointOfSaleService = new PointOfSaleService(database, repository, { workstation: hostname() })
@@ -294,6 +323,8 @@ app.whenReady().then(async () => {
     backupService,
     approvalQueue,
     demoDataService,
+    teamService,
+    appRole,
   )
   await hostController.initialize()
   licenseManager.startBackgroundCheckIns()

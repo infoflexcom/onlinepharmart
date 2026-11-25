@@ -30,9 +30,33 @@ export interface InstallerCurrencyChoice {
   isCustom: boolean
 }
 
+/**
+ * Which of the two applications this installation is.
+ *
+ * The brief ships two installers and asks for two sets of icons, two login pages with different rules, and a Server
+ * that owns the database while clients hold nothing. That distinction has to be recorded on disk by the installer,
+ * because at startup the app cannot otherwise tell a till from a server — and getting it wrong would let a client
+ * believe it owns the database.
+ *
+ * `server` is the default for a file that does not say, because the only way to reach a client install without the
+ * installer is to copy files by hand, which the product does not support.
+ */
+export type AppRole = 'server' | 'client'
+
+export const APP_ROLES: readonly AppRole[] = ['server', 'client']
+
+export function isAppRole(value: unknown): value is AppRole {
+  return value === 'server' || value === 'client'
+}
+
 export interface InstallConfig {
   format: 'infoflex-install-config'
   version: number
+  /**
+   * Server or client. Optional on read so a file written before this field existed still loads, and defaulted to
+   * `server` — see `appRoleFromInstallConfig`.
+   */
+  appRole?: AppRole
   /** ISO 8601, so a support call can tell when the shop was installed. */
   writtenAt: string
   currency: InstallerCurrencyChoice
@@ -64,15 +88,33 @@ export function createInstallConfig(input: {
   writtenAt: string
   installerKind: 'online' | 'offline'
   appVersion: string
+  /**
+   * Which application the installer is laying down.
+   *
+   * Optional so a caller that has not been taught about the split keeps working and produces a server install, which
+   * is what the single installer used to be. The NSIS script always writes it explicitly.
+   */
+  appRole?: AppRole
 }): InstallConfig {
   return {
     format: 'infoflex-install-config',
     version: INSTALL_CONFIG_VERSION,
     writtenAt: input.writtenAt,
+    appRole: input.appRole ?? 'server',
     currency: toInstallerCurrencyChoice(input.currency),
     installerKind: input.installerKind,
     appVersion: input.appVersion,
   }
+}
+
+/**
+ * The application role a config file names, defaulting to `server` when it says nothing.
+ *
+ * Read as a function of its own so the startup path has one answer and the meaning of an old file is written down once:
+ * a file from before this field existed was written by the single-app installer, which was the server.
+ */
+export function appRoleFromInstallConfig(config: InstallConfig | null): AppRole {
+  return isAppRole(config?.appRole) ? config.appRole : 'server'
 }
 
 export function serializeInstallConfig(config: InstallConfig): string {
@@ -111,9 +153,14 @@ export function parseInstallConfig(text: string): InstallConfig | null {
   if (typeof choice.thousandsSeparator !== 'string' || typeof choice.decimalSeparator !== 'string') return null
   if (typeof record.writtenAt !== 'string') return null
   if (typeof record.appVersion !== 'string') return null
+  // An unrecognised role is treated as absent rather than rejecting the whole file: a tenant's currency choice is
+  // still worth honouring, and the role defaults to server, which is the safe reading (a server that thinks it is a
+  // server is a working install; a client that is mistaken for a server would try to open the database).
+  const appRole = isAppRole(record.appRole) ? record.appRole : undefined
   return {
     format: 'infoflex-install-config',
     version: INSTALL_CONFIG_VERSION,
+    ...(appRole ? { appRole } : {}),
     writtenAt: record.writtenAt,
     installerKind: record.installerKind,
     appVersion: record.appVersion,

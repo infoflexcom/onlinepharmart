@@ -13,6 +13,7 @@
  * architecture exists to prevent. `no-io.test.ts` enforces this by walking the import graph.
  */
 export * from './roles'
+export * from './capabilities'
 export * from './policy'
 export * from './surface'
 export * from './money'

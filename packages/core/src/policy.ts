@@ -17,6 +17,7 @@
  * historical value in the database that `resolveRole()` maps to `USER` before any check runs.
  */
 import type { Role } from './roles'
+import { rolesWith, type Capability } from './capabilities'
 
 /**
  * What kind of thing is being asked for.
@@ -46,11 +47,21 @@ export interface PolicyEntry {
 
 const ADMIN: readonly Role[] = ['ADMIN']
 const ADMIN_SUPERVISOR: readonly Role[] = ['ADMIN', 'SUPERVISOR']
-/** The till roles: everything the old CASHIER could do, plus the Admin. */
-const TILL: readonly Role[] = ['ADMIN', 'ACCOUNT', 'USER']
+/**
+ * The roles that may operate a till: take an order and a payment.
+ *
+ * Deriving this from capabilities rather than writing `['ADMIN','ACCOUNT','USER']` is the whole point of
+ * `capabilities.ts`: the brief says a USER may *generate an order* but a USER may not *take payment*, so there is no
+ * single "till" role set any more. `TILL` is retained only for the surfaces both may genuinely reach — reading stock,
+ * building an order — and everything money-shaped now names its own capability.
+ */
+const TILL: readonly Role[] = rolesWith('build_order')
 /** Read-only review surfaces: an audit-only supervisor may look, and the Admin may do more elsewhere. */
-const REVIEW: readonly Role[] = ['ADMIN', 'SUPERVISOR']
+const REVIEW: readonly Role[] = rolesWith('view_audit')
 const EVERYONE: readonly Role[] = ['ADMIN', 'SUPERVISOR', 'ACCOUNT', 'USER']
+
+/** Roles holding a named capability. The single way a route says who may use it. */
+const withCapability = (capability: Capability): readonly Role[] => rolesWith(capability)
 
 function entry(roles: readonly Role[], note: string): PolicyEntry {
   return { roles, anonymous: false, note }
@@ -94,6 +105,15 @@ export const POLICY = {
   'ipc:users:deactivate': entry(ADMIN, 'Deactivating an account is an Admin act.'),
   'ipc:users:reset-password': entry(ADMIN, 'Resetting another person\'s password is an Admin act.'),
   'ipc:users:unlock': entry(ADMIN, 'Clearing a lockout is an Admin act.'),
+  // Team size and seats. The brief: "only the Admin creates/edits users and passwords". Every row below is Admin-only
+  // for that reason, including the ones that only read, because the seat table carries people's names and last-login
+  // times and is not a supervisor's business.
+  'ipc:team:get-snapshot': entry(ADMIN, 'The Users and Seats screen is an Admin screen.'),
+  'ipc:team:set-seats': entry(ADMIN, 'Changing how many accounts a role may have is an Admin act.'),
+  'ipc:team:rename-seat': entry(ADMIN, 'Naming a seat identifies a person.'),
+  'ipc:team:set-seat-password': entry(ADMIN, 'Setting a password is the Admin\'s alone; there is no self sign-up.'),
+  'ipc:team:update-settings': entry(ADMIN, 'The toggles on this screen change how everyone signs in.'),
+  'ipc:team:get-role-summary': entry(ADMIN, 'The role summary is part of the Admin\'s own screen.'),
 
   // ── Desktop IPC: approvals ──────────────────────────────────────────────────────────────────────────────
   'ipc:approvals:list-pending': entry(ADMIN_SUPERVISOR, 'A supervisor reviews pending requests.'),
@@ -102,7 +122,7 @@ export const POLICY = {
   'ipc:approvals:resolve': entry(ADMIN, 'Resolving an approval authorises a money or stock movement, which a supervisor no longer holds.'),
 
   // ── Desktop IPC: inventory ──────────────────────────────────────────────────────────────────────────────
-  'ipc:inventory:get-overview': entry(TILL, 'The till and the back office both read stock.'),
+  'ipc:inventory:get-overview': entry(withCapability('view_stock'), 'Everyone who works the floor reads stock quantities; cost is withheld from every role but the Admin.'),
   'ipc:inventory:save-product': entry(ADMIN, 'Editing a product changes prices and pack sizes.'),
   'ipc:inventory:import-csv': entry(ADMIN, 'A bulk import can rewrite the catalogue.'),
   'ipc:inventory:import-excel': entry(ADMIN, 'A bulk import can rewrite the catalogue.'),
@@ -122,11 +142,13 @@ export const POLICY = {
   // ── Desktop IPC: point of sale ──────────────────────────────────────────────────────────────────────────
   'ipc:pos:list-customers': entry(TILL, 'The till needs the customer list.'),
   'ipc:pos:create-customer': entry(TILL, 'A new customer is created at the counter.'),
-  'ipc:pos:quote-sale': entry(TILL, 'Quoting a sale computes prices; it stores nothing.'),
-  'ipc:pos:complete-sale': entry(TILL, 'Completing a sale is the till\'s core act.'),
+  'ipc:pos:quote-sale': entry(withCapability('build_order'), 'Quoting computes prices and stores nothing; a USER needs it to build an order.'),
+  // Only ACCOUNT (and Admin) may take payment and finalise. A USER builds an order; an ACCOUNT finalises it.
+  'ipc:pos:complete-sale': entry(withCapability('take_payment'), 'Finalising takes money, which a USER may not do. This is the phase\'s sharpest rule.'),
   'ipc:pos:list-sales': entry(TILL, 'The till reviews the sales it made.'),
-  'ipc:pos:get-receipt': entry(TILL, 'Re-reading a receipt is a till act, and every read is logged.'),
-  'ipc:pos:print-receipt': entry(TILL, 'Every print is recorded in print_log with a copy number.'),
+  'ipc:pos:get-receipt': entry(withCapability('take_payment').concat(['USER'] as const), 'An ACCOUNT re-reads what it printed; a USER reads back its own unpaid order slip. Scoped by the host.'),
+  // "ACCOUNT ... the ONLY role (besides Admin) that can PRINT or REPRINT receipts, invoices and credit notes."
+  'ipc:pos:print-receipt': entry(withCapability('print_documents'), 'Only ACCOUNT and Admin may print; every copy is recorded in print_log with a copy number.'),
   'ipc:pos:hold-cart': entry(TILL, 'Holding a cart is a till act.'),
   'ipc:pos:list-held-carts': entry(TILL, 'A held cart is visible to the till.'),
   'ipc:pos:recall-held-cart': entry(TILL, 'Recalling a held cart is a till act.'),
@@ -135,27 +157,32 @@ export const POLICY = {
 
   // ── Desktop IPC: returns ───────────────────────────────────────────────────────────────────────────────
   'ipc:returns:find-sale': entry(TILL, 'A return starts by finding the sale.'),
-  'ipc:returns:create': entry(TILL, 'Raising a return request is a till act; approving it is not.'),
+  'ipc:returns:create': entry(withCapability('process_returns'), 'A USER may not process returns: "CANNOT ... process returns" is explicit in the brief.'),
   'ipc:returns:list': entry(TILL, 'The return list is the till\'s own work.'),
   'ipc:returns:get-document': entry(TILL, 'Reading a credit note the till issued.'),
   'ipc:returns:resolve-approval': entry(ADMIN, 'Approving a return authorises refunding money or restocking goods.'),
-  'ipc:returns:print-document': entry(TILL, 'Printing a credit note is recorded in the print log.'),
+  'ipc:returns:print-document': entry(withCapability('print_documents'), 'A credit note is a money document; only ACCOUNT and Admin may print one.'),
 
   // ── Desktop IPC: reports and cash ──────────────────────────────────────────────────────────────────────
   // Deliberately not ADMIN-only, and this is the policy that most needed reading rather than guessing: the host
   // already opens the reports page to a till user and hands back a PERSONAL report with cost and profit columns
   // blanked out (`adminReports: null`, `cogsMinor: null`). Narrowing the table to Admin here would not add a rule;
   // it would remove a screen a cashier is entitled to and has been since Phase 6.
-  'ipc:reports:get-accounting': entry(REVIEW.concat(['ACCOUNT', 'USER'] as const), 'The host scopes the answer: the Admin and an audit supervisor see the whole shop, a till user sees a personal report with costs withheld.'),
+  // "USER ... CANNOT ... see reports." An ACCOUNT still gets its own personal figures — that is how a cashier
+  // reconciles a shift — but a USER is not a till operator and has nothing to reconcile.
+  // Realigned this phase: the brief gives a SUPERVISOR "Audit and Stock (view)" and no reports, and gives a USER no
+  // reports at all. So the row is derived from `view_reports`, which is ADMIN and ACCOUNT, rather than from the audit
+  // capability — the earlier row had granted the supervisor the whole shop's accounts, which contradicted its own menu.
+  'ipc:reports:get-accounting': entry(withCapability('view_reports'), 'The Admin sees the whole shop; an ACCOUNT sees a personal report with costs withheld; a SUPERVISOR and a USER see no reports at all.'),
   // Same reasoning as the report itself: the export is scoped by the same host service, so refusing a till user
   // here would refuse the personal report they were just shown.
-  'ipc:reports:export-csv': entry(REVIEW.concat(['ACCOUNT', 'USER'] as const), 'Exports whatever the same caller was just shown, scoped by the host.'),
-  'ipc:reports:export-excel': entry(REVIEW.concat(['ACCOUNT', 'USER'] as const), 'Exports whatever the same caller was just shown, scoped by the host.'),
-  'ipc:reports:export-pdf': entry(REVIEW.concat(['ACCOUNT', 'USER'] as const), 'Exports whatever the same caller was just shown, scoped by the host.'),
-  'ipc:reports:close-day': entry(ADMIN, 'Closing the day freezes the business date and the reconciliation.'),
-  'ipc:reports:open-cashier-shift': entry(TILL, 'A till operator opens their own shift.'),
-  'ipc:reports:close-cashier-shift': entry(TILL, 'A till operator closes their own shift; the host additionally refuses another person\'s shift.'),
-  'ipc:reports:drawer-event': entry(TILL, 'Recording a drawer event belongs to the person whose shift it is.'),
+  'ipc:reports:export-csv': entry(withCapability('view_reports'), 'Exports whatever the same caller was just shown, scoped by the host. A SUPERVISOR and a USER have no report to export.'),
+  'ipc:reports:export-excel': entry(REVIEW.concat(['ACCOUNT'] as const), 'Exports whatever the same caller was just shown, scoped by the host. A USER has no report to export.'),
+  'ipc:reports:export-pdf': entry(REVIEW.concat(['ACCOUNT'] as const), 'Exports whatever the same caller was just shown, scoped by the host. A USER has no report to export.'),
+  'ipc:reports:close-day': entry(withCapability('close_day'), 'Closing the day freezes the business date and the reconciliation; it is the Admin\'s act.'),
+  'ipc:reports:open-cashier-shift': entry(withCapability('do_cash_count'), 'A till operator opens their own shift; a USER does not handle cash.'),
+  'ipc:reports:close-cashier-shift': entry(withCapability('do_cash_count'), 'A till operator closes their own shift; the host additionally refuses another person\'s shift.'),
+  'ipc:reports:drawer-event': entry(withCapability('do_cash_count'), 'Recording a drawer event belongs to the person whose shift it is.'),
 
   // ── Desktop IPC: settings ──────────────────────────────────────────────────────────────────────────────
   'ipc:settings:update-store-details': entry(ADMIN, 'Shop identity appears on every receipt.'),

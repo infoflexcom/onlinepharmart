@@ -60,7 +60,12 @@ function createFixture(policy: VerifiedLicensePolicy | null = TEST_LICENSE_POLIC
   let generatedId = 0
   const license: LicensePolicyProvider = { getVerifiedPolicy: () => policy }
   const setup = new SetupService(shop, users, shop, license, () => new Date('2026-11-17T12:00:00.000Z'), () => `user-${++generatedId}`)
-  const auth = new AuthService(users, shop, { deviceName: 'TEST-DESKTOP', ipAddress: null }, () => new Date('2026-11-17T12:00:00.000Z'), () => clock)
+  // Client PC: these tests sign in Cashiers and Supervisors, which a server install correctly refuses. The role is
+  // declared here rather than the rule being relaxed, so the sign-in scoping stays enforced in every fixture that does
+  // not need to exercise a server.
+  const auth = new AuthService(users, shop, { deviceName: 'TEST-DESKTOP', ipAddress: null }, () => new Date('2026-11-17T12:00:00.000Z'), () => clock,
+    { app: 'client', allowAdminOnClients: () => true },
+  )
   const shopService = new ShopService(shop, { deviceName: 'TEST-DESKTOP', ipAddress: null }, () => new Date('2026-11-17T12:00:00.000Z'), () => `entry-${++generatedId}`)
   const userService = new UserService(users, shop, () => new Date('2026-11-17T12:00:00.000Z'), () => `managed-user-${++generatedId}`)
   const inventory = new ProductInventoryService(database, shop, {
@@ -246,14 +251,21 @@ describe('first-run setup and authentication phase', () => {
       expect(initialAdminOverview.products.map((product) => product.id)).toContain(inventoryProduct.id)
       expect(initialAdminOverview.products.find((product) => product.id === inventoryProduct.id)?.costMinor).toBe(100n)
 
-      const cashierOn = await fixture.host.createUser(1, cashierInput('cashier.on'))
-      const cashierOff = await fixture.host.createUser(1, cashierInput('cashier.off', {
-        ...defaultPermissions('CASHIER'),
-        allowWholesale: false,
-        maxDiscountBasisPoints: 725,
-        allowCreditSales: true,
-        returnLimitMinor: 123456n,
-      }))
+      // These are ACCOUNTs, not the deprecated CASHIER. The brief gives the till to ACCOUNT; a CASHIER row now resolves
+      // to USER, which may build an order but may not export a product list or open reports. Using the role the brief
+      // actually names keeps this test about the till rather than about the alias.
+      const cashierOn = await fixture.host.createUser(1, { ...cashierInput('cashier.on'), role: 'ACCOUNT' })
+      const cashierOff = await fixture.host.createUser(1, {
+        ...cashierInput('cashier.off'),
+        role: 'ACCOUNT',
+        permissions: {
+          ...defaultPermissions('CASHIER'),
+          allowWholesale: false,
+          maxDiscountBasisPoints: 725,
+          allowCreditSales: true,
+          returnLimitMinor: 123456n,
+        },
+      })
       const supervisorInput: CreateUserInput = {
         ...cashierInput('supervisor'), fullName: 'Store Supervisor', role: 'SUPERVISOR',
         permissions: { ...defaultPermissions('SUPERVISOR'), maxDiscountBasisPoints: 250 },
@@ -266,7 +278,9 @@ describe('first-run setup and authentication phase', () => {
       await fixture.host.login(3, { username: 'cashier.off', password: CASHIER_PASSWORD })
       await fixture.host.login(4, { username: 'supervisor', password: CASHIER_PASSWORD })
       expect(fixture.host.getInventoryOverview(2).products[0]?.costMinor).toBeNull()
-      expect(() => fixture.host.exportProductsCsv(2)).not.toThrow()
+      // A product-list export carries supplier cost columns, so it needs product-edit rights, which belong to the Admin.
+      // An ACCOUNT may view stock (the line above) but may not export the price file.
+      expect(() => fixture.host.exportProductsCsv(2)).toThrow(/permission/i)
       expect(() => fixture.host.saveProduct(2, inventoryProductDraft({ sku: 'CASHIER-CREATE' }))).toThrow(/Admin/u)
       expect(() => fixture.host.saveProduct(4, inventoryProductDraft({ sku: 'SUPERVISOR-CREATE' }))).toThrow(/Admin/u)
       expect(fixture.host.canMakeWholesaleSale(2)).toBe(true)
@@ -274,7 +288,10 @@ describe('first-run setup and authentication phase', () => {
       expect(fixture.host.openPage(2, 'pos')).toEqual({ page: 'pos' })
       expect(fixture.host.listPosCustomers(2)).toEqual([])
       expect(() => fixture.host.listPosCustomers(0)).toThrow(/session has expired/i)
-      expect(fixture.host.openPage(4, 'reports')).toEqual({ page: 'reports' })
+      // A SUPERVISOR is audit-only. It may export the *audit* trail but holds no view of the shop's accounts, so the
+      // reports page is refused. This assertion used to require it to open; the brief moved, and the stricter
+      // expectation is recorded here rather than the page being reopened to keep an older test passing.
+      expect(() => fixture.host.openPage(4, 'reports')).toThrow(/permission/i)
       expect(() => fixture.host.openPage(2, 'users')).toThrow(/permission/i)
       expect(() => fixture.host.openPage(2, 'mobile')).toThrow(/permission/i)
       expect(() => fixture.host.openPage(2, 'settings')).toThrow(/permission/i)
@@ -284,7 +301,9 @@ describe('first-run setup and authentication phase', () => {
       expect(() => fixture.host.getShopSettings(0)).toThrow(/session has expired/i)
       expect(() => fixture.host.updateIdleTimeout(2, 30)).toThrow(/admin/i)
       expect(fixture.host.openPage(2, 'returns')).toEqual({ page: 'returns' })
-      expect(fixture.host.openPage(4, 'returns')).toEqual({ page: 'returns' })
+      // A SUPERVISOR is audit-only: the brief says it "cannot ... sell, change stock, or approve anything", and returns
+      // are a money movement. This assertion previously required the page to open for a supervisor.
+      expect(() => fixture.host.openPage(4, 'returns')).toThrow(/permission/i)
 
       const received = fixture.host.receiveStock(1, {
         productId: inventoryProduct.id, expectedProductVersion: inventoryProduct.rowVersion,
@@ -310,7 +329,10 @@ describe('first-run setup and authentication phase', () => {
       }
       const invoke = (channel: string, senderId: number, ...args: unknown[]) => handlers.get(channel)!(ipcEvent(senderId), ...args)
       await expect(Promise.resolve().then(() => invoke('inventory:save-product', 2, inventoryProductDraft({ sku: 'IPC-CASHIER' })))).rejects.toThrow(/Admin/u)
-      await expect(Promise.resolve().then(() => invoke('inventory:export-csv', 2))).resolves.toContain('HOST-001')
+      // A product export carries supplier cost, so it needs product-edit rights and is refused to an ACCOUNT. This
+      // asserts the same rule through the IPC channel that the direct host call above asserts, which is the point of
+      // the second half of this test: a forbidden action is refused whether it arrives as a method call or an IPC frame.
+      await expect(Promise.resolve().then(() => invoke('inventory:export-csv', 2))).rejects.toThrow(/permission/i)
       await expect(Promise.resolve().then(() => invoke('pos:list-customers', 2))).resolves.toEqual([])
       await expect(Promise.resolve().then(() => invoke('pos:list-customers', 0))).rejects.toThrow(/session has expired/i)
       await expect(Promise.resolve().then(() => invoke('inventory:save-product', 1, inventoryProductDraft({ sku: 'IPC-ADMIN', barcode: '6677889900113' })))).resolves.toMatchObject({ sku: 'IPC-ADMIN' })
@@ -414,7 +436,10 @@ describe('first-run setup and authentication phase', () => {
       await fixture.host.initialize()
       await fixture.host.completeFirstRun(firstRunInput())
       await fixture.host.login(1, { username: 'shopadmin', password: ADMIN_PASSWORD })
-      await fixture.host.createUser(1, cashierInput('reports.cashier'))
+      // ACCOUNT, not CASHIER: the brief gives an ACCOUNT the day's reports and a personal view with costs withheld.
+      // A CASHIER row resolves to USER, which has no reports at all, so the personal-report behaviour this test exists
+      // for belongs to ACCOUNT.
+      await fixture.host.createUser(1, { ...cashierInput('reports.cashier'), role: 'ACCOUNT' })
       await fixture.host.login(2, { username: 'reports.cashier', password: CASHIER_PASSWORD })
 
       const day = { period: 'DAY' as const, date: '2026-11-17' }

@@ -808,3 +808,55 @@ need a second machine or real hardware.
 - [ ] **`needs manual check on real hardware` — a revoked client device is refused at its next request.** Approve a
   client, confirm it works, revoke it on the server, and confirm the client's very next request is refused rather than
   continuing on a cached session.
+
+## Phase 17 — first-run setup, seats, sign-in and the login pages (owed, not blocking)
+
+Everything software-checkable in Phase 17 is covered by the suite (1978 tests). The entries below need a Windows machine,
+a second PC, or the vendor's signing key, and are written down so they cannot be mistaken for done.
+
+- [ ] **`needs manual check on real hardware` — one full first run on Windows, starting from the installer.** Install the
+  Server build on a clean Windows 10/11 machine, activate a real licence with the vendor's key, and complete setup with
+  a team size of 2 Accounts, 2 Users and 1 Supervisor. Confirm: the setup refuses to finish with an empty store name; the
+  steppers stop at the licence's caps; the Users and Seats screen then lists five seats marked **Needs password**; and
+  each can be named and given a password.
+- [ ] **`needs manual check on real hardware` — the seats survive a restart.** Close and reopen the app after setup and
+  confirm the five seats are still there, still need passwords, and that giving one a password lets that person sign in
+  on a client PC and on no other application.
+- [ ] **`needs manual check on real hardware` — the Admin is refused on a Client PC, and the staff roles on the Server.**
+  On the installed Client, try to sign in as the Admin: the refusal must be the ordinary "Unable to sign in…" sentence
+  with nothing added. On the Server, try an Account: same sentence, and the audit log records
+  `reason: wrong_application` with `passwordVerified: true`. Then turn on "Allow Admin sign-in on client PCs" and confirm
+  the Admin can sign in on the Client **without restarting the app**.
+- [ ] **`needs manual check on real hardware` — the two login pages look right at real screen sizes.** Full-screen logo
+  with the soft navy overlay, logo, product name, tagline, store name in small type, app version, and the show/hide
+  password control, on a 1366×768 till screen and on a 1920×1080 or larger back-office screen. Also at 125% and 150%
+  Windows scaling, where the logo must not crop the badge or the version line.
+- [ ] **`needs manual check on real hardware` — Windows Explorer draws both icons at 16, 32 and 256 px.** The ICO
+  directories are verified here by reading them back, but whether Explorer's 16 px view is legible is a judgement about
+  a screen. Check the desktop shortcut, the Start menu entry, the taskbar and Alt-Tab for both the Server and the Client,
+  and confirm the `SERVER` and `TILL` badges are tellable apart in a row of icons.
+- [ ] **`needs manual check on real hardware` — the installer's banner and sidebar show the right badge.** The two NSIS
+  bitmaps are generated per role and pointed at by `electron-builder.server.json` / `electron-builder.client.json`, but no
+  installer has been built. Confirm each installer's banner matches the build it belongs to.
+- [ ] **`needs manual check on real hardware` — the idle auto-logout fires at the configured minute.** Sit at a signed-in
+  till without touching it and confirm the session ends at the setting (default 15 minutes) and not before, then that
+  one active login per account really does end the first PC's session when the same account signs in on a second.
+- [ ] **`needs manual check on real hardware` — the approval PIN is demanded and accepted on a real approval.** Raise a
+  discount above the ceiling, approve it with the PIN, then attempt it with a wrong PIN. The wrong PIN must be refused
+  and the correct one must work after it, with no lockout (that is the stated design).
+- [ ] **`needs manual check on real hardware` — a lockout is cleared by the Admin and the person gets back in.** Five
+  wrong passwords on a client PC, then confirm the sixth attempt even with the right password is refused, that the Admin's
+  unlock restores access, and that the audit trail shows both the lockout reason and the unlock.
+- [ ] **`needs manual check on real hardware` — the sign-in refusal is not measurably faster or slower for a username
+  that exists.** The messages are asserted identical in the suite; timing is not, because a timing assertion in CI is
+  flaky and says nothing about a real PC. On real hardware, time a wrong password for a real Admin against a wrong
+  password for a username that does not exist, and confirm the difference is lost in the noise.
+- [ ] **`needs the vendor's key` — first-run setup against a real minted licence.** Every setup test runs against a
+  stubbed `LicensePolicyProvider`, because minting needs the vendor's Ed25519 private key, which is deliberately not in
+  this repository. Confirm the licence's per-role seat caps reach the setup screen's steppers and the Users and Seats
+  screen, and that a licence naming no cap allows a count rather than reading as zero.
+- [ ] **`needs manual check on real hardware` — a live shop upgrades through migration 17.** On a copy of a real v16
+  database, run the upgrade and confirm: every existing account keeps its role and can still sign in (the backfill sets
+  `password_set_at` for all of them), no seat count is lost, and the four new settings arrive with the documented
+  defaults — supervisor cost **off**, one login per account **on**, Admin on clients **off**, order expiry **120**
+  minutes.

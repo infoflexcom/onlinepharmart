@@ -18,6 +18,9 @@
 ; generated and read by nothing until this phase, so the file recorded the packaging version instead.
 !define INSTALLER_APP_VERSION "0.1.0"
 !define CUR_DEFAULT_EXAMPLE "₦1,234,567.50"
+; Which application this installer lays down. The app reads it back from install-config.json to know whether it owns
+; the database, and the two builds ship separate icons -- see docs/BRANDING-ASSETS.md.
+!define INSTALLER_APP_ROLE "server"
 !define INSTALLER_CONFIG_DIR "Infoflex"
 !define INSTALLER_CONFIG_FILE "install-config.json"
 !define MOBILE_PORT 43110
