@@ -231,8 +231,20 @@ export class MobileAdminService {
    * would be inviting an attestation made from a summary.
    */
   private auditSummary(admin: AuthenticatedPrincipal): MobileAuditSummary | null {
-    if (!this.host.getAuditSummary) return null
+    // `typeof` and not truthiness: the method is optional, and a host that has the property but cannot answer it - an
+    // empty array from a stub, a null from a service that was never wired - is a host with no audit to show. Calling
+    // anything that is not a function would take the whole dashboard down over an informational block.
+    if (typeof this.host.getAuditSummary !== 'function') return null
     const summary = this.host.getAuditSummary(this.publicUser(admin))
+    // Checked rather than trusted, for the same reason the print gate checks a kind the type says cannot be wrong: the
+    // value comes from a host this service does not own. `getAuditSummary` is optional so that an older host still
+    // compiles, and a host that answers it with nothing usable *is* an older host - it has no audit service to ask. What
+    // must not happen is the whole dashboard failing because an informational block could not be built: the day's sales,
+    // the stock alerts and the pending approvals are all still true, and the phone has a state for this ("This Server has
+    // no audit service") which is a more useful answer than an error.
+    if (!Array.isArray(summary?.unauditedDays) || !Array.isArray(summary.openFlags) || !Array.isArray(summary.auditedDays)) {
+      return null
+    }
     return {
       unauditedDays: summary.unauditedDays.map((day) => ({
         businessDate: day.businessDate,

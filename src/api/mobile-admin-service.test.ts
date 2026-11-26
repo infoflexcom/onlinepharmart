@@ -15,7 +15,8 @@ import { ApprovalQueueService } from '../services/approval-queue-service'
 import { ReturnService } from '../services/return-service'
 import { DailyAuditService } from '../services/daily-audit-service'
 import { createMobileAdminSurface } from './mobile-admin-surface'
-import { MobileStaleVersionError } from './mobile-admin-service'
+import { MobileAdminService, MobileStaleVersionError } from './mobile-admin-service'
+import type { MobileAdminHost } from './mobile-admin-service'
 import type { AuthenticatedPrincipal } from '../services/permissions'
 import type { LicenseSummary } from '../shared/license/types'
 import type { ProductDraft } from '../shared/inventory/types'
@@ -50,6 +51,7 @@ interface Harness {
   surface: ReturnType<typeof createMobileAdminSurface>
   database: Database.Database
   inventory: ProductInventoryService
+  pointOfSale: PointOfSaleService
   approvals: ApprovalQueueService
   admin: AuthenticatedPrincipal
   cashier: AuthenticatedPrincipal
@@ -124,6 +126,10 @@ async function createHarness(currencyCode = 'NGN', snapshot = license()): Promis
     surface,
     database,
     inventory,
+    // Handed out so a test can put a real sale on a real business day. A day owing an audit is derived from sales, day
+    // closes and shifts, so receiving stock is not enough to create one and a test that only received stock would be
+    // asserting on an empty shop.
+    pointOfSale: pos,
     approvals,
     admin: { userId: ADMIN_ID, username: 'admin', role: 'ADMIN' },
     cashier: { userId: CASHIER_ID, username: 'amaka', role: 'CASHIER' },
@@ -418,6 +424,104 @@ describe('the Admin phone surface', () => {
       // The surface has no sale-creating method at all: the phone is view-only for sales, by construction.
       const names = Object.getOwnPropertyNames(Object.getPrototypeOf(h.surface.service))
       expect(names.some((name) => /completeSale|quoteSale|createSale/iu.test(name))).toBe(false)
+    } finally {
+      h.close()
+    }
+  })
+})
+
+describe('the dashboard survives a Server that has no audit to show', () => {
+  /**
+   * `getAuditSummary` is the one optional method on the host, and optional means three different shapes reach this
+   * service in the field: a host written before this phase has no such property at all; a host whose audit service was
+   * never wired answers with something that is not a summary; and a real Server answers properly. The first two must
+   * both produce `audit: null` - which is how the phone learns to say "This Server has no audit service" - and neither
+   * may take the rest of the dashboard down with it, because the day's sales, the stock alerts and the pending approvals
+   * are all still true when the audit block cannot be built.
+   *
+   * Only the one method varies. Everything else stays the real host this Server wired, so these tests cannot pass on a
+   * looser contract than production runs on.
+   */
+  function hostWith(surfaceHost: MobileAdminHost, getAuditSummary: unknown): MobileAdminHost {
+    return { ...surfaceHost, getAuditSummary } as MobileAdminHost
+  }
+
+  const broken: Array<[string, unknown]> = [
+    ['a host written before this phase, which has no such method', undefined],
+    ['a host that answers with an empty array instead of a summary', []],
+    ['a host that answers with null', null],
+    ['a host that answers with a summary missing its flags', { unauditedDays: [], auditedDays: [] }],
+  ]
+
+  it.each(broken)('reports no audit service for %s, and still returns the day', async (_label, answer) => {
+    const h = await createHarness()
+    try {
+      const service = new MobileAdminService(hostWith(h.surface.host, answer))
+      const dashboard = service.dashboard(h.admin)
+      expect(dashboard.audit, 'null tells the phone this Server has no audit service').toBeNull()
+      // The rest of the dashboard is the point of the assertion above: a block that could not be built must not empty
+      // the screen around it.
+      expect(dashboard.header.storeName).toBe('Harbor Health Pharmacy')
+      expect(dashboard.header.currency.code).toBe('NGN')
+      expect(dashboard.counts).toMatchObject({ pendingApprovals: 0, connectedDevices: 1 })
+      expect(Array.isArray(dashboard.salesByCashierToday)).toBe(true)
+    } finally {
+      h.close()
+    }
+  })
+
+  it('returns the block when the Server really has an audit service, so the guard cannot pass by always refusing', async () => {
+    const h = await createHarness()
+    try {
+      // The harness wires a real DailyAuditService, so this is the production shape and not a double.
+      const dashboard = h.surface.service.dashboard(h.admin)
+      expect(dashboard.audit).not.toBeNull()
+      expect(Object.keys(dashboard.audit!).sort()).toEqual(['auditedDays', 'openFlags', 'unauditedDays'])
+      // An empty shop has nothing to audit yet, and empty is not the same answer as null: empty means every day with
+      // activity has been audited, null means there is no audit service to ask.
+      expect(dashboard.audit!.unauditedDays).toEqual([])
+      expect(dashboard.audit!.openFlags).toEqual([])
+      expect(dashboard.audit!.auditedDays).toBe(0)
+    } finally {
+      h.close()
+    }
+  })
+
+  it('lists the days a real Server has not audited yet, through the same service the desktop asks', async () => {
+    const h = await createHarness()
+    try {
+      // A product, stock for it, and a real sale - because a day owing an audit is derived from sales, day closes and
+      // shifts, so stock on the shelf is not a day anybody has to audit.
+      const admin = {
+        id: ADMIN_ID, fullName: 'Tunde Bakare', username: 'admin', role: 'ADMIN' as const, isActive: true, isLocked: false,
+        permissions: { allowWholesale: true, maxDiscountBasisPoints: 10_000, allowCreditSales: true, returnLimitMinor: 0n },
+      }
+      const productId = h.createProduct()
+      // Read back through the public list rather than a private getter, and rather than with SQL: the versions are the
+      // service's own bookkeeping, so the test should ask the service what they are the way a caller would.
+      const created = h.inventory.listProducts(admin, 'BOTH').find((row) => row.id === productId)
+      expect(created, 'the product just created is in the list').toBeDefined()
+      h.inventory.receiveStock({
+        productId, expectedProductVersion: created!.rowVersion, expectedStockVersion: created!.stockVersion,
+        quantity: '5', quantityUnit: 'pack', unitCost: '120.00', supplierName: 'Coastal Medical Supplies',
+        supplierReference: 'INV-1', note: '', batchNumber: 'LOT-1', expiryDate: '2028-12-31',
+      }, admin, 'BOTH')
+      const receipt = h.pointOfSale.completeSale({
+        idempotencyKey: 'mobile-dashboard-audit-day',
+        saleType: 'RETAIL',
+        items: [{ productId, quantity: '1' }],
+        payments: [{ method: 'CASH', amount: '250.00' }],
+      }, admin, 'BOTH').receipt
+      expect(receipt.receiptNumber).not.toBe('')
+      const before = h.surface.service.dashboard(h.admin)
+      expect(before.audit).not.toBeNull()
+      expect(before.audit!.unauditedDays.length, 'a day with a sale on it is a day owing an audit').toBeGreaterThan(0)
+      const day = before.audit!.unauditedDays[0]!
+      // Money crosses to the phone as text, because a bigint that survived JSON as a number would be a figure whose
+      // decimals the phone has to guess.
+      expect(typeof day.salesMinor).toBe('string')
+      expect(day.currencyCode).toBe('NGN')
+      expect(day.transactions).toBeGreaterThan(0)
     } finally {
       h.close()
     }

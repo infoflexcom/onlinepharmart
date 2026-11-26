@@ -1611,6 +1611,21 @@ coverage test reads as class names because it reads every string literal in that
 into named helper functions (`outcomeClass`, `flagBadgeClass`), where the extractor cannot see them, and **not** to add
 the component to `KNOWN_UNSTYLED`, a list that may only shrink.
 
+**A green gate was hiding three skipped tests, and one of them was failing.** `served-mobile-app.test.ts` is wrapped in
+`describe.skipIf(!built)`, because it serves the real PWA over the real HTTP routes and `npm test` on its own has to work
+on a checkout that has not been built. The phase gate ran `npm test` *before* `build:mobile`, so the file skipped itself
+every time the gate ran and reported "1 skipped" as though that were a fact about the product rather than about the order
+of the commands. It was the only thing that exercised the served `/api/v1/mobile/admin/dashboard` route, and that route
+was returning **400**: the audit block asked a host for a summary, and a host that answered with something that was not a
+summary — an empty array, a null, a property that was not a function — threw inside the dashboard instead of degrading.
+An informational block was able to take the day's sales, the stock alerts and the pending approvals down with it. The
+service now checks that the answer is callable and shaped before it builds anything, and maps every other answer to
+`audit: null`, which is the phone's "this Server has no audit service" state; four unit tests and the HTTP test reach the
+guard, and disabling it fails five. `check:phase19` builds the PWA **before** the tests run, so the suite the gate reports
+is the suite that exists: 121 files and 2271 tests, with nothing skipped and nothing failing, where the same gate a run
+earlier reported "1 skipped" and called it green. A skipped test is not a passed test, and a gate that skips it cannot say
+which it got.
+
 Three things this environment cannot prove. First, the harness clock: a test that seeds rows with the machine's own
 `datetime('now')` puts them outside the business day being audited and every check silently finds nothing, so every
 audit test passes an explicit `now`. Second, the browser preview (`preview-audit.ts`) implements the same workflow by the

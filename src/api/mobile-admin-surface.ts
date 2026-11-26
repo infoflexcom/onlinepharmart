@@ -16,6 +16,14 @@ import { BcryptAdminPasswordVerifier } from './admin-password'
 
 export interface MobileAdminSurface {
   service: MobileAdminService
+  /**
+   * The host the service was built on, which is this Server's own wiring of every method the phone can reach.
+   *
+   * Returned beside the service so a caller can reason about one method of it and keep the rest real - a test standing in
+   * for an older Server whose host has no audit service, for instance. It is the same object the service holds, not a
+   * copy, so reading it cannot disagree with what the service will do.
+   */
+  host: MobileAdminHost
 }
 
 export interface MobileAdminSurfaceDeps {
@@ -161,5 +169,8 @@ export function createMobileAdminSurface(deps: MobileAdminSurfaceDeps): MobileAd
     `).all(productId, limit) as never,
   }
 
-  return { service: new MobileAdminService(host) }
+  // The host is returned beside the service, not only folded into it: it is the Server's own wiring, and a caller that
+  // has to reason about one method of it - a test standing in for an older Server with no audit service, say - should be
+  // able to vary that one method and keep everything else real.
+  return { service: new MobileAdminService(host), host }
 }

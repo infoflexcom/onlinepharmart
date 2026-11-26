@@ -104,6 +104,13 @@ describe.skipIf(!built)('the mobile app the host serves', () => {
       const dashboard = await server.inject({ method: 'GET', url: '/api/v1/mobile/admin/dashboard', headers: { authorization: 'Bearer token' } })
       expect(dashboard.statusCode).toBe(200)
       expect(dashboard.json().header.storeName).toBe('Harbor Health Pharmacy')
+      // The audit block is null over the wire, not missing and not an empty list: null is how the phone learns that this
+      // Server has no audit service, and the rest of the dashboard still arrived. A block that could not be built must
+      // not take the day's sales down with it.
+      const body = dashboard.json() as { audit?: unknown; header: { storeName: string } }
+      expect('audit' in body, 'the audit key is present, so the phone can tell null from an old Server').toBe(true)
+      expect(body.audit).toBeNull()
+      expect(body.header.storeName).toBe('Harbor Health Pharmacy')
     } finally {
       await server.close()
     }
@@ -166,6 +173,11 @@ function proxyHost() {
       if (name === 'countConnectedDevices') return () => 0
       if (name === 'listProducts') return () => []
       if (name === 'pendingApprovalCount') return () => 0
+      // Named rather than left to the catch-all below, which answers *any* unknown method with an empty array. That is a
+      // plausible-looking lie about every method this double has not been told about, and a new optional method would
+      // silently be given one. Here it tells the truth about the case the dashboard has to survive: a Server whose host
+      // has no audit service, which is what an Admin upgrading from an older build is talking to.
+      if (name === 'getAuditSummary') return undefined
       return () => []
     },
   })

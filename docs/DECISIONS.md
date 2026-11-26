@@ -1503,6 +1503,16 @@ everywhere and quietly produces the "no audit service" message on a perfectly he
 mis-wired one. Making it required named all three stale test fixtures immediately. `MobileAdminHost.getAuditSummary` stays
 optional only because older hosts must keep compiling, and its absence maps to `null`, never to an empty list.
 
+Absence is checked by **shape**, not by truthiness, and the difference is not pedantry. `if (!host.getAuditSummary)` lets
+through an empty array — truthy, and what a stub or a catch-all test double answers with — and then calls it, so a host
+that has the property but cannot answer it took the entire dashboard down with a `TypeError` over an informational block.
+The service now checks that the answer is a function before calling it and that what comes back has the three arrays it
+needs before building anything; every other answer is `null`. The day's sales, the stock alerts and the pending approvals
+are all still true when the audit block cannot be built, and "this Server has no audit service" is a more useful answer
+than an error. `createMobileAdminSurface` returns the host beside the service so a test can vary that one method and keep
+the rest of the Server's wiring real, which is how four unit tests and the HTTP test reach the guard — disabling it fails
+five.
+
 ## The export contains exactly what the caller was shown, including the absence of things
 
 `buildAuditExportTables` is built from an already permission-gated report rather than from a second query, so a
