@@ -1642,14 +1642,33 @@ of Reports is the day summary because the section selector is Admin-only, sees t
 Admin sees the same panel under Debtors from a report whose `adminReports` is deliberately null, which is the proof the
 balances stopped living inside the Admin block; a payment reaches the bridge and the day is read again, so the figure on
 screen is the one the Server now holds; and a refusal arrives as an alert while the balances stay on screen, because a
-refusal to move money is not a reason to hide what is owed. (9 tests. Deleting the panel from the summary — restoring the
-original defect exactly — fails the three ACCOUNT tests; routing Debtors back through the Admin block fails the one that
-claims it does not.)
+refusal to move money is not a reason to hide what is owed. Deleting the panel from the summary — restoring the original
+defect exactly — fails the three ACCOUNT tests; routing Debtors back through the Admin block fails the one that claims it
+does not.
 
 One limit is recorded rather than papered over: `view_reports` is held only by ADMIN and ACCOUNT, and both also hold
 `record_debtor_payment`, so the panel's read-only branch is not reachable through this screen today. It is defensive — the
 offer is derived from the capability table rather than from the two roles that happen to reach the page — and it is tested
 where it lives.
+
+**Testing the debtor wiring left the rest of the screen untested**, so the file was finished rather than left half-built:
+21 tests now cover the export scope guard, the day close, the cashier shifts and the drawer. This screen is not the last
+one without a test — `PosWorkspace`, `MobileAccessWorkspace` and `InventoryWorkspace` are all larger and still have none —
+but it is the one this phase changed, and a screen that crashes on mount passes every service test written against it. The guards that matter are the ones that decide *whose* act something is — a till operator is offered no
+end-of-day close even with a cash position on the report, and no Close control on another cashier's shift, while an Admin
+is offered both; a cashier with a shift already open is not offered a second one; the drawer form exists only while a
+shift is open and will not submit without both an amount and a reason. Seven of these were disabled one at a time and each
+was caught, six by exactly one test.
+
+Writing them found a defect. The export asked for `exportSection` — the section the caller may export, which is the
+summary for anybody without a section selector — while the downloaded file was *named* from `section`, the one the screen
+was opened on. An ACCOUNT arriving at a detail section by deep link would have been given a correct summary in a file
+named for a valuation it did not contain, which is a file that misdescribes itself the moment somebody opens it a month
+later. Both are now built from the one value, and a test asserts the name and the requested section agree.
+
+The date assertions read the screen's own date field rather than a date written into the test. The field defaults to
+today, and today in this sandbox is not the business date the fixtures use, so a hard-coded expectation would make the
+test pass or fail on the calendar instead of on the code.
 
 The browser preview asks this question in a different vocabulary from the licensed host — by page access, keyed to
 `take_payment`, where the host's policy row requires `record_debtor_payment` — so the relationship between the two is

@@ -951,6 +951,29 @@ built.
 | File name | The file lands as `daily-audit-<date>.csv`, or `daily-audit-<date>-<username>.csv` for one Account | ☐ pass ☐ fail |
 | No PDF | Nothing on the audit screen offers a PDF, and no audit export reaches a printer or a print queue | ☐ pass ☐ fail |
 
+### The report file the Reports screen downloads
+
+Found while making debtor payments reachable in this phase: the export asked the Server for the section the caller may
+export, and named the downloaded file after the section the screen was opened on. For an Admin those are the same value;
+for an ACCOUNT they are not. These rows are about the Reports screen's own files, not the audit's.
+
+| Check | Expected on the machine | Status |
+| --- | --- | --- |
+| The name matches the contents | Signed in as an ACCOUNT, exporting CSV downloads a file whose name ends `-summary.csv` and whose contents are the summary | ☐ pass ☐ fail |
+| No detail section for a till role | An ACCOUNT has no report-section selector at all, and their file holds no valuation table and no purchases; the cost and gross-profit lines are present with nothing against them | ☐ pass ☐ fail |
+| An Admin's name follows the choice | Signed in as an Admin on the Inventory valuation section, the downloaded file is named for `valuation` and holds the valuation | ☐ pass ☐ fail |
+| All three writers | CSV, Excel and PDF each download a file of their own type, and the confirmation afterwards names the format that arrived | ☐ pass ☐ fail |
+
+### Whose act it is, on the Reports screen
+
+| Check | Expected on the machine | Status |
+| --- | --- | --- |
+| The day close is the Admin's | Signed in as an ACCOUNT, no **Save end-of-day close** control appears even though the expected-cash figures are on the report | ☐ pass ☐ fail |
+| Another cashier's shift | Signed in as an ACCOUNT, a colleague's open shift is listed and readable, with no counted-cash field and no **Close** control on it | ☐ pass ☐ fail |
+| The Admin may close any shift | Signed in as an Admin, that same shift offers a counted-cash field and **Close**, and the confirmation names the cashier and the over/short | ☐ pass ☐ fail |
+| One open shift each | A cashier who already has a shift open is not offered **Open my cashier shift** again | ☐ pass ☐ fail |
+| The drawer needs a reason | The drawer-event form appears only while a shift is open, and its button stays disabled until both an amount and a reason are typed | ☐ pass ☐ fail |
+
 ### The phone, over the shop's own LAN
 
 | Check | Expected on the handset | Status |

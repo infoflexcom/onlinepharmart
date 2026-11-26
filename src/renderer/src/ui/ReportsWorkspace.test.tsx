@@ -8,7 +8,14 @@ import { defaultDisplayOptions, formatMoney } from '@shared/currency/money'
 import type { InfoflexBridge } from '@shared/bridge'
 import type { PublicUser } from '@shared/auth/types'
 import type { BootstrapData } from '@shared/shop/types'
-import type { AccountingReport, DebtorReportRow, RecordDebtorPaymentInput } from '@shared/reports/types'
+import type {
+  AccountingReport,
+  CashierShiftReportRow,
+  CashPositionSummary,
+  DayCloseRecord,
+  DebtorReportRow,
+  RecordDebtorPaymentInput,
+} from '@shared/reports/types'
 import { can } from '../../../../packages/core/src/capabilities'
 import { ReportsWorkspace } from './ReportsWorkspace'
 
@@ -95,6 +102,37 @@ function report(overrides: Partial<AccountingReport> = {}, as: PublicUser): Acco
   }
 }
 
+/** An OPEN shift. `cashierId` decides two things the screen guards on, so tests set it deliberately. */
+function shift(overrides: Partial<CashierShiftReportRow> = {}): CashierShiftReportRow {
+  return {
+    id: 'shift-1', cashierId: 'ACCOUNT-1', cashierName: 'ACCOUNT Person',
+    openedAt: '2026-11-17T08:00:00.000Z', closedAt: null, status: 'OPEN', currencyCode: 'NGN',
+    openingFloatMinor: 10_000n, cashSalesMinor: 20_000n, cashRefundsMinor: 0n,
+    drawerAdjustmentsMinor: 0n, debtorCashMinor: 0n, expectedCashMinor: 30_000n,
+    countedCashMinor: null, varianceMinor: null, closedBy: '', closeNote: '',
+    ...overrides,
+  }
+}
+
+function cashPosition(overrides: Partial<CashPositionSummary> = {}): CashPositionSummary {
+  return {
+    businessDate: DAY, currencyCode: 'NGN', openingFloatMinor: 10_000n, cashSalesMinor: 20_000n,
+    cashRefundsMinor: 0n, drawerAdjustmentsMinor: 0n, debtorCashMinor: 0n, expectedCashMinor: 30_000n,
+    ...overrides,
+  }
+}
+
+function dayClose(overrides: Partial<DayCloseRecord> = {}): DayCloseRecord {
+  return {
+    id: 1, closeNumber: 'DC-00000001', businessDate: DAY, openedAt: '2026-11-17T00:00:00.000Z',
+    closedAt: '2026-11-17T19:00:00.000Z', closedBy: 'ADMIN Person', currencyCode: 'NGN',
+    salesTotalMinor: 123_000n, returnsTotalMinor: 19_000n, expectedCashMinor: 30_000n,
+    countedCashMinor: 29_500n, varianceMinor: -500n, note: 'Short by five hundred',
+    storeName: 'Harbor Health', storeAddress: '12 Dock Road, Lagos',
+    ...overrides,
+  }
+}
+
 const mounted: Array<{ root: { unmount(): void }; container: HTMLElement }> = []
 
 /** Each mount gets a container of its own: two React roots over one node is not two screens. */
@@ -107,11 +145,26 @@ async function mount(element: ReactElement): Promise<HTMLElement> {
   return holder
 }
 
+/**
+ * Every method this screen can call, named.
+ *
+ * A test double whose catch-all answers any unknown method with a plausible empty value is a lie about every method it
+ * has not been told about, so these are spelled out and a new call the screen grows has to be added here on purpose.
+ */
+interface Bridge {
+  getAccountingReport: ReturnType<typeof vi.fn>
+  recordDebtorPayment: ReturnType<typeof vi.fn>
+  exportReportCsv: ReturnType<typeof vi.fn>
+  exportReportExcel: ReturnType<typeof vi.fn>
+  exportReportPdf: ReturnType<typeof vi.fn>
+  closeReportingDay: ReturnType<typeof vi.fn>
+  openCashierShift: ReturnType<typeof vi.fn>
+  closeCashierShift: ReturnType<typeof vi.fn>
+  recordCashDrawerEvent: ReturnType<typeof vi.fn>
+}
+
 interface Harness {
-  bridge: {
-    getAccountingReport: ReturnType<typeof vi.fn>
-    recordDebtorPayment: ReturnType<typeof vi.fn>
-  }
+  bridge: Bridge
   container: HTMLElement
   text(): string
 }
@@ -120,19 +173,27 @@ async function mountScreen(
   as: PublicUser,
   overrides: Partial<InfoflexBridge> = {},
   initialSection?: 'summary' | 'debtors' | 'valuation',
+  reportOverrides: Partial<AccountingReport> = {},
 ): Promise<Harness> {
   const bridge = {
-    getAccountingReport: vi.fn(async () => report({}, as)),
+    getAccountingReport: vi.fn(async () => report(reportOverrides, as)),
     recordDebtorPayment: vi.fn(async (_input: RecordDebtorPaymentInput) => ({
       paymentNumber: 'DP-00000001', customerName: 'Bode Stores', receivedByName: as.fullName,
       paymentMethod: 'CASH', amountMinor: 25_000n, balanceBeforeMinor: 150_000n, balanceAfterMinor: 125_000n,
       reference: '', at: '2026-11-17T09:05:00.000Z',
     })),
-    exportReportCsv: vi.fn(async () => 'a,b'),
+    exportReportCsv: vi.fn(async () => 'Metric,Amount\nNet sales,1040.00'),
     exportReportExcel: vi.fn(async () => 'U3RvcmU='),
-    exportReportPdf: vi.fn(async () => ({ contentBase64: 'U3RvcmU=', fileName: 'report.pdf' })),
+    exportReportPdf: vi.fn(async () => 'U3RvcmU='),
+    closeReportingDay: vi.fn(async () => dayClose()),
+    openCashierShift: vi.fn(async () => shift()),
+    closeCashierShift: vi.fn(async () => shift({
+      status: 'CLOSED', closedAt: '2026-11-17T19:00:00.000Z', countedCashMinor: 29_500n,
+      varianceMinor: -500n, closedBy: 'ADMIN Person',
+    })),
+    recordCashDrawerEvent: vi.fn(async () => shift({ drawerAdjustmentsMinor: -2_000n })),
     ...overrides,
-  } as unknown as InfoflexBridge & Harness['bridge']
+  } as unknown as InfoflexBridge & Bridge
 
   const holder = await mount(
     <ReportsWorkspace bridge={bridge} bootstrap={BOOTSTRAP} user={as} initialSection={initialSection} />,
@@ -152,6 +213,27 @@ function setField(field: HTMLInputElement | HTMLSelectElement, value: string): v
   field.dispatchEvent(new Event('change', { bubbles: true }))
 }
 
+function button(container: HTMLElement, label: RegExp): HTMLButtonElement {
+  const found = [...container.querySelectorAll('button')].find((candidate) => label.test((candidate.textContent ?? '').trim()))
+  expect(found, `a button labelled ${String(label)}`).toBeDefined()
+  return found as HTMLButtonElement
+}
+
+function clicked(container: HTMLElement, label: string): HTMLButtonElement {
+  const found = [...container.querySelectorAll('button')].filter((candidate) => (candidate.textContent ?? '').trim() === label)
+  expect(found, `exactly one button labelled ${label}`).toHaveLength(1)
+  return found[0] as HTMLButtonElement
+}
+
+function press(target: HTMLElement): void {
+  target.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+}
+
+/** What the screen says happened, or null when it is reporting a refusal instead. */
+function status(container: HTMLElement): string | null {
+  return container.querySelector('[role="status"]')?.textContent ?? null
+}
+
 async function takePayment(harness: Harness, amount: string): Promise<void> {
   const open = harness.container.querySelector('button.debtor-take-payment') as HTMLButtonElement
   expect(open, 'the row offers the control').toBeDefined()
@@ -163,9 +245,22 @@ async function takePayment(harness: Harness, amount: string): Promise<void> {
   await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
 }
 
-beforeEach(() => { document.body.innerHTML = '' })
+const addedUrlMethods: string[] = []
+
+beforeEach(() => {
+  document.body.innerHTML = ''
+  // Added to the real `URL` rather than stubbing the global: replacing `URL` outright breaks `new URL(...)` everywhere,
+  // which costs a confusing failure in code that has nothing to do with downloads.
+  for (const [name, value] of Object.entries({ createObjectURL: (): string => 'blob:preview', revokeObjectURL: (): void => undefined })) {
+    if (typeof (URL as unknown as Record<string, unknown>)[name] !== 'function') {
+      (URL as unknown as Record<string, unknown>)[name] = value
+      addedUrlMethods.push(name)
+    }
+  }
+})
 
 afterEach(() => {
+  for (const name of addedUrlMethods.splice(0)) delete (URL as unknown as Record<string, unknown>)[name]
   for (const entry of mounted.splice(0)) {
     act(() => { entry.root.unmount() })
     entry.container.remove()
@@ -277,5 +372,229 @@ describe('taking a payment goes to the Server and the day is read again', () => 
     // The list is still there and still true: a refusal to move money is not a reason to hide what is owed.
     expect(screen.text()).toContain('Bode Stores')
     expect(screen.text()).toContain(formatMoney(150_000n, CURRENCY, DISPLAY))
+  })
+})
+
+describe('the export asks for the section the caller may export', () => {
+  /**
+   * `exportSection` is the screen's own scope guard: a caller with no section selector is exported the summary whatever
+   * section the screen was opened on. The prop is how a deep link would arrive, so the guard has to be the screen's
+   * rather than the navigation's.
+   */
+  it('exports an ACCOUNT the summary, and names the file after what it actually holds', async () => {
+    const downloaded: string[] = []
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(function (this: HTMLAnchorElement) { downloaded.push(this.download) })
+    try {
+      const screen = await mountScreen(user('ACCOUNT'), {}, 'valuation')
+      // Read off the screen rather than written down here: the date field defaults to today, and today in this sandbox is
+      // not the business date the fixtures use. The claim is that the export asks for the day the person is looking at,
+      // whatever day that is - hard-coding a date would make the test pass or fail on the calendar instead.
+      const onScreen = (screen.container.querySelector('input[type="date"]') as HTMLInputElement).value
+      expect(onScreen).toMatch(/^\d{4}-\d{2}-\d{2}$/u)
+
+      await act(async () => { press(button(screen.container, /^CSV$/u)) })
+
+      expect(screen.bridge.exportReportCsv).toHaveBeenCalledTimes(1)
+      expect(screen.bridge.exportReportCsv.mock.calls[0]![0])
+        .toMatchObject({ period: 'DAY', date: onScreen, section: 'summary' })
+      expect(downloaded).toHaveLength(1)
+      expect(downloaded[0]).toContain(`-${onScreen}-summary.csv`)
+      // The name is built from the same value as the request, so it cannot describe a section the file does not hold.
+      expect(downloaded[0]).not.toContain('valuation')
+      expect(status(screen.container)).toBe('CSV report downloaded.')
+    } finally {
+      click.mockRestore()
+    }
+  })
+
+  it('exports an Admin the section they chose, named for it', async () => {
+    const downloaded: string[] = []
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(function (this: HTMLAnchorElement) { downloaded.push(this.download) })
+    try {
+      const screen = await mountScreen(user('ADMIN'), {}, 'valuation')
+      await act(async () => { press(button(screen.container, /^CSV$/u)) })
+      expect(screen.bridge.exportReportCsv.mock.calls[0]![0]).toMatchObject({ section: 'valuation' })
+      expect(downloaded[0]).toContain('-valuation.csv')
+    } finally {
+      click.mockRestore()
+    }
+  })
+
+  it('sends Excel and PDF to their own writers and says which format arrived', async () => {
+    const screen = await mountScreen(user('ADMIN'))
+    await act(async () => { press(button(screen.container, /^Excel$/u)) })
+    expect(screen.bridge.exportReportExcel).toHaveBeenCalledTimes(1)
+    expect(status(screen.container)).toBe('EXCEL report downloaded.')
+
+    await act(async () => { press(button(screen.container, /^PDF$/u)) })
+    expect(screen.bridge.exportReportPdf).toHaveBeenCalledTimes(1)
+    expect(status(screen.container)).toBe('PDF report downloaded.')
+    // Neither went through the CSV writer, which is the mistake a shared handler makes.
+    expect(screen.bridge.exportReportCsv).not.toHaveBeenCalled()
+  })
+
+  it('renders a refused export as an alert and claims no download', async () => {
+    const downloaded: string[] = []
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(function (this: HTMLAnchorElement) { downloaded.push(this.download) })
+    try {
+      const screen = await mountScreen(user('ADMIN'), {
+        exportReportCsv: vi.fn(async () => { throw new Error('Detailed report exports are restricted to the Admin.') }),
+      } as Partial<InfoflexBridge>)
+      await act(async () => { press(button(screen.container, /^CSV$/u)) })
+
+      const alert = screen.container.querySelector('[role="alert"]')
+      expect(alert, 'the Server sentence reaches the person').not.toBeNull()
+      expect(alert!.textContent).toContain('Detailed report exports are restricted to the Admin.')
+      expect(downloaded, 'nothing was downloaded').toHaveLength(0)
+      expect(status(screen.container), 'and nothing claims otherwise').toBeNull()
+    } finally {
+      click.mockRestore()
+    }
+  })
+})
+
+describe('the end-of-day close is an Admin-only act', () => {
+  it('offers an ACCOUNT no close, even with a cash position on the report', async () => {
+    const screen = await mountScreen(user('ACCOUNT'), {}, 'summary', { cashPosition: cashPosition() })
+    // The figures this role may see are still there; the act that freezes the business date is not.
+    expect(screen.text()).not.toContain('Save end-of-day close')
+    expect(screen.text()).not.toContain('Cash close')
+    expect(screen.container.querySelector('.report-close-form')).toBeNull()
+  })
+
+  it('will not save a close with nothing counted, and sends the count when there is one', async () => {
+    const screen = await mountScreen(user('ADMIN'), {}, 'summary', { cashPosition: cashPosition() })
+    const save = button(screen.container, /^Save end-of-day close$/u)
+    expect(save.disabled, 'no count yet').toBe(true)
+
+    const counted = screen.container.querySelector('.report-close-form input[inputmode="decimal"]') as HTMLInputElement
+    const note = screen.container.querySelector('.report-close-form input[maxlength="500"]') as HTMLInputElement
+    await act(async () => {
+      setField(counted, '295.00')
+      setField(note, 'Hand counted twice')
+    })
+    expect(save.disabled).toBe(false)
+
+    const reads = screen.bridge.getAccountingReport.mock.calls.length
+    await act(async () => { press(save) })
+    expect(screen.bridge.closeReportingDay).toHaveBeenCalledWith({
+      businessDate: DAY, countedCash: '295.00', note: 'Hand counted twice',
+    })
+    // Read again: the close changes what the day says, and a screen showing the pre-close day would invite closing twice.
+    expect(screen.bridge.getAccountingReport.mock.calls.length).toBeGreaterThan(reads)
+    expect(status(screen.container)).toContain('DC-00000001')
+  })
+
+  it('shows a day already closed in words, with no form to close it again', async () => {
+    const screen = await mountScreen(user('ADMIN'), {}, 'summary', {
+      cashPosition: cashPosition(), dayClose: dayClose(),
+    })
+    expect(screen.text()).toContain('DC-00000001')
+    expect(screen.text()).toContain('Closed by ADMIN Person')
+    // The difference is a word as well as a figure: -500 minor units on its own does not say which way it went.
+    expect(screen.text()).toContain('Difference · short')
+    expect(screen.text()).toContain(formatMoney(-500n, CURRENCY, DISPLAY))
+    expect(screen.container.querySelector('.report-close-form'), 'a closed day offers no form').toBeNull()
+    expect(screen.text()).not.toContain('Save end-of-day close')
+  })
+
+  it('renders a refused close as an alert and leaves the form ready to try again', async () => {
+    const screen = await mountScreen(user('ADMIN'), {
+      closeReportingDay: vi.fn(async () => { throw new Error('The day is already closed.') }),
+    } as Partial<InfoflexBridge>, 'summary', { cashPosition: cashPosition() })
+
+    const counted = screen.container.querySelector('.report-close-form input[inputmode="decimal"]') as HTMLInputElement
+    await act(async () => { setField(counted, '295.00') })
+    await act(async () => { press(button(screen.container, /^Save end-of-day close$/u)) })
+
+    expect(screen.container.querySelector('[role="alert"]')?.textContent).toContain('The day is already closed.')
+    expect(status(screen.container)).toBeNull()
+    // Still open, still editable: the count that was refused is not thrown away.
+    expect(screen.container.querySelector('.report-close-form')).not.toBeNull()
+    expect(counted.value).toBe('295.00')
+  })
+})
+
+describe('cashier shifts and the drawer', () => {
+  it('offers to open a shift only to somebody who does not have one open', async () => {
+    const own = await mountScreen(user('ACCOUNT'), {}, 'summary', { shifts: [shift()] })
+    expect(own.text(), 'a second open shift for one cashier is the mistake this hides').not.toContain('Open my cashier shift')
+
+    const none = await mountScreen(user('ACCOUNT'), {}, 'summary', { shifts: [] })
+    const float = none.container.querySelector('.report-open-shift-form input[inputmode="decimal"]') as HTMLInputElement
+    await act(async () => { setField(float, '150.00') })
+    await act(async () => { press(button(none.container, /^Open my cashier shift$/u)) })
+    expect(none.bridge.openCashierShift).toHaveBeenCalledWith({ openingFloat: '150.00' })
+  })
+
+  it('shows the drawer form only while a shift is open, and needs both an amount and a reason', async () => {
+    const none = await mountScreen(user('ACCOUNT'), {}, 'summary', { shifts: [] })
+    expect(none.container.querySelector('.report-drawer-event-form'), 'no open shift, no drawer to adjust').toBeNull()
+
+    const screen = await mountScreen(user('ACCOUNT'), {}, 'summary', { shifts: [shift()] })
+    const form = screen.container.querySelector('.report-drawer-event-form') as HTMLFormElement
+    expect(form, 'an open shift means a drawer somebody is responsible for').not.toBeNull()
+
+    const submit = button(screen.container, /^Record drawer event$/u)
+    expect(submit.disabled, 'no amount and no reason yet').toBe(true)
+
+    const amount = form.querySelector('input[inputmode="decimal"]') as HTMLInputElement
+    const note = form.querySelector('input[maxlength="240"]') as HTMLInputElement
+    const type = form.querySelectorAll('select')[1] as HTMLSelectElement
+    await act(async () => {
+      setField(type, 'SAFE_DROP')
+      setField(amount, '20.00')
+      setField(note, 'Dropped into the safe')
+    })
+    expect(submit.disabled).toBe(false)
+    await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
+
+    expect(screen.bridge.recordCashDrawerEvent).toHaveBeenCalledWith({
+      shiftId: 'shift-1', type: 'SAFE_DROP', amount: '20.00', note: 'Dropped into the safe',
+    })
+    // The type arrives as the value the Server stores, not the label the person picked.
+    expect(status(screen.container)).toBe('safe drop recorded.')
+    expect(amount.value, 'cleared so the same event is not recorded twice by accident').toBe('')
+    expect(note.value).toBe('')
+  })
+
+  it('does not offer a till operator the Close control on another cashier shift', async () => {
+    const screen = await mountScreen(user('ACCOUNT'), {}, 'summary', {
+      shifts: [shift({ id: 'shift-9', cashierId: 'somebody-else', cashierName: 'Other Cashier' })],
+    })
+    // The shift is still listed - reading it is not the restricted part.
+    expect(screen.text()).toContain('Other Cashier')
+    expect(screen.container.querySelector('input[aria-label^="Counted cash for"]')).toBeNull()
+    expect([...screen.container.querySelectorAll('button')].map((candidate) => (candidate.textContent ?? '').trim()))
+      .not.toContain('Close')
+  })
+
+  it('lets an Admin close any shift, sending the count typed against that shift', async () => {
+    const screen = await mountScreen(user('ADMIN'), {
+      // The Server answers with the row it closed, so the double answers with that shift and not the fixture default.
+      // The confirmation is built from what comes back, which is the point: the screen does not guess whose shift it was.
+      closeCashierShift: vi.fn(async () => shift({
+        id: 'shift-9', cashierId: 'somebody-else', cashierName: 'Other Cashier', status: 'CLOSED',
+        closedAt: '2026-11-17T19:00:00.000Z', countedCashMinor: 29_500n, varianceMinor: -500n, closedBy: 'ADMIN Person',
+      })),
+    } as Partial<InfoflexBridge>, 'summary', {
+      shifts: [shift({ id: 'shift-9', cashierId: 'somebody-else', cashierName: 'Other Cashier' })],
+    })
+    const counted = screen.container.querySelector('input[aria-label="Counted cash for Other Cashier"]')
+    expect(counted, 'the Admin is offered the control on another cashier shift').not.toBeNull()
+
+    const close = clicked(screen.container, 'Close')
+    expect(close.disabled, 'nothing counted yet').toBe(true)
+    await act(async () => { setField(counted as HTMLInputElement, '295.00') })
+    expect(close.disabled).toBe(false)
+    await act(async () => { press(close) })
+
+    expect(screen.bridge.closeCashierShift).toHaveBeenCalledWith({ shiftId: 'shift-9', countedCash: '295.00' })
+    expect(status(screen.container)).toContain('Other Cashier shift closed')
+    // The over/short is the point of the act, so it is in the confirmation rather than only in the table.
+    expect(status(screen.container)).toContain(formatMoney(-500n, CURRENCY, DISPLAY))
   })
 })

@@ -139,10 +139,18 @@ export function ReportsWorkspace({ bridge, bootstrap, user, initialSection = 'su
     }
   }
 
+  /**
+   * The name the file is downloaded under.
+   *
+   * Built from `exportSection`, the same value the request carries, rather than from the section the screen happens to
+   * be showing. The two differ for a caller with no section selector: an ACCOUNT asked to look at a detail section is
+   * exported the summary, and a file named for a section whose contents it does not hold is a file that misdescribes
+   * itself the moment somebody opens it a month later.
+   */
   function fileName(extension: string): string {
     const datePart = (period === 'DAY' ? day : month).replace(/[^0-9-]/gu, '')
     const store = (report?.header.storeName || 'store').trim().toLowerCase().replace(/[^a-z0-9]+/gu, '-')
-    return `infoflex-${store}-${datePart}-${section}.${extension}`
+    return `infoflex-${store}-${datePart}-${exportSection}.${extension}`
   }
 
   async function closeDay(): Promise<void> {

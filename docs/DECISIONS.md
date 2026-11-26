@@ -1632,3 +1632,22 @@ and the edition that drifted.
 The test also guards its own vacuity. A sweep over an empty intersection passes while proving nothing, so it counts the
 roles that can reach the control and asserts the count is not zero, and asserts separately that ACCOUNT — the role the
 brief names as the one that "records debtor payments" — is allowed by both gates in all three editions.
+
+## The file's name is built from the same value as its contents
+
+An export asks the Server for a section and downloads what comes back under a name. On the Reports screen those two were
+read from different places: the request used `exportSection` — the section the caller may export, which is the summary for
+anybody with no section selector — and the filename used `section`, the one the screen happened to be opened on.
+
+For an Admin the two are the same value and nothing shows. For an ACCOUNT arriving at a detail section by deep link they
+differ, and the result is a correct summary in a file named for a valuation it does not contain. Nothing in the product
+would have failed: the guard did its job, the Server sent the right rows, and the download succeeded. The file simply lied
+about itself, and it would keep lying in somebody's archive until the day they opened it expecting stock costs.
+
+Both now read `exportSection`. This is the same rule the phase keeps applying to money and to refusals — one spelling of a
+decision, so the two places that need it cannot drift — applied to a filename, where the cost of drifting is not a wrong
+figure but a wrong label on a document that outlives the screen that produced it.
+
+A test asserts the name and the requested section agree, by reading the date off the screen's own date field rather than
+writing a date into the test: that field defaults to today, and today in the sandbox is not the business date the fixtures
+use, so a hard-coded expectation would pass or fail on the calendar instead of on the code.
