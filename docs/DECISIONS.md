@@ -1556,3 +1556,79 @@ classes, because to the extractor they are.
 The fix is to move the fragments into named helper functions — `outcomeClass(outcome)`, `flagBadgeClass(flag)` — where the
 extractor cannot see them, and to keep the template inside the helper. The wrong fix is adding the component to
 `KNOWN_UNSTYLED`, a list that may only shrink and exists to name debt, not to absorb it.
+
+## A capability with nothing to call it is an omission, not a restriction
+
+Two gaps of the same shape were found in this phase by asking one question of every feature: *can a person actually reach
+this?* The audit export could write an Excel workbook — service, export module and tests all supported it — and no screen
+offered anything but CSV. `record_debtor_payment` had been granted to ACCOUNT since the capability table was written, with
+a policy row, an IPC channel, a preload binding and a tested service behind it, and no control anywhere in the product
+called it.
+
+Neither shows up as a failing test, because nothing is broken: the code that exists works, and the code that would call it
+does not exist. Both are the same defect as a page with no navigation entry, and the test that finds them is a person
+reading the capability table and then looking for the button.
+
+The fix for the second one had to go deeper than a button. The Debtors list lived inside `adminReports`, which the service
+builds only for an Admin, and the Reports screen renders its section selector only for an Admin — so the role that holds
+the capability could not see a balance to settle even in principle. Where a control goes is not a layout question when the
+role that needs it cannot reach the screen it would go on.
+
+The panel that now exists derives its offer from `can(role, 'record_debtor_payment')` rather than from a role name written
+in the component, which is the order screen's idiom and the same principle as the audit screen's: a screen that decides for
+itself eventually disagrees with the service that decides for real. To a caller without the capability the balances stay
+readable and the panel says so — "This view can read what customers owe. It cannot take a payment against a balance." —
+without naming the role that may, because that is the same information a refusal withholds.
+
+## What a customer owes is on the report, not inside the Admin block
+
+`AccountingReport.debtors` moved out of `AdminReportData` and onto the report itself. The reason is what the row contains:
+a name, a phone number, a balance and a credit limit. There is no cost in it and no margin, so there is nothing a personal
+view has to withhold, and the test says so from the row rather than from memory — it lists the row's own keys, so a cost
+field added to a debtor row in future fails there instead of quietly reaching an ACCOUNT.
+
+The alternative considered was to build `adminReports` for everybody and fill only the sections a caller may see. It was
+rejected because it makes the type lie: an empty `valuation` and an empty `purchases` are indistinguishable, on the wire,
+from a shop with no stock and no suppliers. `adminReports` staying null for a non-Admin keeps null meaning "no Admin
+sections for you", and one member with one reader keeps the Admin's Debtors section and the ACCOUNT's day summary from
+being able to disagree about what a customer owes — two lists of balances would be two chances for them to drift, which is
+the mistake this repository keeps deleting.
+
+The export follows the data: `buildReportExportTables` answers the debtors section before it refuses the Admin-only ones,
+so a personal view may export what it was just shown, which is the rule every other section already follows. Every other
+detail section still throws "Detailed report exports are restricted to the Admin." for a personal report, and the test that
+asserts that now also asserts that the debtors table it does allow carries no cost, profit or margin column — derived from
+the columns it would write, so the exemption has to be re-earned if the table ever grows one.
+
+That rule then decided a second question. A personal *summary* export carries the balances as well, because the policy rows
+for these channels promise the file holds "whatever the same caller was just shown" — and since the balances moved onto the
+report, an ACCOUNT is shown them in the day summary, which is the only view that role has of this screen. A file without
+them would not match the screen it was taken from. A store-wide summary still does not carry them: an Admin sees the
+balances under Debtors, and a table in an export that was not on the screen is a table nobody can account for. The
+condition is read from `report.header.scope`, which the service sets from the actor, rather than from a role name in the
+export module — so the file follows the report it was handed and cannot disagree with the screen that handed it over.
+
+## Two vocabularies for one gate: assert the relationship, do not add a third check
+
+The preview's `recordDebtorPayment` asks whether the caller may open the `customers` page, which `PAGE_CAPABILITY` keys to
+`take_payment`. The licensed host asks a different question of the same act: its policy row for
+`ipc:reports:debtor-payment` requires `record_debtor_payment`. Two spellings of one gate is how a demo comes to offer an
+act the product refuses — and the demo is what a prospective shop sees first.
+
+The first response was to add the capability check to the preview bridge as well, and it was withdrawn. The preview's
+audit module already checks `record_debtor_payment` before recording anything, which is the faithful mirror of the real
+service's own check; the host also checks it at the channel, so the real stack genuinely does ask twice, once per layer.
+Adding a third check in the bridge would have invented a *third sentence* for one refusal, and this repository's standing
+rule is one spelling shared by every caller. A duplicated gate with its own wording does not make the gate stronger; it
+makes it two places to keep in step.
+
+What replaced it is an assertion of the relationship, in the matrix test that is generated from the policy table: for
+every role in every edition, if the preview would let the caller through, `authorize('ipc:reports:debtor-payment', …)`
+allows it too. One direction only — the host may permit a role the demo's page gate stops, which is the safe direction.
+The host side is read from the enforcement function rather than from a capability name written in the test, so the test
+follows the table the host actually consults, and narrowing that row to `REVIEW` fails it with a message naming the role
+and the edition that drifted.
+
+The test also guards its own vacuity. A sweep over an empty intersection passes while proving nothing, so it counts the
+roles that can reach the control and asserts the count is not zero, and asserts separately that ACCOUNT — the role the
+brief names as the one that "records debtor payments" — is allowed by both gates in all three editions.

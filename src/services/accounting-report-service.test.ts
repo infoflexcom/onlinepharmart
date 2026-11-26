@@ -191,6 +191,23 @@ describe('AccountingReportService', () => {
       expect(cashierDay.adminReports).toBeNull()
       expect(cashierDay.daily[0]?.grossProfitMinor).toBeNull()
 
+      // The balances ARE in a personal view. A customer balance carries no cost and no margin, and settling one is this
+      // role's own capability - `record_debtor_payment` is granted to ACCOUNT and to nobody below it - so a list only an
+      // Admin could read would leave the capability with nothing to act on. It sits on the report beside the summary
+      // rather than inside `adminReports`, which stays null and keeps meaning "no Admin sections for you".
+      expect(cashierDay.debtors.items.map((row) => row.customerName)).toEqual(['Ada Customer'])
+      expect(cashierDay.debtors.totalBalanceMinor).toBe(5n * scale)
+      expect(cashierDay.debtors.items[0]).toMatchObject({
+        balanceMinor: 5n * scale, creditLimitMinor: 100n * scale, phone: '+234 800 111 2222',
+      })
+      // One member of one report, read once: the Admin's list and the ACCOUNT's list are the same object shape over the
+      // same rows, so they cannot disagree about what a customer owes.
+      expect(cashierDay.debtors).toEqual(day.debtors)
+      // And the row carries nothing that would have to be withheld. Derived from the row itself, so adding a cost field
+      // to a debtor row fails here instead of quietly reaching a personal view.
+      expect(Object.keys(cashierDay.debtors.items[0]!).sort())
+        .toEqual(['balanceMinor', 'creditLimitMinor', 'customerId', 'customerName', 'phone'])
+
       const month = harness.reports.getDashboard({ period: 'MONTH', date: '2026-11' }, adminActor, 'BOTH')
       expect(month.daily).toHaveLength(30)
       expect(month.daily.find(({ date }) => date === '2026-11-17')).toMatchObject({
@@ -267,6 +284,52 @@ describe('AccountingReportService', () => {
       const pdf = await harness.reports.exportPdf({ ...dayInput, section: 'summary' }, adminActor, 'BOTH')
       expect(Buffer.from(pdf).subarray(0, 5).toString()).toBe('%PDF-')
       expect(Buffer.from(pdf).byteLength).toBeGreaterThan(500)
+    } finally {
+      harness.close()
+    }
+  })
+
+  it('reads the balance live, so a payment taken shows in the list the same day', () => {
+    const seeded = seedReportTransactions('NGN')
+    const { harness, scale, cashierActor } = seeded
+    try {
+      const before = harness.reports.getDashboard({ period: 'DAY', date: '2026-11-17' }, cashierActor, 'BOTH')
+      const customer = before.debtors.items[0]!
+      expect(customer.balanceMinor).toBe(5n * scale)
+
+      // Settling part of it is the act the list exists to lead to, and the report is a query rather than a snapshot: the
+      // next read has to show the new balance without anybody rebuilding anything.
+      harness.reports.recordDebtorPayment({
+        customerId: customer.customerId, amount: '2.00', method: 'CASH', reference: 'DP-TEST', note: 'Part payment',
+      }, cashierActor, 'BOTH')
+
+      const after = harness.reports.getDashboard({ period: 'DAY', date: '2026-11-17' }, cashierActor, 'BOTH')
+      expect(after.debtors.items[0]).toMatchObject({
+        customerName: customer.customerName, balanceMinor: 3n * scale,
+      })
+      expect(after.debtors.totalBalanceMinor).toBe(3n * scale)
+      // Still no Admin sections, and still no cost: taking a payment does not widen what this caller is shown.
+      expect(after.adminReports).toBeNull()
+      expect(after.summary.cogsMinor).toBeNull()
+    } finally {
+      harness.close()
+    }
+  })
+
+  it('drops a customer from the list once nothing is owed', () => {
+    const seeded = seedReportTransactions('NGN')
+    const { harness, cashierActor } = seeded
+    try {
+      const before = harness.reports.getDashboard({ period: 'DAY', date: '2026-11-17' }, cashierActor, 'BOTH')
+      const customer = before.debtors.items[0]!
+      harness.reports.recordDebtorPayment({
+        customerId: customer.customerId, amount: '5.00', method: 'TRANSFER',
+      }, cashierActor, 'BOTH')
+      const after = harness.reports.getDashboard({ period: 'DAY', date: '2026-11-17' }, cashierActor, 'BOTH')
+      // Settled in full: the list is of outstanding balances, so a customer who owes nothing is not on it, and an empty
+      // list is a true statement rather than a report that failed to load.
+      expect(after.debtors.items).toEqual([])
+      expect(after.debtors.totalBalanceMinor).toBe(0n)
     } finally {
       harness.close()
     }

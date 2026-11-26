@@ -133,22 +133,33 @@ export function DailyAuditWorkspace({ bridge, bootstrap, user }: Props) {
           {/* Stated rather than left to be inferred from a button that is not there. */}
           <p className="audit-no-print">No printing from this screen. An audit is a file, not a receipt.</p>
           {report?.canExport === true && (
-            <button
-              type="button"
-              className="inventory-secondary"
-              disabled={busy || loading}
-              onClick={() => void act(async () => {
-                const exported = await bridge.exportAudit({
-                  businessDate: report.businessDate,
-                  accountId: report.account?.id ?? null,
-                  format: 'CSV',
-                })
-                downloadAuditFile(exported.fileName, exported.contentBase64, exported.mimeType)
-                return `Audit for ${report.businessDate} exported.`
-              })}
-            >
-              Export CSV
-            </button>
+            <>
+              {/*
+                Both formats, from one handler, because the only difference between them is the word passed to the
+                service. The service decides what a format is and refuses anything else, so the screen does not carry a
+                second list of formats that could drift from it - and the file it hands back carries its own name and
+                mime type, which the screen does not guess at either.
+              */}
+              {(['CSV', 'EXCEL'] as const).map((format) => (
+                <button
+                  key={format}
+                  type="button"
+                  className="inventory-secondary"
+                  disabled={busy || loading}
+                  onClick={() => void act(async () => {
+                    const exported = await bridge.exportAudit({
+                      businessDate: report.businessDate,
+                      accountId: report.account?.id ?? null,
+                      format,
+                    })
+                    downloadAuditFile(exported.fileName, exported.contentBase64, exported.mimeType)
+                    return `Audit for ${report.businessDate} exported as ${format === 'CSV' ? 'CSV' : 'Excel'}.`
+                  })}
+                >
+                  {format === 'CSV' ? 'Export CSV' : 'Export Excel'}
+                </button>
+              ))}
+            </>
           )}
         </div>
       </header>

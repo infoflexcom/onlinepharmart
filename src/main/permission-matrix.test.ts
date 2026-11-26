@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { authorize, policyKeys, ROLES, type Role } from '../../packages/core/src/index'
 import { pagesForRole } from '../shared/auth/policy'
+import { EDITIONS } from '../editions'
 import type { AppPage } from '../shared/auth/types'
 
 /**
@@ -175,6 +176,41 @@ describe('the on-screen menus agree with the table', () => {
     const pages = pagesForRole('ADMIN', 'PHARMACY')
     for (const page of ['dashboard', 'pos', 'orders', 'products', 'stock', 'returns', 'customers', 'reports', 'users', 'settings', 'audit', 'approvals'] as AppPage[]) {
       expect(pages, `ADMIN should be offered ${page}`).toContain(page)
+    }
+  })
+
+  /**
+   * The browser preview and the licensed host ask the same question in two vocabularies, so the relationship between the
+   * two is asserted rather than assumed.
+   *
+   * The host gates the channel `ipc:reports:debtor-payment` through the policy table, by the `record_debtor_payment`
+   * capability. The preview gates its `recordDebtorPayment` by asking whether the role may open the `customers` page,
+   * which `PAGE_CAPABILITY` keys to `take_payment` — selling at a till, a different act from settling a balance. Two
+   * spellings of one question is exactly how a demo comes to offer an act the product refuses, and the demo is what a
+   * prospective shop is shown first.
+   *
+   * What is required is one direction only: anything the demo would let through, the host allows. The reverse need not
+   * hold — the host may allow a role the demo's page gate stops, which is the safe direction.
+   */
+  it('never offers a debtor payment in the preview that the licensed host would refuse', () => {
+    let allowedSomewhere = 0
+    for (const edition of EDITIONS) {
+      for (const role of ROLES) {
+        const demoAllows = pagesForRole(role, edition).includes('customers')
+        // Read from the enforcement function, not from a capability name written here, so the test follows the table
+        // the host actually consults.
+        const hostAllows = authorize('ipc:reports:debtor-payment', role, true).allowed
+        expect(demoAllows && !hostAllows,
+          `${role} in ${edition}: the preview offers a debtor payment the host would refuse`).toBe(false)
+        if (demoAllows) allowedSomewhere += 1
+      }
+    }
+    // And the sweep is not vacuous. A test over an empty intersection passes while proving nothing, so the role the
+    // brief names as the one that "records debtor payments" is asserted to be reachable in both, in every edition.
+    expect(allowedSomewhere, 'no role can reach the control at all').toBeGreaterThan(0)
+    for (const edition of EDITIONS) {
+      expect(pagesForRole('ACCOUNT', edition), `ACCOUNT reaches customers in ${edition}`).toContain('customers')
+      expect(authorize('ipc:reports:debtor-payment', 'ACCOUNT', true).allowed, 'the host allows it too').toBe(true)
     }
   })
 })

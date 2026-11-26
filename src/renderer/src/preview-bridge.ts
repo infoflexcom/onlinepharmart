@@ -36,6 +36,7 @@ import type {
   CloseCashierShiftInput,
   CloseDayInput,
   DayCloseRecord,
+  DebtorReportRow,
   OpenCashierShiftInput,
   RecordDebtorPaymentInput,
   ReportExportInput,
@@ -1679,13 +1680,13 @@ export function createPreviewBridge(): InfoflexBridge {
     async getAccountingReport(input: ReportPeriodInput) {
       const user = getActiveUser()
       if (!canAccessPageForRole(user, 'reports', edition)) throw new Error('You do not have permission to open Reports.')
-      return buildPreviewAccountingReport(input, user, settings, edition, previewShifts, previewDayCloses)
+      return buildPreviewAccountingReport(input, user, settings, edition, previewShifts, previewDayCloses, previewCustomers)
     },
     async exportReportCsv(input: ReportExportInput) {
       const user = getActiveUser()
       if (input.section !== 'summary' && user.role !== 'ADMIN') throw new Error('Detailed reports are restricted to the Admin.')
       if (input.section !== 'summary') throw new Error('Detailed exports are available from the licensed desktop host, not this memory-only preview.')
-      const report = buildPreviewAccountingReport(input, user, settings, edition, previewShifts, previewDayCloses)
+      const report = buildPreviewAccountingReport(input, user, settings, edition, previewShifts, previewDayCloses, previewCustomers)
       return previewReportCsv(report)
     },
     async exportReportExcel() {
@@ -1696,7 +1697,7 @@ export function createPreviewBridge(): InfoflexBridge {
     },
     async closeReportingDay(input: CloseDayInput): Promise<DayCloseRecord> {
       const user = requireAdmin()
-      const report = buildPreviewAccountingReport({ period: 'DAY', date: input.businessDate }, user, settings, edition, previewShifts, previewDayCloses)
+      const report = buildPreviewAccountingReport({ period: 'DAY', date: input.businessDate }, user, settings, edition, previewShifts, previewDayCloses, previewCustomers)
       if (!report.cashPosition) throw new Error('Choose a business date for the cash close.')
       const countedCashMinor = previewMoney(input.countedCash)
       if (countedCashMinor < 0n) throw new Error('Counted cash cannot be negative.')
@@ -1972,6 +1973,7 @@ function buildPreviewAccountingReport(
   edition: Edition,
   allShifts: CashierShiftReportRow[],
   dayCloses: Map<string, DayCloseRecord>,
+  customers: PosCustomerRecord[],
 ): AccountingReport {
   if (!input || (input.period !== 'DAY' && input.period !== 'MONTH')) throw new Error('Choose a daily or monthly report period.')
   const datePattern = input.period === 'DAY' ? /^(\d{4})-(\d{2})-(\d{2})$/u : /^(\d{4})-(\d{2})$/u
@@ -2018,9 +2020,24 @@ function buildPreviewAccountingReport(
     wholesaleSalesMinor: zero, wholesaleTransactions: 0, discountsMinor: zero, returnsMinor: zero,
     refundsMinor: zero, netSalesMinor: zero, cogsMinor: isAdmin ? zero : null, grossProfitMinor: isAdmin ? zero : null,
   }))
+  // The same rule the Server applies - a positive balance, largest first, name as the tie-break - read from the
+  // preview's own customer list rather than invented, so a credit sale made in the demo shows up here and a payment
+  // taken against it moves the balance the way it would in the shop.
+  const debtorItems = customers
+    .filter((customer) => customer.balanceMinor > 0n)
+    .sort((left, right) => right.balanceMinor === left.balanceMinor
+      ? left.name.localeCompare(right.name)
+      : right.balanceMinor > left.balanceMinor ? 1 : -1)
+    .map((customer): DebtorReportRow => ({
+      customerId: customer.id,
+      customerName: customer.name,
+      phone: customer.phone,
+      balanceMinor: customer.balanceMinor,
+      creditLimitMinor: customer.creditLimitMinor,
+    }))
   const adminReports = isAdmin ? {
     topSellers: [], slowMovers: [], valuation: { totalQuantityMilli: zero, totalValueMinor: zero, items: [] },
-    lowStock: [], debtors: { totalBalanceMinor: zero, items: [] },
+    lowStock: [],
     purchases: { totalMinor: zero, transactions: 0, items: [], bySupplier: [] },
     userPerformance: [], auditLog: [], stocktakes: [],
     pharmacy: edition === 'SUPERMARKET' ? null : { expiryLots: [], prescriptionSales: [], writeOffs: [] },
@@ -2066,6 +2083,10 @@ function buildPreviewAccountingReport(
     } : null,
     dayClose: selectedClose,
     shifts: visibleShifts,
+    debtors: {
+      totalBalanceMinor: debtorItems.reduce((sum, row) => sum + row.balanceMinor, 0n),
+      items: debtorItems,
+    },
     adminReports,
   }
 }

@@ -1143,3 +1143,18 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   .settings-toggle-row { flex-direction: column; gap: 9px; }
   .backup-list li { align-items: flex-start; flex-direction: column; }
 }
+
+/* ── Money owed by customers, and settling it ──────────────────────────────────────────────────────────────
+   A balance column is read down rather than across, so it is right-aligned and tabular: two figures of different length
+   in a left-aligned column cannot be compared at a glance, and comparing them is the whole use of the list. */
+.report-money { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* The row action sits in a table cell, so it takes the secondary button's look at the cell's size rather than the
+   toolbar's: a full-size button in every row would make the balances harder to read than the control is worth. */
+.debtor-take-payment { padding: 5px 10px; font-size: 13px; white-space: nowrap; }
+
+/* Two uses, one style: naming whose payment is being taken, and stating that a control is not offered here — in the same
+   spirit as the audit screen stating that it cannot print, because a control that is simply absent reads as a screen that
+   failed to load. */
+.reports-note { margin: 12px 0 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.reports-note strong { color: var(--ink); font-weight: 700; }

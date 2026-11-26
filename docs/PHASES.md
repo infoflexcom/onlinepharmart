@@ -1566,6 +1566,14 @@ totals agree with the sales ledger, and — when the day was signed — **"The d
 which reads `No — sales have moved since` the moment the digest stops matching. That warning is not suppressible on the
 screen either.
 
+The screen offers both writers, as two controls side by side. Excel had been supported all the way down — service, export
+module, host channel, preload binding, and twenty tests that open the workbook and check its bytes — and nothing in the
+product offered it, which is the same defect as a page with no navigation entry: the code that exists works and the code
+that would call it does not. Both controls come from one mapped handler rather than two copies of it, so they cannot drift
+apart, and the confirmation names the format that was written. In the browser preview the Excel control is still offered
+and still refuses, in its own words: a tab cannot run `exceljs` synchronously, and a control that quietly did nothing
+would be worse than one that explains itself.
+
 **The print gate refuses what it cannot name.** The gate's dispatch was a ternary — a `SALE` went to the receipt
 renderer and everything else to the returns renderer — so a kind outside the closed union `'SALE' | 'RETURN'` was not
 refused, it was *treated as a return*. TypeScript protects compile-time callers; a print request crosses an IPC boundary
@@ -1593,6 +1601,62 @@ a missing feature: a tile that invited a verdict would invite an attestation mad
 phone as **text**, because the phone formats with the shop's currency definition from the header and a bigint surviving
 JSON as a number would be a figure whose decimals the phone has to guess. And `null` is not an empty list: `null` means
 this Server has no audit service, empty means every day with activity has been audited, and the two render differently.
+
+**The capability that had nothing to call it.** `record_debtor_payment` has been in the capability table since the table
+was written, granted to ACCOUNT and to nobody below it, and the brief's own sentence for the role says it "records debtor
+payments". The service, the IPC channel, the policy row and the preload binding were all built this phase — and no control
+anywhere in the product called them. A capability with nothing to call it is not a restriction, it is an omission, and
+this one fell on exactly the role the brief describes.
+
+Two things had to change, and the second is why the first had been impossible. The Debtors list lived inside
+`adminReports`, which the service builds only for an Admin, and the Reports screen renders its section selector only for
+an Admin — so an ACCOUNT, who holds `view_reports` and can open the screen, was shown the day summary and had no way to
+reach a balance at all. `debtors` is now a member of the report itself rather than of the Admin block: a customer balance
+carries a name, a phone number, a balance and a credit limit, and no cost and no margin, so there is nothing in it a
+personal view has to withhold. `adminReports` stays null for a non-Admin, which keeps null meaning what it says — no Admin
+sections — instead of becoming a block of empty ones that would read as "nothing to report". A test derives that claim
+from the row rather than asserting it from memory: it lists the row's own keys, so adding a cost field to a debtor row
+fails there instead of quietly reaching a personal view. The export follows the data: debtors is now the one detail section
+a personal view may export, and a personal *summary* carries the balances too, because the policy rows for these channels
+promise the file holds "whatever the same caller was just shown" and an ACCOUNT is shown them in the summary that is the
+whole of their view. A store-wide summary still does not carry them, since an Admin sees the balances under Debtors and a
+table in an export that was not on the screen is a table nobody can account for. Both halves are tested against a real
+balance rather than an empty table that would pass either way, and the summary's debtors table is compared with the
+section's own rather than described, so the two files cannot disagree about what a customer owes. The exemption is earned
+from the columns the table would actually write, so it has to be re-earned if that table ever grows a cost column.
+
+`DebtorPaymentPanel.tsx` is the control, and it appears in both places the balances appear: under Debtors for an Admin,
+and in the day summary for an ACCOUNT, who has no section selector. Whether it offers anything at all is derived from
+`can(role, 'record_debtor_payment')` — the same idiom the order screen uses — so the panel cannot offer a control the
+Server would refuse, and cannot keep offering one to a role that later loses the capability. To a caller without it the
+balances are still readable and the panel says "This view can read what customers owe. It cannot take a payment against a
+balance.", without naming the role that may, which is the same information a refusal withholds. The form asks for the four
+things the Server stores and validates nothing else, because the refusals are already written and tested there; a screen
+that re-implemented them would eventually word one differently, and the two would disagree about what is allowed. It
+clears itself when the Server took the payment and keeps what was typed when the Server refused, since a refused amount is
+usually a mistyped one. (11 tests; ignoring the capability gate fails the one that claims it.)
+
+The panel is not the reachability claim, though — the wiring is, so the wiring is tested too. `ReportsWorkspace.test.tsx`
+mounts the screen for both roles that may open it and asserts what this whole change was for: an ACCOUNT, whose only view
+of Reports is the day summary because the section selector is Admin-only, sees the balances *and* the control in it; an
+Admin sees the same panel under Debtors from a report whose `adminReports` is deliberately null, which is the proof the
+balances stopped living inside the Admin block; a payment reaches the bridge and the day is read again, so the figure on
+screen is the one the Server now holds; and a refusal arrives as an alert while the balances stay on screen, because a
+refusal to move money is not a reason to hide what is owed. (9 tests. Deleting the panel from the summary — restoring the
+original defect exactly — fails the three ACCOUNT tests; routing Debtors back through the Admin block fails the one that
+claims it does not.)
+
+One limit is recorded rather than papered over: `view_reports` is held only by ADMIN and ACCOUNT, and both also hold
+`record_debtor_payment`, so the panel's read-only branch is not reachable through this screen today. It is defensive — the
+offer is derived from the capability table rather than from the two roles that happen to reach the page — and it is tested
+where it lives.
+
+The browser preview asks this question in a different vocabulary from the licensed host — by page access, keyed to
+`take_payment`, where the host's policy row requires `record_debtor_payment` — so the relationship between the two is
+asserted in the generated permission matrix rather than left to coincidence: for every role in every edition, whatever the
+preview would let through, the host allows too. Narrowing the host's row fails that test by name and edition. A third
+capability check in the bridge was written and then withdrawn; the preview's audit module already mirrors the service's
+own check, and a duplicated gate with its own wording is two places to keep in step rather than a stronger gate.
 
 ### What the tests prove, and what they cannot
 

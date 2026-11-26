@@ -417,8 +417,34 @@ export class AccountingReportService {
       cashPosition,
       dayClose,
       shifts,
+      // Read for every caller, not only an Admin: a balance carries no cost, and the role that settles one is the
+      // ACCOUNT. Building it inside `getAdminReports` would have left the capability with nothing to act on.
+      debtors: this.readDebtors(),
       adminReports,
     }
+  }
+
+  /**
+   * Outstanding customer balances, largest first.
+   *
+   * The same list the Admin's Debtors section has always shown, now read once for whoever asked. It carries a name, a
+   * phone number, a balance and a credit limit - no cost, no margin, nothing about what the shop paid for the goods - so
+   * there is nothing in it that a personal view has to withhold.
+   */
+  private readDebtors(): { totalBalanceMinor: bigint; items: DebtorReportRow[] } {
+    const items = (this.database.prepare(`
+      SELECT id, name, phone, CAST(balance AS TEXT) AS balance_text, CAST(credit_limit AS TEXT) AS limit_text
+      FROM customers WHERE is_active = 1 AND balance > 0 ORDER BY balance DESC, name COLLATE NOCASE LIMIT ?
+    `).all(ADMIN_REPORT_LIMIT) as Array<{
+      id: string; name: string; phone: string; balance_text: string; limit_text: string
+    }>).map((row): DebtorReportRow => ({
+      customerId: row.id,
+      customerName: row.name,
+      phone: row.phone,
+      balanceMinor: BigInt(row.balance_text),
+      creditLimitMinor: BigInt(row.limit_text),
+    }))
+    return { totalBalanceMinor: items.reduce((sum, row) => sum + row.balanceMinor, 0n), items }
   }
 
   closeDay(input: CloseDayInput, actor: ReportActor, edition: Edition): DayCloseRecord {
@@ -800,19 +826,6 @@ export class AccountingReportService {
         ? left.productName.localeCompare(right.productName)
         : left.quantityMilli < right.quantityMilli ? -1 : 1)
 
-    const debtorItems = (this.database.prepare(`
-      SELECT id, name, phone, CAST(balance AS TEXT) AS balance_text, CAST(credit_limit AS TEXT) AS limit_text
-      FROM customers WHERE is_active = 1 AND balance > 0 ORDER BY balance DESC, name COLLATE NOCASE LIMIT ?
-    `).all(ADMIN_REPORT_LIMIT) as Array<{
-      id: string; name: string; phone: string; balance_text: string; limit_text: string
-    }>).map((row): DebtorReportRow => ({
-      customerId: row.id,
-      customerName: row.name,
-      phone: row.phone,
-      balanceMinor: BigInt(row.balance_text),
-      creditLimitMinor: BigInt(row.limit_text),
-    }))
-
     const purchases = this.readPurchases(period, currencyCode)
     const purchaseBySupplier = new Map<string, SupplierPurchaseSummary>()
     for (const purchase of purchases) {
@@ -836,10 +849,6 @@ export class AccountingReportService {
       slowMovers,
       valuation,
       lowStock,
-      debtors: {
-        totalBalanceMinor: debtorItems.reduce((sum, row) => sum + row.balanceMinor, 0n),
-        items: debtorItems,
-      },
       purchases: {
         totalMinor: purchases.reduce((sum, row) => sum + row.totalMinor, 0n),
         transactions: purchases.length,

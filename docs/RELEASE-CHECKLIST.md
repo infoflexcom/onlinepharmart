@@ -934,6 +934,8 @@ built.
 | The day moves after signing | Posting a return to a day already signed off makes the screen say **"No — sales have moved since"**, and the warning cannot be dismissed | ☐ pass ☐ fail |
 | Flags survive | Raising a flag, adding a note to it and resolving it leaves all three on the screen, with each note stamped with the writer's name and the time | ☐ pass ☐ fail |
 | No print control | The audit screen has no print button anywhere, and states "No printing from this screen. An audit is a file, not a receipt." | ☐ pass ☐ fail |
+| Both export controls | The audit screen offers **Export CSV** and **Export Excel** side by side, and the message afterwards names the format that was written | ☐ pass ☐ fail |
+| The preview says no | In the browser preview, **Export Excel** refuses in its own words rather than doing nothing or producing an empty file | ☐ pass ☐ fail |
 
 ### The file that leaves the machine
 
@@ -963,8 +965,15 @@ built.
 
 ### Taking money from a debtor
 
+The control is **Money owed by customers**: under *Reports → Debtors / credit* for an Admin, and in the day summary for an
+ACCOUNT, who has no section selector. Both read the same member of the same report.
+
 | Check | Expected on the machine | Status |
 | --- | --- | --- |
+| An ACCOUNT can reach it | Signed in as an ACCOUNT, the day summary lists what customers owe, with a **Take a payment** control on each row | ☐ pass ☐ fail |
+| A read-only caller | Signed in as a role that may read reports but not move money, the balances are listed and the panel says it cannot take a payment, without naming who can | ☐ pass ☐ fail |
+| The ceiling is shown | Choosing a customer names them and what they owe above the form, before any amount is typed | ☐ pass ☐ fail |
+| Cash is the default | The method defaults to Cash and says it goes into the drawer; Transfer and Card are the other two | ☐ pass ☐ fail |
 | The balance moves | Taking ₦500 from a customer who owes ₦1 000 leaves ₦500, and the payment row records both figures | ☐ pass ☐ fail |
 | Nothing owed | Taking a payment from a customer with a zero balance is refused with "… owes nothing, so there is no payment to take." | ☐ pass ☐ fail |
 | Overpaying | Taking more than the balance is refused, and the balance is unchanged | ☐ pass ☐ fail |
@@ -972,3 +981,7 @@ built.
 | Two tills at once | Two Accounts taking a payment from the same customer simultaneously: one succeeds, the other is told the record changed and to reload | ☐ pass ☐ fail |
 | Numbering | Payment numbers run `DP-00000001`, `DP-00000002` and never reuse a number, including after a refusal | ☐ pass ☐ fail |
 | The audit shows it | The day's audit lists the payment under debtor payments, with who received it and the balance before and after | ☐ pass ☐ fail |
+| Settled in full | Paying off a balance removes the customer from the list, and the total outstanding falls by the same amount | ☐ pass ☐ fail |
+| A refused amount keeps the form | Entering more than is owed is refused in the Server's own words, and what was typed is still in the fields | ☐ pass ☐ fail |
+| A personal export | An ACCOUNT exporting their summary gets a file carrying the balances they were just shown, with names, balances and credit limits | ☐ pass ☐ fail |
+| Cost stays out of it | In that same personal file the cost and gross-profit lines are present with nothing against them, and no cost figure appears anywhere in it | ☐ pass ☐ fail |

@@ -294,7 +294,6 @@ export interface AdminReportData {
   slowMovers: ProductSalesReportRow[]
   valuation: InventoryValuationReport
   lowStock: LowStockReportRow[]
-  debtors: { totalBalanceMinor: bigint; items: DebtorReportRow[] }
   purchases: {
     totalMinor: bigint
     transactions: number
@@ -326,6 +325,17 @@ export interface AccountingReport {
   cashPosition: CashPositionSummary | null
   dayClose: DayCloseRecord | null
   shifts: CashierShiftReportRow[]
+  /**
+   * Who owes the shop money, and what they owe.
+   *
+   * Deliberately **not** inside `adminReports`. A customer balance carries no cost and no margin, and settling one is an
+   * ACCOUNT's job - the role's own capability list says "records debtor payments" - so a list only an Admin could read
+   * would leave the role that holds the capability with nothing to apply it to. It sits beside the summary instead, one
+   * member with one reader, so the Admin's Debtors section and the ACCOUNT's day summary cannot disagree about a
+   * balance. `adminReports` stays null for a non-Admin, which is the honest meaning of null: no Admin sections, rather
+   * than a block of empty ones that would read as "nothing to report".
+   */
+  debtors: { totalBalanceMinor: bigint; items: DebtorReportRow[] }
   adminReports: AdminReportData | null
 }
 

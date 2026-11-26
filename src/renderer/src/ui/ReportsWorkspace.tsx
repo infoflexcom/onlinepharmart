@@ -7,9 +7,12 @@ import type { BootstrapData } from '@shared/shop/types'
 import type {
   AccountingReport,
   CashierShiftReportRow,
+  RecordDebtorPaymentInput,
   ReportPeriod,
   ReportSectionId,
 } from '@shared/reports/types'
+import { can } from '../../../../packages/core/src/capabilities'
+import { DebtorPaymentPanel } from './DebtorPaymentPanel'
 
 interface Props {
   bridge: InfoflexBridge
@@ -52,6 +55,11 @@ export function ReportsWorkspace({ bridge, bootstrap, user, initialSection = 'su
   const [drawerAmount, setDrawerAmount] = useState('')
   const [drawerNote, setDrawerNote] = useState('')
 
+  // Derived from the same capability set the Server enforces, so the screen cannot offer a control the Server would
+  // refuse. Settling a balance moves money and a customer's credit at once, which is why it is a capability of its own
+  // rather than something anybody who can read a report may do.
+  const mayRecordDebtorPayment = can(user.role === 'CASHIER' ? 'USER' : user.role, 'record_debtor_payment')
+
   const periodInput = useMemo(() => ({ period, date: period === 'DAY' ? day : month }), [period, day, month])
   const showPharmacy = bootstrap.setupContext.edition === 'PHARMACY' || bootstrap.setupContext.edition === 'BOTH'
   const showSupermarket = bootstrap.setupContext.edition === 'SUPERMARKET' || bootstrap.setupContext.edition === 'BOTH'
@@ -84,6 +92,15 @@ export function ReportsWorkspace({ bridge, bootstrap, user, initialSection = 'su
   const currency = report?.header.currency ?? bootstrap.settings.currency
   const display = report?.header.display ?? bootstrap.settings.display
   const admin = user.role === 'ADMIN'
+  /**
+   * What customers owe, and the control that settles it — built once, because it appears in two places and the two must
+   * not be able to drift: under Debtors for an Admin, and in the day summary for an ACCOUNT, who has no section selector.
+   */
+  const debtorPanel = report === null ? null : <DebtorPaymentPanel
+    debtors={report.debtors} currency={currency} display={display} busy={busy}
+    mayRecordPayment={mayRecordDebtorPayment} onRecord={recordDebtorPayment}
+  />
+
   const exportSection = admin ? section : 'summary'
 
   async function downloadCsv(): Promise<void> {
@@ -175,6 +192,32 @@ export function ReportsWorkspace({ bridge, bootstrap, user, initialSection = 'su
     }
   }
 
+  /**
+   * Take money against what a customer owes.
+   *
+   * Returns whether it worked, so the panel can clear its own form on success and keep what somebody typed when the
+   * Server refused - a refused amount is usually a mistyped amount, and emptying the field makes the person retype it
+   * from memory of what they meant to write.
+   */
+  async function recordDebtorPayment(input: RecordDebtorPaymentInput): Promise<boolean> {
+    setBusy(true)
+    setError('')
+    setMessage('')
+    try {
+      const saved = await bridge.recordDebtorPayment(input)
+      setMessage(`${saved.paymentNumber} · ${saved.customerName} paid`
+        + ` ${formatMoney(saved.amountMinor, currency, display)}, balance now`
+        + ` ${formatMoney(saved.balanceAfterMinor, currency, display)}.`)
+      await refresh()
+      return true
+    } catch (caught) {
+      setError(errorMessage(caught))
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function recordDrawerEvent(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
     setBusy(true)
@@ -251,7 +294,15 @@ export function ReportsWorkspace({ bridge, bootstrap, user, initialSection = 'su
             report={report} countedCash={countedCash} setCountedCash={setCountedCash} closeNote={closeNote}
             setCloseNote={setCloseNote} busy={busy} onClose={() => void closeDay()}
           />}
+          {/*
+            An ACCOUNT has no section selector - the Admin's detailed sections are Admin-only, and costs stay with them -
+            so the summary is the only view this role gets, and the balances they are the role to settle have to be in
+            it. The Admin sees the same panel under Debtors, from the same member of the same report.
+          */}
+          {!admin && debtorPanel}
         </>
+        : section === 'debtors'
+          ? debtorPanel
         : <AdminReportSection report={report} section={section} currency={currency} display={display} />}
     </div>}
   </section>
@@ -480,10 +531,6 @@ function AdminReportSection({ report, section, currency, display }: {
     </ReportPanel>
     case 'low-stock': return <ReportPanel title="Low stock" description="Active products at or below their configured reorder level.">
       <DataTable headers={['SKU', 'Product', 'On hand', 'Reserved', 'Reorder level']} rows={data.lowStock.map((row) => [row.sku, row.productName, formatQuantity(row.quantityMilli), formatQuantity(row.reservedMilli), formatQuantity(row.reorderLevelMilli)])} empty="No products are at or below the reorder level." />
-    </ReportPanel>
-    case 'debtors': return <ReportPanel title="Debtors / customer credit" description="Outstanding positive balances; balances are in the current saved shop currency.">
-      <div className="report-total-banner"><span>Total outstanding</span><strong>{money(data.debtors.totalBalanceMinor)}</strong><small>{data.debtors.items.length} customer account(s)</small></div>
-      <DataTable headers={['Customer', 'Phone', 'Balance', 'Credit limit']} rows={data.debtors.items.map((row) => [row.customerName, row.phone, money(row.balanceMinor), money(row.creditLimitMinor)])} empty="No customer credit balances are outstanding." />
     </ReportPanel>
     case 'purchases': return <>
       <ReportPanel title="Completed purchases" description="Supplier receipts posted in the selected period.">

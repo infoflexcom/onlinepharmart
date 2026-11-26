@@ -28,6 +28,10 @@ function documentOf(report: AccountingReport, subject: string, tables: ExportTab
 
 export function buildReportExportTables(report: AccountingReport, section: ReportSectionId): ExportTable[] {
   if (section === 'summary') return summaryTables(report)
+  // Before the Admin check, because this one is not an Admin section: a customer balance carries no cost, and the
+  // ACCOUNT is the role that settles it. Exporting it is exporting what the same caller was just shown, which is the
+  // rule every other section follows.
+  if (section === 'debtors') return [debtorsTable(report.debtors)]
   const admin = report.adminReports
   if (!admin) throw new Error('Detailed report exports are restricted to the Admin.')
   switch (section) {
@@ -35,7 +39,6 @@ export function buildReportExportTables(report: AccountingReport, section: Repor
     case 'slow-movers': return [productSalesTable('slow-movers', 'Slow movers', admin.slowMovers, true)]
     case 'valuation': return [valuationTable(admin)]
     case 'low-stock': return [lowStockTable(admin)]
-    case 'debtors': return [debtorsTable(admin)]
     case 'purchases': return purchasesTables(admin)
     case 'user-performance': return [userPerformanceTable(admin)]
     case 'audit-log': return [auditTable(admin)]
@@ -223,7 +226,16 @@ function summaryTables(report: AccountingReport): ExportTable[] {
       shift.countedCashMinor, shift.varianceMinor, shift.closedBy, shift.closeNote,
     ]),
   }] : []
-  return [financial, daily, paymentMethods, refundMethods, users, ...cashClose, ...shifts]
+  // A personal view is *shown* the balances on the same screen - the debtor panel sits in the day summary for a caller
+  // who has no section selector - and the policy rows for these channels promise the file carries whatever the same
+  // caller was just shown. So the balances travel with a personal summary, and the table's own title states the total,
+  // which means an empty one says "nobody owes anything" rather than looking like a document that stopped early.
+  //
+  // A store-wide summary does not carry them: an Admin sees the balances under Debtors, where the same panel is rendered
+  // from the same member of the same report, and putting a second copy in the summary file would place a table in the
+  // export that was not on the screen the export was taken from.
+  const debtors = report.header.scope === 'PERSONAL' ? [debtorsTable(report.debtors)] : []
+  return [financial, daily, paymentMethods, refundMethods, users, ...cashClose, ...shifts, ...debtors]
 }
 
 function productSalesTable(name: string, title: string, rows: AdminReportData['topSellers'], includeOnHand: boolean): ExportTable {
@@ -268,14 +280,15 @@ function lowStockTable(admin: AdminReportData): ExportTable {
   }
 }
 
-function debtorsTable(admin: AdminReportData): ExportTable {
+/** The type is read off the report rather than written again here, so the two cannot drift. */
+function debtorsTable(debtors: AccountingReport['debtors']): ExportTable {
   return {
-    name: 'debtors', title: `Debtors · total balance ${admin.debtors.totalBalanceMinor.toString()} minor units`,
+    name: 'debtors', title: `Debtors · total balance ${debtors.totalBalanceMinor.toString()} minor units`,
     columns: [
       { label: 'Customer', kind: 'text' }, { label: 'Phone', kind: 'text' },
       { label: 'Balance', kind: 'money' }, { label: 'Credit limit', kind: 'money' },
     ],
-    rows: admin.debtors.items.map((row) => [row.customerName, row.phone, row.balanceMinor, row.creditLimitMinor]),
+    rows: debtors.items.map((row) => [row.customerName, row.phone, row.balanceMinor, row.creditLimitMinor]),
   }
 }
 
