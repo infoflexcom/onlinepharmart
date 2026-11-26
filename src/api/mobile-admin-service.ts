@@ -5,6 +5,7 @@ import type { LicenseSummary } from '../shared/license/types'
 import type { ShopSettings } from '../shared/shop/types'
 import type { PublicUser, UserPermissions } from '../shared/auth/types'
 import type { ReportPeriodInput } from '../shared/reports/types'
+import type { AuditSummaryForPhone } from '../shared/audit/types'
 import type { ProductDraft, ProductRecord, InventoryAlert } from '../shared/inventory/types'
 import type { PosReceiptRecord, PosRecentSaleRecord } from '../shared/pos/types'
 import type { ReturnRecord, ReturnApprovalDecision } from '../shared/returns/types'
@@ -18,6 +19,7 @@ import type {
   MobileCashierPermissions,
   MobileDeviceList,
   MobileDeviceRow,
+  MobileAuditSummary,
   MobileDashboard,
   MobileDashboardCashier,
   MobileProductCreateInput,
@@ -74,6 +76,14 @@ export interface MobileAdminHost {
   getAlerts(edition: Edition): InventoryAlert[]
 
   getReport(input: ReportPeriodInput, actor: { id: string; username: string; role: 'ADMIN' }): import('../shared/reports/types').AccountingReport
+  /**
+   * The daily audit's short form: which days nobody has attested to, and which flags are still open.
+   *
+   * Optional so a host built before this feature still compiles, and deliberately *not* defaulted to an empty summary:
+   * when it is absent the dashboard reports `audit: null`, which the phone renders as "this Server has no audit", rather
+   * than as a shop with nothing outstanding.
+   */
+  getAuditSummary?(actor: PublicUser): AuditSummaryForPhone
   exportReportPdf(input: ReportPeriodInput, actor: { id: string; username: string; role: 'ADMIN' }): Promise<Uint8Array>
 
   listRecentSales(actor: PublicUser, limit?: number): PosRecentSaleRecord[]
@@ -208,6 +218,41 @@ export class MobileAdminService {
         connectedDevices: this.host.countConnectedDevices(),
       },
       salesByCashierToday: dayReport.salesByUser.map((row) => this.cashierRow(row)),
+      audit: this.auditSummary(admin),
+    }
+  }
+
+  /**
+   * The audit block of the dashboard.
+   *
+   * The phone asks for the same summary the desktop's own audit screen asks for, through the same service, so a day that
+   * is outstanding on the till's screen is outstanding in the Admin's pocket. What the phone does *not* get is the day's
+   * figures in detail: signing a day off is an act that needs the whole screen, and a dashboard tile that invited it
+   * would be inviting an attestation made from a summary.
+   */
+  private auditSummary(admin: AuthenticatedPrincipal): MobileAuditSummary | null {
+    if (!this.host.getAuditSummary) return null
+    const summary = this.host.getAuditSummary(this.publicUser(admin))
+    return {
+      unauditedDays: summary.unauditedDays.map((day) => ({
+        businessDate: day.businessDate,
+        accountName: day.accountName,
+        transactions: day.transactions,
+        salesMinor: day.salesMinor.toString(),
+        currencyCode: day.currencyCode,
+        openFlags: day.openFlags,
+        dayClosed: day.dayClosed,
+      })),
+      openFlags: summary.openFlags.map((flag) => ({
+        id: flag.id,
+        businessDate: flag.businessDate,
+        severity: flag.severity,
+        // Trimmed for a phone: the full note, with every stamp, is on the desktop screen where it can be read.
+        detail: flag.detail.length > 220 ? `${flag.detail.slice(0, 220).trimEnd()}…` : flag.detail,
+        raisedByName: flag.raisedByName,
+        raisedAt: flag.raisedAt,
+      })),
+      auditedDays: summary.auditedDays.length,
     }
   }
 

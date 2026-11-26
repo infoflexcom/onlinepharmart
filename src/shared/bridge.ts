@@ -5,6 +5,23 @@ import type {
   CreateOrderInput, FinalizeOrderInput, FinalizeOrderResult, OrderView,
 } from './orders/types'
 import type { PrintLogEntry } from '../services/print-gate-service'
+import type {
+  AuditDayStatus,
+  AuditDebtorPaymentRow,
+  AuditExportInput,
+  AuditExportResult,
+  AuditFlagNoteInput,
+  AuditFlagRow,
+  AuditNoteFindingInput,
+  AuditSignOffRow,
+  AuditSummaryForPhone,
+  DailyAuditReport,
+  DayAuditInput,
+  RaiseAuditFlagInput,
+  ResolveAuditFlagInput,
+  SignOffDayInput,
+  UnauditedDay,
+} from './audit/types'
 import type { RoleSeatCount, SeatCountChange, TeamSettingsInput, TeamSnapshot } from '../services/team-service'
 
 import type { CurrencyDefinition } from './currency/catalog'
@@ -75,6 +92,7 @@ import type {
   CloseDayInput,
   DayCloseRecord,
   OpenCashierShiftInput,
+  RecordDebtorPaymentInput,
   ReportExportInput,
   ReportPeriodInput,
 } from './reports/types'
@@ -218,6 +236,20 @@ export interface InfoflexBridge {
   openCashierShift(input: OpenCashierShiftInput): Promise<CashierShiftReportRow>
   closeCashierShift(input: CloseCashierShiftInput): Promise<CashierShiftReportRow>
   recordCashDrawerEvent(input: CashDrawerEventInput): Promise<void>
+  /** Take money against what a customer owes. Moves the balance and the drawer in one transaction. */
+  recordDebtorPayment(input: RecordDebtorPaymentInput): Promise<AuditDebtorPaymentRow>
+  /** One business day, recomputed from the ledger. Omit `accountId` to audit the whole store. */
+  getDayAudit(input: DayAuditInput): Promise<DailyAuditReport>
+  listAuditDayStatuses(): Promise<AuditDayStatus[]>
+  listUnauditedDays(days?: number): Promise<UnauditedDay[]>
+  getAuditSummary(): Promise<AuditSummaryForPhone>
+  signOffAuditDay(input: SignOffDayInput): Promise<AuditSignOffRow>
+  noteAuditFinding(input: AuditNoteFindingInput): Promise<AuditFlagRow>
+  raiseAuditFlag(input: RaiseAuditFlagInput): Promise<AuditFlagRow>
+  addAuditFlagNote(input: AuditFlagNoteInput): Promise<AuditFlagRow>
+  resolveAuditFlag(input: ResolveAuditFlagInput): Promise<AuditFlagRow>
+  /** The day as a file. There is no print method beside it: an audit is never handed across a counter. */
+  exportAudit(input: AuditExportInput): Promise<AuditExportResult>
   updateStoreDetails(profile: ShopProfile): Promise<ShopSettings>
   updateDisplaySettings(display: MoneyDisplayOptions): Promise<ShopSettings>
   changeCurrency(currency: CurrencyDefinition, confirmed: boolean): Promise<ShopSettings>

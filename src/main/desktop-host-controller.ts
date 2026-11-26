@@ -48,11 +48,18 @@ import type {
   CloseDayInput,
   DayCloseRecord,
   OpenCashierShiftInput,
+  RecordDebtorPaymentInput,
   ReportActor,
   ReportExportInput,
   ReportPeriodInput,
 } from '../shared/reports/types'
 import { AccountingReportService } from '../services/accounting-report-service'
+import { DailyAuditService } from '../services/daily-audit-service'
+import type {
+  AuditActor, AuditDayStatus, AuditDebtorPaymentRow, AuditExportInput, AuditExportResult, AuditFlagNoteInput,
+  AuditFlagRow, AuditNoteFindingInput, AuditSignOffRow, AuditSummaryForPhone, DailyAuditReport, DayAuditInput,
+  RaiseAuditFlagInput, ResolveAuditFlagInput, SignOffDayInput, UnauditedDay,
+} from '../shared/audit/types'
 import type { MobileAccessService } from '../services/mobile-access-service'
 import type { ApprovalQueueService } from '../services/approval-queue-service'
 import type { BackupService } from '../services/backup-service'
@@ -95,6 +102,7 @@ const PAGE_LABELS: readonly NavigationItem[] = [
   { id: 'returns', label: 'Returns' },
   { id: 'customers', label: 'Customers' },
   { id: 'reports', label: 'Reports' },
+  { id: 'audit', label: 'Daily Audit' },
   { id: 'users', label: 'Users' },
   { id: 'mobile', label: 'Mobile Access' },
   { id: 'settings', label: 'Settings' },
@@ -157,6 +165,15 @@ export class DesktopHostController {
      */
     private readonly orders?: OrderService,
     private readonly printGate?: PrintGateService,
+    /**
+     * The daily audit: reading the day back, and the Supervisor's attestation about it.
+     *
+     * Appended last for the same reason as `orders` and `printGate` — inserting it beside the other services would
+     * shift the position of every argument after it and silently re-bind callers that pass them positionally. A host
+     * without it reports the audit channels as unavailable rather than pretending every day is already audited, which
+     * is the one wrong answer this feature must never give.
+     */
+    private readonly audit?: DailyAuditService,
   ) {}
 
   async initialize(): Promise<void> {
@@ -778,6 +795,70 @@ export class DesktopHostController {
     this.requireAccountingReportService().recordCashDrawerEvent(input, toReportActor(actor), edition)
   }
 
+  recordDebtorPayment(senderId: number, input: RecordDebtorPaymentInput): AuditDebtorPaymentRow {
+    // Guarded by the customers page, not the reports page: this is money coming off a person's balance, and the
+    // capability check inside the service is the same one the till uses to take a payment.
+    const edition = this.requireEdition()
+    const actor = this.userService.requirePageAccess(this.requireSignedIn(senderId), 'customers', edition)
+    return this.requireAccountingReportService().recordDebtorPayment(input, toReportActor(actor), edition)
+  }
+
+  getDayAudit(senderId: number, input: DayAuditInput): DailyAuditReport {
+    const { actor, edition } = this.requireAuditAccess(senderId)
+    return this.requireDailyAuditService().getDayAudit(input, toAuditActor(actor), edition)
+  }
+
+  listAuditDayStatuses(senderId: number): AuditDayStatus[] {
+    const { actor, edition } = this.requireAuditAccess(senderId)
+    return this.requireDailyAuditService().dayStatuses(toAuditActor(actor), edition)
+  }
+
+  listUnauditedDays(senderId: number, lookbackDays?: number): UnauditedDay[] {
+    const { actor, edition } = this.requireAuditAccess(senderId)
+    return this.requireDailyAuditService().listUnauditedDays(toAuditActor(actor), edition, lookbackDays)
+  }
+
+  getAuditSummary(senderId: number): AuditSummaryForPhone {
+    const { actor, edition } = this.requireAuditAccess(senderId)
+    return this.requireDailyAuditService().summaryForPhone(toAuditActor(actor), edition)
+  }
+
+  signOffAuditDay(senderId: number, input: SignOffDayInput): AuditSignOffRow {
+    const { actor, edition } = this.requireAuditAccess(senderId)
+    return this.requireDailyAuditService().signOffDay(input, toAuditActor(actor), edition)
+  }
+
+  noteAuditFinding(senderId: number, input: AuditNoteFindingInput): AuditFlagRow {
+    const { actor, edition } = this.requireAuditAccess(senderId)
+    return this.requireDailyAuditService().noteFinding(input, toAuditActor(actor), edition)
+  }
+
+  raiseAuditFlag(senderId: number, input: RaiseAuditFlagInput): AuditFlagRow {
+    const { actor, edition } = this.requireAuditAccess(senderId)
+    return this.requireDailyAuditService().raiseFlag(input, toAuditActor(actor), edition)
+  }
+
+  addAuditFlagNote(senderId: number, input: AuditFlagNoteInput): AuditFlagRow {
+    const { actor, edition } = this.requireAuditAccess(senderId)
+    return this.requireDailyAuditService().addFlagNote(input, toAuditActor(actor), edition)
+  }
+
+  resolveAuditFlag(senderId: number, input: ResolveAuditFlagInput): AuditFlagRow {
+    const { actor, edition } = this.requireAuditAccess(senderId)
+    return this.requireDailyAuditService().resolveFlag(input, toAuditActor(actor), edition)
+  }
+
+  /**
+   * The day as a file, and the only output this screen has.
+   *
+   * There is no `printAudit` beside it and never will be: the print gate is the only route to a printer, it refuses an
+   * audit subject, and an audit is a document the Admin keeps rather than one handed across a counter.
+   */
+  exportAudit(senderId: number, input: AuditExportInput): Promise<AuditExportResult> {
+    const { actor, edition } = this.requireAuditAccess(senderId)
+    return this.requireDailyAuditService().exportAudit(input, toAuditActor(actor), edition)
+  }
+
   updateStoreDetails(senderId: number, profile: ShopProfile): ShopSettings {
     this.requireAdmin(senderId)
     return this.shopService.updateStoreDetails(profile, this.requireSignedIn(senderId)!.username)
@@ -1063,6 +1144,24 @@ export class DesktopHostController {
     return { actor, edition }
   }
 
+  /**
+   * The audit page, which is a different page from reports for a reason.
+   *
+   * A Supervisor holds `view_audit` and no `view_reports`. Routing this through `requireReportsAccess` would have
+   * turned the feature the brief asks for into a screen the Supervisor cannot open, and the error would have been the
+   * generic one about reports.
+   */
+  private requireAuditAccess(senderId: number): { actor: PublicUser; edition: Edition } {
+    const edition = this.requireEdition()
+    const actor = this.userService.requirePageAccess(this.requireSignedIn(senderId), 'audit', edition)
+    return { actor, edition }
+  }
+
+  private requireDailyAuditService(): DailyAuditService {
+    if (!this.audit) throw new Error('The daily audit service is unavailable on this installation.')
+    return this.audit
+  }
+
   private requireAccountingReportService(): AccountingReportService {
     if (!this.reports) throw new Error('The desktop accounting and reports service is unavailable.')
     return this.reports
@@ -1194,5 +1293,15 @@ function toInventoryActor(user: PublicUser): InventoryActor {
 }
 
 function toReportActor(user: PublicUser): ReportActor {
+  return { id: user.id, username: user.username, fullName: user.fullName, role: user.role }
+}
+
+/**
+ * The same four fields, under the audit's own name.
+ *
+ * Not an alias of `toReportActor`, even though the shapes match today: the two actors answer different questions, and
+ * the day one of them grows a field the other does not need is the day a shared helper becomes a lie.
+ */
+function toAuditActor(user: PublicUser): AuditActor {
   return { id: user.id, username: user.username, fullName: user.fullName, role: user.role }
 }

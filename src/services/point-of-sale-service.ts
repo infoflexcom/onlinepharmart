@@ -6,6 +6,12 @@ import { parseMoneyExact } from '../currency/parse'
 import type { Edition } from '../editions'
 import type { PublicUser } from '../shared/auth/types'
 import type { ShopRepository } from './contracts/shop-repository'
+import {
+  actorDiscountBasisPoints,
+  maximumDiscountFor,
+  resolveDiscountCap,
+  shopDiscountLimit,
+} from './discount-cap'
 import type { ShopSettings } from '../shared/shop/types'
 import type { ShopProfile } from '../shared/shop/types'
 import type {
@@ -797,14 +803,18 @@ export class PointOfSaleService {
       line.lineTotalMinor -= line.manualDiscountMinor
     }
     const manualDiscount = lines.reduce((total, line) => total + line.manualDiscountMinor, 0n)
-    // The stricter of two ceilings applies: the cashier's permission and the shop-wide limit from Settings.
-    const shopLimit = shopDiscountLimit(settings)
-    const actorLimit = actor.role === 'ADMIN' ? 10_000 : actor.permissions.maxDiscountBasisPoints
-    const limitBasisPoints = Math.min(actorLimit, shopLimit)
-    const maximumDiscount = (grossSubtotal * BigInt(limitBasisPoints)) / 10_000n
+    // The stricter of two ceilings applies: the cashier's permission and the shop-wide limit from Settings. The rule
+    // itself lives in `discount-cap`, because the daily audit reports discounts "near or above the cap" and has to mean
+    // the same cap this line refuses against.
+    const cap = resolveDiscountCap(
+      actorDiscountBasisPoints(actor.role, actor.permissions.maxDiscountBasisPoints),
+      shopDiscountLimit(settings),
+    )
+    const limitBasisPoints = cap.limitBasisPoints
+    const maximumDiscount = maximumDiscountFor(grossSubtotal, limitBasisPoints)
     if (manualDiscount > maximumDiscount) {
-      const limit = limitBasisPoints / 100
-      const byShopLimit = limitBasisPoints === shopLimit && shopLimit < actorLimit
+      const limit = cap.limitPercent
+      const byShopLimit = cap.setBy === 'SHOP_SETTINGS'
       const explanation = byShopLimit
         ? `This sale's manual discount exceeds the ${limit}% shop limit set in Settings.`
         : `This sale's manual discount exceeds your ${limit}% permission limit.`
@@ -1416,12 +1426,6 @@ function enabledMethods(settings: ShopSettings): ReadonlySet<string> {
     return new Set(['CASH', 'TRANSFER', 'CARD', 'CREDIT'])
   }
   return new Set(configured)
-}
-
-/** Shop-wide discount ceiling from Settings, 0–10 000 basis points; any discount when unset. */
-function shopDiscountLimit(settings: ShopSettings): number {
-  const limit = settings.operational?.discountLimitBasisPoints
-  return typeof limit === 'number' && Number.isInteger(limit) && limit >= 0 && limit <= 10_000 ? limit : 10_000
 }
 
 const PAYMENT_METHOD_NAMES: Record<PosPaymentMethod, string> = {

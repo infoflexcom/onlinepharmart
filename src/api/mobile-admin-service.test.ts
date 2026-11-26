@@ -13,6 +13,7 @@ import { UserService } from '../services/user-service'
 import { AccountingReportService } from '../services/accounting-report-service'
 import { ApprovalQueueService } from '../services/approval-queue-service'
 import { ReturnService } from '../services/return-service'
+import { DailyAuditService } from '../services/daily-audit-service'
 import { createMobileAdminSurface } from './mobile-admin-surface'
 import { MobileStaleVersionError } from './mobile-admin-service'
 import type { AuthenticatedPrincipal } from '../services/permissions'
@@ -95,6 +96,9 @@ async function createHarness(currencyCode = 'NGN', snapshot = license()): Promis
     pointOfSale: pos,
     users,
     reports,
+    // A real audit service, not a stub: the dashboard's audit block is built from it, and a stub would let a wiring
+    // mistake pass here and only show up on a phone paired to a real shop.
+    audit: new DailyAuditService(database, repository, reports),
     approvals,
     returns,
     countConnectedDevices: () => 1,

@@ -1,0 +1,198 @@
+/*
+  Daily audit — the Supervisor's screen, and the Admin's view of whether the Supervisor has looked.
+
+  Kept in its own file like seats.css and orders.css, so the styles travel with the component that uses them. Everything
+  here reuses the tokens in styles.css (--navy, --ink, --muted, --line, --gold, --paper); this file adds no palette of
+  its own, because a second set of colours is how two screens end up looking like two products.
+
+  Three things shaped the layout, and each is a decision about reading rather than about looks:
+
+  1. Severity is colour AND word. A finding is never marked by a red dot alone: the badge says NOTE, CONCERN or SERIOUS
+     in letters, because this screen is read by somebody who has to repeat what it said to an owner who is not in the
+     room, and "the red one" does not survive that conversation. The colour is for scanning, the word is for the record.
+  2. Money is right-aligned and tabular. A column of figures that does not line up by digit cannot be added up by eye,
+     and adding up by eye is what an auditor does while the till is still open.
+  3. The detail tables collapse. A day with four hundred sales is audited by its totals and its findings; the rows are
+     here for the one sale that needs reading, and burying the verdict under them would defeat the screen.
+*/
+
+.audit-workspace { display: flex; min-width: 0; flex-direction: column; gap: 18px; }
+
+.audit-header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.audit-header h2 { margin: 6px 0 4px; color: var(--ink); font-size: clamp(22px, 2.2vw, 28px); font-weight: 700; letter-spacing: -.04em; }
+.audit-header p { max-width: 660px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+
+.audit-header-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+
+/* Stated rather than left to be inferred from a button that is not there. */
+.audit-no-print {
+  margin: 0; padding: 9px 13px; border: 1px solid #e2d9c4; border-radius: 9px;
+  background: #fbf7ee; color: #7a6534; font-size: 11.5px; font-weight: 650; white-space: nowrap;
+}
+
+.audit-message {
+  margin: 0; padding: 10px 13px; border: 1px solid #cfe3d4; border-radius: 9px;
+  background: #f2f9f4; color: #2c6138; font-size: 12.5px; font-weight: 600;
+}
+
+.audit-columns { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+@media (min-width: 1180px) { .audit-columns { grid-template-columns: minmax(0, 340px) minmax(0, 1fr); } }
+
+.audit-pane {
+  display: flex; min-width: 0; flex-direction: column; gap: 14px;
+  padding: 20px 22px; border: 1px solid #e7e8e7; border-radius: 13px;
+  background: var(--paper); box-shadow: 0 2px 5px rgba(20, 45, 82, .025);
+}
+.audit-pane h3 { margin: 0; color: var(--ink); font-size: 15px; font-weight: 750; letter-spacing: -.015em; }
+.audit-pane h4 { margin: 8px 0 0; color: var(--ink); font-size: 12px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; }
+.audit-pane--days { position: sticky; top: 12px; }
+
+.audit-muted { margin: 0; color: #87909b; font-size: 11.5px; line-height: 1.55; }
+.audit-empty { margin: 0; padding: 10px 0; color: #8b939d; font-size: 12px; line-height: 1.55; }
+.audit-empty-cell { padding: 12px 10px; color: #8b939d; font-size: 12px; text-align: left; }
+
+/* --- the list of days that owe a look -------------------------------------------------- */
+
+.audit-day-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.audit-day-list li { margin: 0; }
+
+.audit-day-button {
+  display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 9px 11px;
+  border: 1px solid var(--line); border-radius: 9px; background: #fcfcfd;
+  text-align: left; cursor: pointer; transition: border-color .14s ease, background .14s ease;
+}
+.audit-day-button:hover { border-color: #c7d2e6; background: #f7f9fd; }
+.audit-day-button strong { color: var(--ink); font-size: 12.5px; font-weight: 700; }
+.audit-day-button span { color: var(--muted); font-size: 11.5px; }
+.audit-day-figures { color: #87909b; font-size: 11px; }
+
+/* --- tables --------------------------------------------------------------------------- */
+
+.audit-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.audit-table th, .audit-table td {
+  padding: 7px 9px; border-bottom: 1px solid #eef0f2; text-align: left; vertical-align: top;
+  color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.audit-table thead th {
+  color: var(--muted); font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+.audit-table tbody tr:last-child th, .audit-table tbody tr:last-child td { border-bottom: none; }
+.audit-table--statuses th, .audit-table--statuses td { padding: 6px 8px; font-size: 11.5px; }
+.audit-table--tie th { width: 62%; color: var(--muted); font-size: 11.5px; font-weight: 600; text-transform: none; letter-spacing: 0; }
+
+/* Money right-aligned where a hand expects to find it, and tabular so the digits line up. */
+.audit-money { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.audit-row--total th, .audit-row--total td { border-top: 1px solid var(--line); font-weight: 750; }
+.audit-row--differs th, .audit-row--differs td { background: #fdf3f2; color: #9d3b33; font-weight: 750; }
+
+.audit-clear { color: #2c6138; font-size: 11.5px; font-weight: 600; }
+.audit-clear-line { margin: 8px 0 0; color: #2c6138; font-size: 12px; font-weight: 600; }
+.audit-differs-line { margin: 8px 0 0; color: #9d3b33; font-size: 12px; font-weight: 650; }
+
+.audit-totals { display: grid; gap: 8px 16px; margin: 0; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); }
+.audit-totals div { display: flex; flex-direction: column; gap: 1px; padding: 7px 10px; border: 1px solid #eef0f2; border-radius: 8px; background: #fcfcfd; }
+.audit-totals dt { color: var(--muted); font-size: 10.5px; font-weight: 650; letter-spacing: .03em; text-transform: uppercase; }
+.audit-totals dd { margin: 0; color: var(--ink); font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* --- badges: severity as a word, with colour for scanning ------------------------------ */
+
+.audit-badge {
+  display: inline-block; margin-right: 6px; padding: 2px 7px; border-radius: 999px;
+  font-size: 10px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap;
+}
+.audit-badge--note { border: 1px solid #d6dced; background: #f2f5fc; color: #3a5390; }
+.audit-badge--concern { border: 1px solid #ecd9a8; background: #fdf7e7; color: #8a6a1c; }
+.audit-badge--serious { border: 1px solid #ecc3bd; background: #fdf1ef; color: #9d3b33; }
+.audit-badge--clean { border: 1px solid #cfe3d4; background: #f2f9f4; color: #2c6138; }
+.audit-badge--issues { border: 1px solid #ecd9a8; background: #fdf7e7; color: #8a6a1c; }
+.audit-badge--open { border: 1px solid var(--line); background: #f6f7f9; color: var(--muted); }
+.audit-badge--flag { border: 1px solid #ecc3bd; background: #fdf1ef; color: #9d3b33; }
+.audit-badge--resolved { border: 1px solid #d8dde3; background: #f4f6f8; color: #5c6672; }
+
+.audit-finding-headline { display: block; margin-top: 3px; color: var(--ink); font-size: 12px; font-weight: 650; }
+.audit-finding-detail { display: block; margin-top: 2px; color: #7d8794; font-size: 11px; line-height: 1.5; }
+
+/* --- the day picker -------------------------------------------------------------------- */
+
+.audit-day-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.audit-day-form label { display: flex; flex-direction: column; gap: 4px; }
+.audit-day-form span { color: var(--muted); font-size: 10.5px; font-weight: 650; letter-spacing: .03em; text-transform: uppercase; }
+.audit-day-form input, .audit-day-form select {
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--paper); color: var(--ink); font-size: 12.5px;
+}
+
+/* --- the verdict ------------------------------------------------------------------------ */
+
+.audit-verdict { padding: 12px 14px; border-radius: 10px; border: 1px solid #cfe3d4; background: #f4faf6; }
+/* Styled in its own right rather than left as the default: a signed day that still reads as it did when signed is the
+   good outcome, and it should look deliberate rather than merely not-warning. */
+.audit-verdict--signed { border-color: #cfe3d4; background: #f4faf6; }
+.audit-verdict strong { color: #24512f; font-size: 12.5px; font-weight: 700; }
+.audit-verdict--moved { border-color: #ecd9a8; background: #fdf8ec; }
+.audit-verdict--moved strong { color: #8a6a1c; }
+.audit-verdict-note { margin: 6px 0 0; color: #3d5544; font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+.audit-verdict-warning { margin: 8px 0 0; color: #8a6a1c; font-size: 11.5px; font-weight: 600; line-height: 1.55; }
+
+/* --- blocks ----------------------------------------------------------------------------- */
+
+.audit-block { display: flex; flex-direction: column; gap: 9px; padding-top: 4px; border-top: 1px solid #f0f1f3; }
+.audit-block:first-of-type { border-top: none; padding-top: 0; }
+.audit-block--signoff { padding: 14px; border: 1px solid #d9e2f0; border-radius: 11px; background: #fafbfe; }
+.audit-block--detail { gap: 0; }
+
+.audit-disclosure {
+  display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 0;
+  border: none; background: none; cursor: pointer; text-align: left;
+}
+.audit-disclosure h3 { margin: 0; color: var(--ink); font-size: 13.5px; font-weight: 700; }
+.audit-disclosure-mark {
+  display: inline-flex; align-items: center; justify-content: center; width: 19px; height: 19px;
+  border: 1px solid var(--line); border-radius: 5px; background: #fcfcfd;
+  color: var(--muted); font-size: 13px; line-height: 1;
+}
+.audit-detail-body { display: flex; flex-direction: column; gap: 8px; padding: 4px 0 10px; overflow-x: auto; }
+
+/* --- notes and flags --------------------------------------------------------------------- */
+
+.audit-note-form { display: flex; flex-direction: column; gap: 9px; padding: 11px 12px; border: 1px solid #e4e8ef; border-radius: 10px; background: #fbfcfe; }
+.audit-note-form h4 { margin: 0; color: var(--ink); font-size: 12px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; }
+.audit-note-form label { display: flex; flex-direction: column; gap: 4px; }
+.audit-note-form span { color: var(--muted); font-size: 10.5px; font-weight: 650; letter-spacing: .03em; text-transform: uppercase; }
+.audit-note-form textarea, .audit-note-form select {
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--paper); color: var(--ink); font-size: 12.5px; font-family: inherit; line-height: 1.5; resize: vertical;
+}
+.audit-note-actions { display: flex; align-items: center; gap: 12px; }
+
+.audit-link {
+  padding: 0; border: none; background: none; color: var(--navy);
+  font-size: 11.5px; font-weight: 650; text-decoration: underline; cursor: pointer;
+}
+.audit-link:disabled { color: #a8b0bb; cursor: not-allowed; text-decoration: none; }
+
+.audit-flag { display: flex; flex-direction: column; gap: 6px; padding: 11px 13px; border: 1px solid var(--line); border-left-width: 3px; border-radius: 9px; background: #fcfcfd; }
+.audit-flag header { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.audit-flag header strong { color: var(--ink); font-size: 12.5px; font-weight: 700; }
+.audit-flag--note { border-left-color: #7f96c9; }
+.audit-flag--concern { border-left-color: var(--gold); }
+.audit-flag--serious { border-left-color: #c0564c; }
+.audit-flag--resolved { border-left-color: #b9c0c8; background: #f8f9fa; }
+.audit-flag-who { margin-left: auto; color: #8b939d; font-size: 10.5px; }
+
+/* An append-only conversation, stamps and all: `pre` so who said what and when stays exactly as it was written. */
+.audit-flag-detail {
+  margin: 0; padding: 8px 10px; border-radius: 7px; background: #f5f6f8;
+  color: #3c4655; font-family: inherit; font-size: 11.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+}
+.audit-flag-resolution { margin: 0; color: #5c6672; font-size: 11.5px; line-height: 1.5; }
+.audit-flag-actions { display: flex; align-items: center; gap: 14px; }
+.audit-flag-actions .audit-note-form { width: 100%; }
+
+.audit-outcome { display: flex; flex-direction: column; gap: 7px; margin: 0; padding: 0; border: none; }
+.audit-outcome legend { padding: 0; color: var(--muted); font-size: 10.5px; font-weight: 650; letter-spacing: .03em; text-transform: uppercase; }
+.audit-outcome label { flex-direction: row; align-items: center; gap: 8px; }
+.audit-outcome span { color: var(--ink); font-size: 12.5px; font-weight: 600; text-transform: none; letter-spacing: 0; }
+.audit-outcome input { width: auto; margin: 0; }

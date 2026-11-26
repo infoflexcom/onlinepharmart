@@ -1472,3 +1472,151 @@ What no test here can prove is the printing. Layouts are validated against the s
 print log is asserted row by row, and receipts are asserted to keep their snapshot when the store is renamed — but no
 receipt has come out of a printer, no 58 mm roll has been loaded, and no cash drawer has opened. Those are owed checks
 in `docs/RELEASE-CHECKLIST.md`, not passes.
+
+## Phase 19 — the daily audit, and the phone that reads it
+
+**Status: built and tested in this repository; nothing in it has run on Windows, no printer has been driven, and no
+real Supervisor has signed a real day off.**
+
+### What was built
+
+**Migration 19, and the same discovery as migration 18: the tables were already there.** Migration 16 created
+`audit_signoffs` and `audit_flags` and described them as the audit-only Supervisor's surface, then built nothing on
+them — no service in the tree had ever written a row to either. This phase is the writing. It needed four columns the
+earlier design did not have: `audit_signoffs.outcome` (the brief gives exactly two verdicts, and encoding the
+difference inside the free `note` text would mean reading somebody's prose to answer "is this day clean?"),
+`audit_signoffs.scope_account_id` (a day is audited for one Account at a time, so the subject is a date *and* a till
+user), `audit_flags.source` and `audit_flags.check_code` (only an automatic flag can be recomputed, and the code is what
+stops one check raising the same finding twice). It creates one new table, `debtor_payments`, and the reason is that
+`payments` cannot hold such a row: its CHECK forces every payment to reference a sale or a return, and a customer
+settling an old balance is neither. A report section that could only ever be empty would be a lie of omission on the one
+screen whose whole job is finding things out.
+
+It adds **no** table of audited days and **no** stored totals on a sign-off. Whether a day is audited is the existence of
+a sign-off for it; whether a day needs auditing is the existence of sales on it; and totals that are always recomputed
+from `sales`, `payments`, `returns` and `day_closings` cannot drift from the ledger the way totals written down at
+sign-off time can. The only thing recorded about the numbers is `subject_digest`.
+
+**`DailyAuditService` (1 844 lines, 49 tests).** Ten methods — `getDayAudit`, `dayStatuses`, `listUnauditedDays`,
+`signOffDay`, `noteFinding`, `raiseFlag`, `addFlagNote`, `resolveFlag`, `summaryForPhone` and `exportAudit` — which the
+host exposes behind one capability set as eleven channels, the eleventh being `recordDebtorPayment`: an auditor has to be
+able to take a payment from a debtor while standing at that screen, but the payment belongs to
+`AccountingReportService`, which owns the drawer and the customer balance it moves. Putting it on the audit service would
+have meant a second writer of the same money. Nothing about a day is stored, so every figure is a query
+at read time — which is what makes "the totals reconcile with the sales ledger to the last unit" a property of the
+reading rather than a promise made once when the row was written. `reconcileAuditTotals` compares the sum of the rows the
+screen lists against the ledger's own aggregates for six figures — gross sales, sales, payments, returns, refunds and
+discounts — and reports each difference by name and by both amounts (`gross sales: the audit shows X and the ledger shows
+Y`) rather than by a count of things that disagreed. A count tells an auditor to go and look; a name tells them where.
+
+**Six checks run themselves, and every threshold is a derived constant.** `runAuditChecks` in `audit-checks.ts` produces
+findings with a severity that is *measured*, not guessed: `CASH_DIFFERENCE` is `SERIOUS` at or above 1 % of the expected
+drawer (`CASH_DIFFERENCE_SERIOUS_BASIS_POINTS = 100n`) and `CONCERN` below it — counting ₦100 against a drawer that
+should have held ₦184 is ₦84 short, which is 45 % of the expectation and reads as `SERIOUS`, while ₦1 short of the same
+₦184 reads as a `CONCERN`; a day with no expectation at all (`expected <= 0`) is always `SERIOUS`, because a day cannot be
+judged proportionally and an unexpected naira in an empty drawer is not waved through by a division by zero; `MANY_REPRINTS` is `CONCERN` at three duplicates and `SERIOUS` at six; `MANY_VOIDS` is `SERIOUS` from one row,
+because a finished sale in this product is reversed by a return and never by a void, so anything in that section needs
+explaining; `DISCOUNT_ABOVE_THRESHOLD` is `SERIOUS` when the cap that applied to that cashier was passed and `NOTE` when
+a discount merely came within 10 % of it; `SALES_AFTER_MIDNIGHT` is `CONCERN` for anything rung up before 05:00, which
+is the next business day and therefore not in the close that was counted for this one; and
+`ORDER_EDITED_AFTER_PAYMENT_ATTEMPT` is `SERIOUS`. The thresholds live in `src/shared/audit/types.ts` as exported
+constants so the screen, the export and the phone cannot each invent their own.
+
+**The drawer is one formula with one spelling.** `expectedDrawerCash` in `cash-drawer.ts` takes the opening float, cash
+sales, cash refunds, the day's paid-in/paid-out/float/safe-drop adjustments and cash taken from debtors, and is imported
+by the accounting service, the audit service and the browser preview. The same is true of `resolveDiscountCap` in
+`discount-cap.ts`, which settles whether a cashier's own permission or the shop setting is the lower ceiling and says
+which of the two applied. Three readers call it — the till, which refuses a discount over the ceiling; the audit, which
+measures each discount against the ceiling that applied *to that cashier on that day*; and the browser preview — so a
+ceiling moved in Settings moves all three at once. Two spellings of one rule is how a discount gets through the till and
+then fails to appear as a finding.
+
+**A debtor payment is a new money movement, not a sale.** `recordDebtorPayment` is gated by the `record_debtor_payment`
+capability that has been granted to ACCOUNT since the capability table was written and had nothing to call. It refuses
+zero and negative amounts, refuses a customer who owes nothing ("Bode Stores owes nothing, so there is no payment to
+take."), refuses more than the balance, updates `customers.balance` under optimistic `row_version` locking so two tills
+cannot both spend the same payment, numbers the document `DP-%08d` from `document_sequences`, stores `balance_before`
+and `balance_after` so the account reads as a trail, and records the receiver's open shift — which is what lets cash
+taken from a debtor land in the drawer that shift is counting. Its `shift_id` column ties the payment into the shift that took it,
+which deliberately changes another total — cash from debtors is cash in the drawer — and the tests assert the change
+rather than merely tolerating it: a second ₦12 payment moves the expected drawer from ₦184 to ₦196. A column that moves a
+figure somewhere else and is not asserted there is how a drawer starts disagreeing with its own shift.
+
+**The day the audit reads is the day the sale happened, not the day the price was checked.** A line charged below
+catalogue is compared against the catalogue price *at the time of the sale*, reconstructed from `audit_log` rows of
+`product.updated` whose metadata carries the old and new prices. Comparing against today's price would flag every sale
+that preceded a legitimate price change and excuse every one that followed a fraudulent one, and `products.updated_at`
+is not evidence of what the price was at noon on Tuesday. A raw `UPDATE products` leaves no such trace, which is why the
+tests edit prices through `inventory.updateProduct` — a guard is only as good as the path that has to pass it.
+
+**An audit exports as a file and can never be printed.** `exportAudit` writes CSV or Excel and refuses anything else
+("Choose CSV or Excel to export the audit."). There is no PDF path, deliberately: a PDF is a document to hand somebody,
+and the requirement is that nothing leaves an audit screen in a form that could be mistaken for a receipt across a
+counter. What the file contains is *exactly what the caller was shown* — the tables are built from an already
+permission-gated report, so a Supervisor's export carries no cost and no margin, and a test asserts that neither word
+appears in any column heading. Money leaves in the shop's own decimals (two for NGN, none for JPY), percentages leave as
+text so nobody sums them, quantities leave as milli-units, and a cell beginning with `=`, `+` or `@` is neutralised so a
+receipt number cannot become a formula in somebody's Excel. The Excel path holds real numbers with the currency's own
+number format, and refuses outright rather than writing a figure Excel cannot hold exactly.
+
+The export always carries the six checks with "Nothing found" beside the quiet ones and the attestation section, and
+says in words when no flag was raised ("No flags were raised on this day."). A heading with nothing under it is the shape
+of a document that stopped early. It also answers the two questions an auditor will be asked a month later: whether the
+totals agree with the sales ledger, and — when the day was signed — **"The day still reads as it did when signed"**,
+which reads `No — sales have moved since` the moment the digest stops matching. That warning is not suppressible on the
+screen either.
+
+**The print gate refuses what it cannot name.** The gate's dispatch was a ternary — a `SALE` went to the receipt
+renderer and everything else to the returns renderer — so a kind outside the closed union `'SALE' | 'RETURN'` was not
+refused, it was *treated as a return*. TypeScript protects compile-time callers; a print request crosses an IPC boundary
+that casts. `PRINTABLE_KINDS` is now the two kinds as a value and the guard checks against it before anything is read,
+with a refusal that names the rule rather than the accident ("Only a receipt or a credit note can be printed. An audit
+and a report are files, not documents to hand over."). Disabling that guard fails five tests, and the failures show the
+old behaviour exactly: the caller got "Only a completed return can be printed", a different sentence with a different
+meaning. `print_log.document_kind` still allows `REPORT`, because the log is a *record* and the audit reads history from
+it, including rows this gate could no longer write; a test inserts one, reads it back, and asserts the gate cannot
+produce a second.
+
+**The audit screen (`DailyAuditWorkspace.tsx`, 982 lines) offers nothing the Server would refuse.** Its buttons come
+from `report.canExport`, `canNote` and `canSignOff` rather than from a role check of its own. A clean day lists all six
+checks with "Nothing found" rather than showing an empty box. Severity is colour *and* a word, because colour alone is
+not a finding. Money is right-aligned and `tabular-nums` so a column of figures can be read down. Flag detail renders as
+`pre` so the append-only stamps stay verbatim, and the detail tables collapse. The absence of a print button is stated on
+the screen — "No printing from this screen. An audit is a file, not a receipt." — because an unexplained missing control
+reads as a broken one.
+
+**The phone lists and never signs.** The Admin dashboard grew an audit block from a new `summaryForPhone`, which returns
+the unaudited days, the open flags and a count of days audited in the last 30. The block shows at most eight days and five
+flags and says so when there are more ("And 3 more on the Server's audit screen."), and it ends with **"Signing a day off
+is done on the Server, where the whole day can be read first."** There is no sign-off tile on the phone, and that is not
+a missing feature: a tile that invited a verdict would invite an attestation made from a summary. Money crosses to the
+phone as **text**, because the phone formats with the shop's currency definition from the header and a bigint surviving
+JSON as a number would be a figure whose decimals the phone has to guess. And `null` is not an empty list: `null` means
+this Server has no audit service, empty means every day with activity has been audited, and the two render differently.
+
+### What the tests prove, and what they cannot
+
+Every guard added in this phase has a test that disables the guard or removes its input and asserts the failure. Removing
+`view_audit` from the auditor check fails 2 tests; removing `write_audit_note` from the note check fails 1; removing the
+capability gate from `recordDebtorPayment` fails 1; and replacing the price reconstruction with today's catalogue price
+fails 1. The print gate's kind guard fails 5 when disabled. The whole-store sign-off's uniqueness is asserted at the
+database level, not only through the service, because a partial unique index over a nullable column needs its `COALESCE`
+to work at all — in SQLite two NULLs are distinct, and without it a second whole-store sign-off of one day would have
+been accepted.
+
+`css-coverage.test.ts` found a real gap and a false one. The real one was `.audit-verdict--signed`, a class the new
+component used and the new stylesheet did not define. The false one was three words — `clean`, `issues`, `resolved` —
+that are *not* class names: they were the operands of a ternary sitting inside a `className={…}` expression, which the
+coverage test reads as class names because it reads every string literal in that expression. The fix was to move them
+into named helper functions (`outcomeClass`, `flagBadgeClass`), where the extractor cannot see them, and **not** to add
+the component to `KNOWN_UNSTYLED`, a list that may only shrink.
+
+Three things this environment cannot prove. First, the harness clock: a test that seeds rows with the machine's own
+`datetime('now')` puts them outside the business day being audited and every check silently finds nothing, so every
+audit test passes an explicit `now`. Second, the browser preview (`preview-audit.ts`) implements the same workflow by the
+same route and imports the same `runAuditChecks`, `expectedDrawerCash`, `resolveDiscountCap` and `auditDigestKey`, so no
+threshold is re-spelled — but it is honest about its gaps rather than inventing rows: it cannot produce an order edited
+after a payment attempt, its reprint reasons are empty, its voids are always empty and its reconciliation always matches.
+It exports CSV only and throws for Excel, since a tab cannot run `exceljs` synchronously. Third, no Supervisor has signed
+a day off in a real shop, no drawer has been counted against a real close, and no exported file has been opened in a real
+Excel — those are owed checks in `docs/RELEASE-CHECKLIST.md`, not passes.

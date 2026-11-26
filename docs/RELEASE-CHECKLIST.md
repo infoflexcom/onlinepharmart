@@ -910,3 +910,65 @@ no cash drawer and no Windows machine in the environment where this was built.
 | Approval from the phone | The same request accepted from the Admin's phone app unlocks the same attempt | ☐ pass ☐ fail |
 | Receipts in four currencies | Receipts print with the shop's own store name and in NGN, USD, JPY and KWD, each correctly formatted | ☐ pass ☐ fail |
 | Renaming the store | Renaming the store changes **new** receipts only; reprinting an old one still shows the name it was sold under | ☐ pass ☐ fail |
+
+## Phase 19 — the daily audit: owed manual checks
+
+**Every item here can only be checked by hand, on a real shop's real day.** None of them has been done. Nothing in this
+section has been passed, and no automated test in this repository can pass them: there is no cash drawer to be short, no
+Supervisor to sign anything off, no Excel to open a file in, and no Windows machine in the environment where this was
+built.
+
+### Signing a real day off, on the Server
+
+| Check | Expected on the machine | Status |
+| --- | --- | --- |
+| The day appears | After a real close, the business date appears in "Days needing an audit" with its transaction count and total | ☐ pass ☐ fail |
+| One Account at a time | Picking a date and one Account audits that till alone; picking no Account audits the store, and the screen says which | ☐ pass ☐ fail |
+| The drawer ties | The expected drawer cash equals float + cash sales − cash refunds ± drawer adjustments + cash from debtors, counted against the close's counted cash | ☐ pass ☐ fail |
+| A real shortage | Counting ₦100 against a drawer that should have held ₦184 (₦84 short, 45 % of the expectation) shows a **SERIOUS**; ₦1 short of the same ₦184 (under 1 %) shows a **CONCERN** — in colour and in words both times | ☐ pass ☐ fail |
+| An empty expectation | A counted drawer with no expected cash at all reads as **SERIOUS**, not as a clean day | ☐ pass ☐ fail |
+| Six checks on a clean day | A day with nothing wrong lists all six checks with "Nothing found" beside each, rather than showing an empty box | ☐ pass ☐ fail |
+| The verdict is a choice | Signing off offers exactly "Audited" and "Audited with issues", and refusing to write a note against a day that has findings is refused in the app | ☐ pass ☐ fail |
+| A second sign-off | Signing the same day and Account again is refused in the app, naming who signed it and when | ☐ pass ☐ fail |
+| Not the Supervisor's own till | A Supervisor who is also an Account cannot sign off their own till if the shop's rules forbid it (policy, not schema) | ☐ pass ☐ fail |
+| The day moves after signing | Posting a return to a day already signed off makes the screen say **"No — sales have moved since"**, and the warning cannot be dismissed | ☐ pass ☐ fail |
+| Flags survive | Raising a flag, adding a note to it and resolving it leaves all three on the screen, with each note stamped with the writer's name and the time | ☐ pass ☐ fail |
+| No print control | The audit screen has no print button anywhere, and states "No printing from this screen. An audit is a file, not a receipt." | ☐ pass ☐ fail |
+
+### The file that leaves the machine
+
+| Check | Expected when opened | Status |
+| --- | --- | --- |
+| CSV in Excel | Opening the exported `.csv` in Excel shows the ₦ symbol correctly (UTF-8 BOM), with no mojibake in a store name | ☐ pass ☐ fail |
+| Money in two decimals | An NGN export shows `130.00`; a JPY export shows `13000` with no decimal point anywhere in the file | ☐ pass ☐ fail |
+| Numbers are numbers | In the `.xlsx`, a money cell holds a number formatted in the shop currency and can be summed, rather than holding text | ☐ pass ☐ fail |
+| No formula | A receipt number or customer name beginning with `=`, `+` or `@` opens as text and never as a formula or a hyperlink | ☐ pass ☐ fail |
+| No cost for a Supervisor | A file exported by a Supervisor contains no cost, no margin and no gross profit in any column | ☐ pass ☐ fail |
+| Empty sections say so | A day with no flags exports a row reading "No flags were raised on this day." rather than a heading over nothing | ☐ pass ☐ fail |
+| The attestation is in the file | The export names the store, the day, the scope, who exported it and when, whether the totals agree with the ledger, and whether the day still reads as signed | ☐ pass ☐ fail |
+| File name | The file lands as `daily-audit-<date>.csv`, or `daily-audit-<date>-<username>.csv` for one Account | ☐ pass ☐ fail |
+| No PDF | Nothing on the audit screen offers a PDF, and no audit export reaches a printer or a print queue | ☐ pass ☐ fail |
+
+### The phone, over the shop's own LAN
+
+| Check | Expected on the handset | Status |
+| --- | --- | --- |
+| The block appears | The Admin dashboard shows "Days to audit" and "Audited · In the last 30 days" with real counts | ☐ pass ☐ fail |
+| At most eight days | A shop with eleven unaudited days shows eight and "And 3 more on the Server's audit screen." | ☐ pass ☐ fail |
+| Money formatted locally | A day's total is formatted with the shop's own currency definition and separators, to the right decimal places | ☐ pass ☐ fail |
+| No sign-off control | The phone offers no way to sign a day off, and says signing off is done on the Server | ☐ pass ☐ fail |
+| Counted and not counted | A day whose drawer was counted says so; one whose close has not happened says "cash not counted yet" | ☐ pass ☐ fail |
+| Nothing to audit | With every day signed off, the block reads "Every day has been audited" — not an empty list | ☐ pass ☐ fail |
+| An old Server | Against a Server with no audit service, the block reads "This Server has no audit service" rather than claiming the work is done | ☐ pass ☐ fail |
+
+### Taking money from a debtor
+
+| Check | Expected on the machine | Status |
+| --- | --- | --- |
+| The balance moves | Taking ₦500 from a customer who owes ₦1 000 leaves ₦500, and the payment row records both figures | ☐ pass ☐ fail |
+| Nothing owed | Taking a payment from a customer with a zero balance is refused with "… owes nothing, so there is no payment to take." | ☐ pass ☐ fail |
+| Overpaying | Taking more than the balance is refused, and the balance is unchanged | ☐ pass ☐ fail |
+| The drawer knows | A cash debtor payment taken during an open shift raises that shift's expected drawer cash by the same amount | ☐ pass ☐ fail |
+| Two tills at once | Two Accounts taking a payment from the same customer simultaneously: one succeeds, the other is told the record changed and to reload | ☐ pass ☐ fail |
+| Numbering | Payment numbers run `DP-00000001`, `DP-00000002` and never reuse a number, including after a refusal | ☐ pass ☐ fail |
+| The audit shows it | The day's audit lists the payment under debtor payments, with who received it and the balance before and after | ☐ pass ☐ fail |

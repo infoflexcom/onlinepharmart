@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { can } from '../../packages/core/src/capabilities'
-import { isRole } from '../../packages/core/src/roles'
+import { resolveRole } from '../../packages/core/src/roles'
 import type Database from 'better-sqlite3'
 import { parseMoneyExact } from '../currency/parse'
-import { roundHalfUp } from '../currency/money'
+import { formatMoney, roundHalfUp } from '../currency/money'
 import type { Edition } from '../editions'
 import type {
   AccountingReport,
@@ -30,6 +30,7 @@ import type {
   PurchasesReportRow,
   RefundMethodSummary,
   ReportActor,
+  RecordDebtorPaymentInput,
   ReportExportInput,
   ReportPeriod,
   ReportPeriodInput,
@@ -43,6 +44,8 @@ import type {
   ProductSalesReportRow,
 } from '../shared/reports/types'
 import type { ShopRepository } from './contracts/shop-repository'
+import type { AuditDebtorPaymentRow } from '../shared/audit/types'
+import { drawerAdjustmentSigned, expectedDrawerCash, isDrawerEventType } from './cash-drawer'
 import {
   createReportPdf,
   createReportWorkbookBase64,
@@ -118,6 +121,7 @@ interface ShiftMoney {
   cashSalesMinor: bigint
   cashRefundsMinor: bigint
   drawerAdjustmentsMinor: bigint
+  debtorCashMinor: bigint
   expectedCashMinor: bigint
 }
 
@@ -558,7 +562,9 @@ export class AccountingReportService {
     requireSupermarket(edition)
     const shiftId = requiredText(input?.shiftId, 'Cashier shift', 120)
     const type = input?.type
-    if (!['PAID_IN', 'PAID_OUT', 'FLOAT', 'SAFE_DROP'].includes(type)) {
+    // The list lives in `cash-drawer`, which is also what decides which way each type moves the drawer. A type accepted
+    // here but unknown there would be recorded and then counted as money in, silently.
+    if (!isDrawerEventType(type)) {
       throw new Error('Choose a valid cash drawer event.')
     }
     const amount = parseMoney(input?.amount, this.shop.readSettings().currency, this.shop.readSettings().display, 'Drawer amount')
@@ -584,6 +590,140 @@ export class AccountingReportService {
         note,
       })
     }).immediate()
+  }
+
+  /**
+   * A customer settling what they owe.
+   *
+   * This is not a sale and it is not a return, which is why it has its own table: `payments` cannot hold it, because a
+   * CHECK there forces every row to name either a sale or a return. Before migration 19 the capability
+   * `record_debtor_payment` was granted to ACCOUNT and gated nothing at all, and the daily audit was asked to show
+   * "credit sales and debtor payments" with nowhere to read the second half from.
+   *
+   * Two things about the money matter and both are enforced here rather than left to the caller:
+   *
+   * - The customer's balance moves in the same transaction, with optimistic locking, so a payment can never be recorded
+   *   against a balance that has already been settled by somebody else at the other till.
+   * - Cash taken this way is added to the drawer's expectation. A day close that ignored it would report an overage and
+   *   blame an honest Account for money the shop collected.
+   */
+  recordDebtorPayment(
+    input: RecordDebtorPaymentInput,
+    actor: ReportActor,
+    edition: Edition,
+  ): AuditDebtorPaymentRow {
+    validateActor(actor)
+    validateEdition(edition)
+    // The capability the role table has carried since it was written. Read from the table rather than from a list of
+    // role names here, so a role the Admin grants it to later is not refused by this line.
+    if (!can(aliasOf(actor.role), 'record_debtor_payment')) {
+      throw new Error('You do not have permission to take a payment against a customer balance.')
+    }
+    const settings = this.shop.readSettings()
+    const customerId = requiredText(input?.customerId, 'Customer', 120)
+    const amount = parseMoney(input?.amount, settings.currency, settings.display, 'Payment')
+    if (amount <= 0n) throw new Error('A payment must be more than zero.')
+    assertSqliteInteger(amount, 'Payment')
+    const method = input?.method
+    if (method !== 'CASH' && method !== 'TRANSFER' && method !== 'CARD') {
+      throw new Error('Choose how the customer paid.')
+    }
+    const reference = optionalText(input?.reference, 120)
+    const note = optionalText(input?.note, 500)
+    const businessDate = localDateString(this.now())
+    const recordedAt = new Date(this.now()).toISOString()
+    let paymentNumber = ''
+
+    this.database.transaction(() => {
+      const customer = this.database.prepare(`
+        SELECT name, CAST(balance AS TEXT) AS balance_text, row_version FROM customers WHERE id = ?
+      `).get(customerId) as { name: string; balance_text: string; row_version: number } | undefined
+      if (!customer) throw new Error('That customer no longer exists.')
+      const balanceBefore = BigInt(customer.balance_text)
+      if (balanceBefore <= 0n) throw new Error(`${customer.name} owes nothing, so there is no payment to take.`)
+      if (amount > balanceBefore) {
+        throw new Error(
+          `${customer.name} owes ${formatMoney(balanceBefore, settings.currency, settings.display)}. `
+          + 'Taking more than that would leave them in credit, which this product does not do.',
+        )
+      }
+      // Optimistic locking, as everywhere else money moves: if the balance is not what this till was shown, somebody
+      // else has taken a payment in the meantime and this one must not go through on top of it.
+      const updated = this.database.prepare(`
+        UPDATE customers SET balance = balance - ?, row_version = row_version + 1, updated_at = ?
+        WHERE id = ? AND row_version = ?
+      `).run(amount, recordedAt, customerId, customer.row_version)
+      if (updated.changes !== 1) {
+        throw new Error('This customer balance changed while the payment was being taken. Refresh and try again.')
+      }
+      // The shift the money went into, found the same way the till finds it for a sale: this cashier's open shift.
+      const openShift = this.database.prepare(`
+        SELECT id FROM cashier_shifts
+        WHERE cashier_id = ? AND currency_code = ? AND status = 'OPEN'
+        ORDER BY opened_at DESC LIMIT 1
+      `).get(actor.id, settings.currency.code) as { id: string } | undefined
+      paymentNumber = this.nextDebtorPaymentNumber(recordedAt)
+      this.database.prepare(`
+        INSERT INTO debtor_payments (
+          id, payment_number, customer_id, received_by, payment_method, amount, currency_code,
+          balance_before, balance_after, reference, note, business_date, shift_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(this.newId(), paymentNumber, customerId, actor.id, method, amount, settings.currency.code,
+        balanceBefore, balanceBefore - amount, reference, note, businessDate, openShift?.id ?? null, recordedAt)
+      this.audit(actor, 'debtor.payment.recorded', {
+        paymentNumber,
+        customerId,
+        customerName: customer.name,
+        paymentMethod: method,
+        amountMinor: amount.toString(),
+        currencyCode: settings.currency.code,
+        balanceBeforeMinor: balanceBefore.toString(),
+        balanceAfterMinor: (balanceBefore - amount).toString(),
+        businessDate,
+        shiftId: openShift?.id ?? null,
+      })
+    }).immediate()
+
+    const row = this.database.prepare(`
+      SELECT dp.payment_number, dp.payment_method, dp.reference, dp.created_at,
+        COALESCE(c.name, '') AS customer_name,
+        COALESCE(NULLIF(u.full_name, ''), u.username, '') AS received_by_name,
+        CAST(dp.amount AS TEXT) AS amount_text,
+        CAST(dp.balance_before AS TEXT) AS before_text,
+        CAST(dp.balance_after AS TEXT) AS after_text
+      FROM debtor_payments dp
+        LEFT JOIN customers c ON c.id = dp.customer_id
+        LEFT JOIN users u ON u.id = dp.received_by
+      WHERE dp.payment_number = ?
+    `).get(paymentNumber) as {
+      payment_number: string; payment_method: AuditDebtorPaymentRow['paymentMethod']; reference: string
+      created_at: string; customer_name: string; received_by_name: string; amount_text: string
+      before_text: string; after_text: string
+    } | undefined
+    if (!row) throw new Error('The payment could not be read back after saving.')
+    return {
+      paymentNumber: row.payment_number,
+      customerName: row.customer_name,
+      receivedByName: row.received_by_name,
+      paymentMethod: row.payment_method,
+      amountMinor: BigInt(row.amount_text),
+      balanceBeforeMinor: BigInt(row.before_text),
+      balanceAfterMinor: BigInt(row.after_text),
+      reference: row.reference,
+      at: row.created_at,
+    }
+  }
+
+  /** Numbered from the one allocator migration 16 built, never from MAX() over the table it numbers. */
+  private nextDebtorPaymentNumber(recordedAt: string): string {
+    this.database.prepare(`
+      UPDATE document_sequences SET last_value = last_value + 1, updated_at = ? WHERE kind = 'DEBTOR_PAYMENT'
+    `).run(recordedAt)
+    const row = this.database.prepare(
+      `SELECT last_value FROM document_sequences WHERE kind = 'DEBTOR_PAYMENT'`,
+    ).get() as { last_value: number } | undefined
+    if (!row) throw new Error('The debtor-payment sequence is missing. Ask the Admin to check the database.')
+    return `DP-${String(row.last_value).padStart(8, '0')}`
   }
 
   exportCsv(input: ReportExportInput, actor: ReportActor, edition: Edition): string {
@@ -1094,6 +1234,66 @@ export class AccountingReportService {
     return { departments: departmentSales, promotions: promotionSales, loyalty }
   }
 
+  /**
+   * One business day's shifts, with their money worked out the same way the close works it out.
+   *
+   * This exists so the daily audit can show a Supervisor the over/short per shift without spelling the drawer sum out a
+   * second time. A closed shift reports what was stored when it closed — that is the figure the count was compared
+   * against and it must not move afterwards; an open shift reports what the drawer should hold so far, which is the only
+   * honest answer to "how is this till doing" at four in the afternoon.
+   */
+  shiftRowsForDay(
+    businessDate: string,
+    currencyCode: string,
+    accountId: string | null,
+  ): CashierShiftReportRow[] {
+    const rows = this.database.prepare(`
+      SELECT sh.id, sh.cashier_id, sh.opened_at, sh.closed_at, sh.status, sh.currency_code,
+        COALESCE(NULLIF(u.full_name, ''), u.username, 'Unknown cashier') AS cashier_name,
+        COALESCE(NULLIF(c.full_name, ''), c.username, '') AS closed_by_name,
+        COALESCE(sh.close_note, '') AS close_note,
+        CAST(sh.opening_float AS TEXT) AS opening_float_text,
+        CAST(sh.expected_cash AS TEXT) AS expected_cash_text,
+        CAST(sh.counted_cash AS TEXT) AS counted_cash_text,
+        CAST(sh.variance AS TEXT) AS variance_text
+      FROM cashier_shifts sh
+        JOIN users u ON u.id = sh.cashier_id
+        LEFT JOIN users c ON c.id = sh.closed_by
+      WHERE sh.currency_code = ? AND date(sh.opened_at, 'localtime') = ?
+        AND (? IS NULL OR sh.cashier_id = ?)
+      ORDER BY sh.opened_at, sh.id
+    `).all(currencyCode, businessDate, accountId, accountId) as Array<{
+      id: string; cashier_id: string; cashier_name: string; opened_at: string; closed_at: string | null
+      status: 'OPEN' | 'CLOSED'; currency_code: string; opening_float_text: string
+      expected_cash_text: string | null; counted_cash_text: string | null; variance_text: string | null
+      closed_by_name: string; close_note: string
+    }>
+    return rows.map((row) => {
+      const money = this.getShiftMoney(row.id, row.currency_code, BigInt(row.opening_float_text))
+      return {
+        id: row.id,
+        cashierId: row.cashier_id,
+        cashierName: row.cashier_name,
+        openedAt: row.opened_at,
+        closedAt: row.closed_at,
+        status: row.status,
+        currencyCode: row.currency_code,
+        openingFloatMinor: BigInt(row.opening_float_text),
+        cashSalesMinor: money.cashSalesMinor,
+        cashRefundsMinor: money.cashRefundsMinor,
+        drawerAdjustmentsMinor: money.drawerAdjustmentsMinor,
+        debtorCashMinor: money.debtorCashMinor,
+        expectedCashMinor: row.status === 'CLOSED' && row.expected_cash_text !== null
+          ? BigInt(row.expected_cash_text)
+          : money.expectedCashMinor,
+        countedCashMinor: row.counted_cash_text === null ? null : BigInt(row.counted_cash_text),
+        varianceMinor: row.variance_text === null ? null : BigInt(row.variance_text),
+        closedBy: row.closed_by_name,
+        closeNote: row.close_note,
+      }
+    })
+  }
+
   private readShifts(period: NormalizedPeriod, currencyCode: string, actor: ReportActor): CashierShiftReportRow[] {
     const isAdmin = actor.role === 'ADMIN'
     const rows = this.database.prepare(`
@@ -1136,6 +1336,7 @@ export class AccountingReportService {
         cashSalesMinor: money.cashSalesMinor,
         cashRefundsMinor: money.cashRefundsMinor,
         drawerAdjustmentsMinor: money.drawerAdjustmentsMinor,
+        debtorCashMinor: money.debtorCashMinor,
         expectedCashMinor: row.status === 'CLOSED' && storedExpected !== null ? storedExpected : money.expectedCashMinor,
         countedCashMinor: counted,
         varianceMinor: variance,
@@ -1169,15 +1370,37 @@ export class AccountingReportService {
     `).all(shiftId, currencyCode) as Array<{ event_type: string; amount_text: string }>
     let drawerAdjustmentsMinor = 0n
     for (const row of drawerRows) {
-      const amount = BigInt(row.amount_text)
-      drawerAdjustmentsMinor += row.event_type === 'PAID_OUT' || row.event_type === 'SAFE_DROP' ? -amount : amount
+      drawerAdjustmentsMinor += drawerAdjustmentSigned(row.event_type, BigInt(row.amount_text))
     }
+    const debtorCashMinor = this.readDebtorCashForShift(shiftId, currencyCode)
     return {
       cashSalesMinor,
       cashRefundsMinor,
       drawerAdjustmentsMinor,
-      expectedCashMinor: openingFloat + cashSalesMinor - cashRefundsMinor + drawerAdjustmentsMinor,
+      debtorCashMinor,
+      expectedCashMinor: expectedDrawerCash({
+        openingFloatMinor: openingFloat,
+        cashSalesMinor,
+        cashRefundsMinor,
+        drawerAdjustmentsMinor,
+        debtorCashMinor,
+      }),
     }
+  }
+
+  /**
+   * Cash collected from customers settling an old credit balance during this shift.
+   *
+   * Migration 19 gives `debtor_payments` a `shift_id` for exactly this. Money taken for a debt is not a sale and appears
+   * in no sales report, but it is in the drawer, and a shift closed without it would report an overage that the cashier
+   * did not cause.
+   */
+  private readDebtorCashForShift(shiftId: string, currencyCode: string): bigint {
+    const rows = this.database.prepare(`
+      SELECT CAST(amount AS TEXT) AS amount_text FROM debtor_payments
+      WHERE shift_id = ? AND currency_code = ? AND payment_method = 'CASH'
+    `).all(shiftId, currencyCode) as Array<{ amount_text: string }>
+    return rows.reduce((sum, row) => sum + BigInt(row.amount_text), 0n)
   }
 
   private readOpeningFloat(shiftId: string): string {
@@ -1210,10 +1433,15 @@ export class AccountingReportService {
       SELECT event_type, CAST(amount AS TEXT) AS amount_text FROM cash_drawer_events
       WHERE currency_code = ? AND date(created_at, 'localtime') = ? AND (? = 1 OR user_id = ?)
     `).all(currencyCode, businessDate, isAdmin ? 1 : 0, actor.id) as Array<{ event_type: string; amount_text: string }>
-    const drawerAdjustmentsMinor = eventRows.reduce((sum, row) => {
-      const amount = BigInt(row.amount_text)
-      return sum + (row.event_type === 'PAID_OUT' || row.event_type === 'SAFE_DROP' ? -amount : amount)
-    }, 0n)
+    const drawerAdjustmentsMinor = eventRows.reduce(
+      (sum, row) => sum + drawerAdjustmentSigned(row.event_type, BigInt(row.amount_text)), 0n)
+    // Cash collected against an old credit balance is in the drawer too. Without it the day close stores an expectation
+    // the counted cash cannot match, and the difference is blamed on the Account.
+    const debtorRows = this.database.prepare(`
+      SELECT CAST(amount AS TEXT) AS amount_text FROM debtor_payments
+      WHERE currency_code = ? AND payment_method = 'CASH' AND business_date = ? AND (? = 1 OR received_by = ?)
+    `).all(currencyCode, businessDate, isAdmin ? 1 : 0, actor.id) as Array<{ amount_text: string }>
+    const debtorCashMinor = debtorRows.reduce((sum, row) => sum + BigInt(row.amount_text), 0n)
     return {
       businessDate,
       currencyCode,
@@ -1221,7 +1449,14 @@ export class AccountingReportService {
       cashSalesMinor,
       cashRefundsMinor,
       drawerAdjustmentsMinor,
-      expectedCashMinor: openingFloatMinor + cashSalesMinor - cashRefundsMinor + drawerAdjustmentsMinor,
+      debtorCashMinor,
+      expectedCashMinor: expectedDrawerCash({
+        openingFloatMinor,
+        cashSalesMinor,
+        cashRefundsMinor,
+        drawerAdjustmentsMinor,
+        debtorCashMinor,
+      }),
     }
   }
 
@@ -1460,7 +1695,7 @@ function assertSqliteInteger(value: bigint, label: string): void {
 function validateActor(actor: ReportActor): void {
   if (!actor || typeof actor.id !== 'string' || !actor.id.trim()
     || typeof actor.username !== 'string' || !actor.username.trim()
-    || !isRole(actor.role)) {
+    || resolveRole(actor.role) === null) {
     throw new Error('A valid signed-in report user is required.')
   }
 }
@@ -1474,10 +1709,20 @@ function validateActor(actor: ReportActor): void {
  */
 function requireReportViewer(actor: ReportActor): void {
   validateActor(actor)
-  // A legacy CASHIER row resolves to USER at every read, and a USER has no reports. `can` takes the four real roles,
-  // so the alias is resolved here rather than being passed through.
-  const role = actor.role === 'CASHIER' ? 'USER' : actor.role
-  if (!can(role, 'view_reports')) throw new Error('You do not have permission to view reports.')
+  if (!can(aliasOf(actor.role), 'view_reports')) throw new Error('You do not have permission to view reports.')
+}
+
+/**
+ * A legacy CASHIER row resolves to USER at every read, and a USER has no reports and no debtor payments.
+ *
+ * Through `resolveRole`, which is the product's one alias rule, rather than a second spelling of it here. The
+ * `validateActor` check above accepts the alias for the same reason: refusing a shop's upgraded cashier rows as
+ * "not a valid user" would lock out somebody the migration deliberately kept.
+ */
+function aliasOf(role: ReportActor['role']): 'ADMIN' | 'ACCOUNT' | 'USER' | 'SUPERVISOR' {
+  const resolved = resolveRole(role)
+  if (!resolved) throw new Error('A valid signed-in report user is required.')
+  return resolved
 }
 
 function requireAdmin(actor: ReportActor): void {

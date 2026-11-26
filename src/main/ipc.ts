@@ -12,9 +12,19 @@ import type {
   CloseCashierShiftInput,
   CloseDayInput,
   OpenCashierShiftInput,
+  RecordDebtorPaymentInput,
   ReportExportInput,
   ReportPeriodInput,
 } from '../shared/reports/types'
+import type {
+  AuditExportInput,
+  AuditFlagNoteInput,
+  AuditNoteFindingInput,
+  DayAuditInput,
+  RaiseAuditFlagInput,
+  ResolveAuditFlagInput,
+  SignOffDayInput,
+} from '../shared/audit/types'
 import type {
   ConsumeStockInput,
   ProductDraft,
@@ -241,6 +251,21 @@ export function registerDesktopIpc(
   handle('reports:open-cashier-shift', (event, input) => host.openCashierShift(sender(event), input as OpenCashierShiftInput))
   handle('reports:close-cashier-shift', (event, input) => host.closeCashierShift(sender(event), input as CloseCashierShiftInput))
   handle('reports:drawer-event', (event, input) => host.recordCashDrawerEvent(sender(event), input as CashDrawerEventInput))
+  handle('reports:debtor-payment', (event, input) => host.recordDebtorPayment(sender(event), input as RecordDebtorPaymentInput))
+
+  // The daily audit. Registered last in the reports neighbourhood rather than in its own file, because `handle` is the
+  // one place where a channel meets the policy table, and a second registration site would be a second place to forget.
+  handle('audit:get-day', (event, input) => host.getDayAudit(sender(event), input as DayAuditInput))
+  handle('audit:day-statuses', (event) => host.listAuditDayStatuses(sender(event)))
+  handle('audit:unaudited-days', (event, days) => host.listUnauditedDays(sender(event), days as number | undefined))
+  handle('audit:summary', (event) => host.getAuditSummary(sender(event)))
+  handle('audit:sign-off', (event, input) => host.signOffAuditDay(sender(event), input as SignOffDayInput))
+  handle('audit:note-finding', (event, input) => host.noteAuditFinding(sender(event), input as AuditNoteFindingInput))
+  handle('audit:raise-flag', (event, input) => host.raiseAuditFlag(sender(event), input as RaiseAuditFlagInput))
+  handle('audit:flag-note', (event, input) => host.addAuditFlagNote(sender(event), input as AuditFlagNoteInput))
+  handle('audit:resolve-flag', (event, input) => host.resolveAuditFlag(sender(event), input as ResolveAuditFlagInput))
+  // A file, and the only output this screen has. There is no `audit:print` channel to forget to authorise.
+  handle('audit:export-csv', (event, input) => host.exportAudit(sender(event), input as AuditExportInput))
 
   handle('settings:update-store-details', (event, profile) => host.updateStoreDetails(sender(event), profile as ShopProfile))
   handle('settings:update-display', (event, display) => host.updateDisplaySettings(sender(event), display as MoneyDisplayOptions))

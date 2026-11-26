@@ -17,6 +17,7 @@ import { migrateDemoDataRemoval } from './015_demo_data_removal'
 import { migrateClientServerFoundation, migrateClientServerAuditAndSales } from './016_client_server_foundation'
 import { migrateSeatsAndPasswords } from './017_seats_and_passwords'
 import { migrateOrderWorkflow } from './018_order_workflow'
+import { migrateDailyAudit } from './019_daily_audit'
 
 export interface Migration {
   version: number
@@ -66,5 +67,10 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 18,
     name: 'order-to-receipt-workflow',
     up: migrateOrderWorkflow,
+  },
+  {
+    version: 19,
+    name: 'daily-audit-signoffs-flags-and-debtor-payments',
+    up: migrateDailyAudit,
   },
 ]

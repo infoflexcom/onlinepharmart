@@ -6,19 +6,24 @@ import type {
   ReportSectionId,
 } from '../shared/reports/types'
 
-export type ExportValue = string | bigint | number | null
-export type ExportColumnKind = 'text' | 'money' | 'quantity' | 'integer'
+// The vocabulary and the CSV writer live in `export-csv.ts`, which has no heavy imports at all; this module keeps the
+// Excel and PDF writers, and re-exports the shared names so nothing that imported them from here has to move.
+export type { ExportColumn, ExportColumnKind, ExportDocument, ExportTable, ExportValue } from './export-csv'
+import type { ExportColumnKind, ExportDocument, ExportTable, ExportValue } from './export-csv'
+import { createDocumentCsv, minorToMajor, quantityMajor } from './export-csv'
+export { createDocumentCsv }
 
-export interface ExportColumn {
-  label: string
-  kind: ExportColumnKind
-}
-
-export interface ExportTable {
-  name: string
-  title: string
-  columns: ExportColumn[]
-  rows: ExportValue[][]
+function documentOf(report: AccountingReport, subject: string, tables: ExportTable[]): ExportDocument {
+  return {
+    storeName: report.header.storeName,
+    storeAddress: report.header.storeAddress,
+    periodLabel: report.header.period.label,
+    currency: { code: report.header.currency.code, decimalPlaces: report.header.currency.decimalPlaces },
+    scopeLabel: report.header.scope === 'STORE' ? 'Store-wide' : `Personal · ${report.header.viewerName}`,
+    generatedAt: report.header.generatedAt,
+    subject,
+    tables,
+  }
 }
 
 export function buildReportExportTables(report: AccountingReport, section: ReportSectionId): ExportTable[] {
@@ -46,38 +51,24 @@ export function buildReportExportTables(report: AccountingReport, section: Repor
 }
 
 export function createReportCsv(report: AccountingReport, section: ReportSectionId): string {
-  const tables = buildReportExportTables(report, section)
-  const lines: string[] = [
-    csvRow(['Store', report.header.storeName]),
-    csvRow(['Address', report.header.storeAddress]),
-    csvRow(['Period', report.header.period.label]),
-    csvRow(['Currency', report.header.currency.code]),
-    csvRow(['Scope', report.header.scope === 'STORE' ? 'Store-wide' : `Personal · ${report.header.viewerName}`]),
-  ]
-  for (const table of tables) {
-    lines.push('', csvRow([table.title]), csvRow(table.columns.map((column) => column.label)))
-    for (const row of table.rows) {
-      const cells = row.map((value, index) => csvCell(
-        csvValue(value, table.columns[index]?.kind ?? 'text', report.header.currency.decimalPlaces),
-        (table.columns[index]?.kind ?? 'text') === 'text',
-      ))
-      lines.push(cells.join(','))
-    }
-  }
-  return `\uFEFF${lines.join('\r\n')}`
+  return createDocumentCsv(documentOf(report, section, buildReportExportTables(report, section)))
+}
+
+/** Any document as an Excel workbook, base64-encoded so it crosses the IPC boundary as a string. */
+export async function createDocumentWorkbookBase64(document: ExportDocument): Promise<string> {
+  const workbook = new Workbook()
+  workbook.creator = 'Infoflex'
+  workbook.subject = `${document.periodLabel} · ${document.subject}`
+  workbook.title = `${document.storeName || 'Store'} · ${document.periodLabel} ${document.subject}`
+  workbook.created = new Date(document.generatedAt)
+  workbook.modified = workbook.created
+  for (const table of document.tables) addWorksheet(workbook, table, document)
+  const bytes = await workbook.xlsx.writeBuffer()
+  return Buffer.from(bytes).toString('base64')
 }
 
 export async function createReportWorkbookBase64(report: AccountingReport, section: ReportSectionId): Promise<string> {
-  const workbook = new Workbook()
-  workbook.creator = 'Infoflex'
-  workbook.subject = `${report.header.period.label} · ${section}`
-  workbook.title = `${report.header.storeName || 'Store'} · ${report.header.period.label} report`
-  workbook.created = new Date(report.header.generatedAt)
-  workbook.modified = workbook.created
-  const tables = buildReportExportTables(report, section)
-  for (const table of tables) addWorksheet(workbook, table, report)
-  const bytes = await workbook.xlsx.writeBuffer()
-  return Buffer.from(bytes).toString('base64')
+  return createDocumentWorkbookBase64(documentOf(report, section, buildReportExportTables(report, section)))
 }
 
 export async function createReportPdf(report: AccountingReport, section: ReportSectionId): Promise<Uint8Array> {
@@ -428,32 +419,32 @@ function supermarketTables(report: AccountingReport, admin: AdminReportData): Ex
   ]
 }
 
-function addWorksheet(workbook: Workbook, table: ExportTable, report: AccountingReport): void {
+function addWorksheet(workbook: Workbook, table: ExportTable, document: ExportDocument): void {
   const worksheet = workbook.addWorksheet(safeSheetName(table.name, workbook))
   const columnCount = Math.max(1, table.columns.length)
   worksheet.mergeCells(1, 1, 1, columnCount)
-  worksheet.getCell(1, 1).value = report.header.storeName || 'Store'
+  worksheet.getCell(1, 1).value = document.storeName || 'Store'
   worksheet.getCell(1, 1).font = { bold: true, size: 16, color: { argb: 'FF17345F' } }
   worksheet.mergeCells(2, 1, 2, columnCount)
-  worksheet.getCell(2, 1).value = report.header.storeAddress
+  worksheet.getCell(2, 1).value = document.storeAddress
   worksheet.getCell(3, 1).value = 'Period'
-  worksheet.getCell(3, 2).value = report.header.period.label
+  worksheet.getCell(3, 2).value = document.periodLabel
   worksheet.getCell(4, 1).value = 'Currency'
-  worksheet.getCell(4, 2).value = report.header.currency.code
-  worksheet.getCell(5, 1).value = 'Report'
+  worksheet.getCell(4, 2).value = document.currency.code
+  worksheet.getCell(5, 1).value = 'Document'
   worksheet.getCell(5, 2).value = table.title
   worksheet.getCell(6, 1).value = 'Scope'
-  worksheet.getCell(6, 2).value = report.header.scope === 'STORE' ? 'Store-wide' : `Personal · ${report.header.viewerName}`
+  worksheet.getCell(6, 2).value = document.scopeLabel
   const headerRow = worksheet.addRow([])
   const labels = worksheet.addRow(table.columns.map((column) => column.label))
   labels.font = { bold: true, color: { argb: 'FFFFFFFF' } }
   labels.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F3F73' } }
   table.rows.forEach((values) => {
-    const excelRow = worksheet.addRow(values.map((value, index) => excelValue(value, table.columns[index]?.kind ?? 'text', report)))
+    const excelRow = worksheet.addRow(values.map((value, index) => excelValue(value, table.columns[index]?.kind ?? 'text', document)))
     excelRow.eachCell((cell, columnNumber) => {
       const column = table.columns[columnNumber - 1]
       if (!column) return
-      if (column.kind === 'money') cell.numFmt = moneyNumberFormat(report.header.currency.code, report.header.currency.decimalPlaces)
+      if (column.kind === 'money') cell.numFmt = moneyNumberFormat(document.currency.code, document.currency.decimalPlaces)
       else if (column.kind === 'quantity') cell.numFmt = '#,##0.000'
       else if (column.kind === 'integer') cell.numFmt = '#,##0'
     })
@@ -468,10 +459,14 @@ function addWorksheet(workbook: Workbook, table: ExportTable, report: Accounting
   void headerRow
 }
 
-function excelValue(value: ExportValue, kind: ExportColumnKind, report: AccountingReport): string | number | boolean | null {
+function excelValue(
+  value: ExportValue,
+  kind: ExportColumnKind,
+  document: ExportDocument,
+): string | number | boolean | null {
   if (value === null) return null
   if (kind === 'money' && typeof value === 'bigint') {
-    const scale = 10 ** report.header.currency.decimalPlaces
+    const scale = 10 ** document.currency.decimalPlaces
     const numeric = Number(value) / scale
     if (!Number.isFinite(numeric) || BigInt(Math.round(numeric * scale)) !== value) {
       throw new Error('An amount exceeds Excel numeric precision; export this report as CSV or PDF to preserve it exactly.')
@@ -499,43 +494,6 @@ function safeSheetName(value: string, workbook: Workbook): string {
     suffix += 1
   }
   return name
-}
-
-function csvRow(values: unknown[]): string {
-  return values.map((value) => csvCell(value === null || value === undefined ? '' : String(value), true)).join(',')
-}
-
-function csvCell(value: string, formulaSafe: boolean): string {
-  const safe = formulaSafe && /^[=+\-@\t\r]/u.test(value) ? `'${value}` : value
-  return `"${safe.replace(/"/gu, '""')}"`
-}
-
-function csvValue(value: ExportValue, kind: ExportColumnKind, decimalPlaces: number): string {
-  if (value === null) return ''
-  if (typeof value === 'bigint') {
-    if (kind === 'money') return minorToMajor(value, decimalPlaces)
-    if (kind === 'quantity') return quantityMajor(value)
-  }
-  return String(value)
-}
-
-function quantityMajor(value: bigint): string {
-  const negative = value < 0n
-  const magnitude = negative ? -value : value
-  const whole = magnitude / 1_000n
-  const fraction = (magnitude % 1_000n).toString().padStart(3, '0').replace(/0+$/u, '')
-  const formatted = fraction ? `${whole}.${fraction}` : whole.toString()
-  return negative ? `-${formatted}` : formatted
-}
-
-function minorToMajor(value: bigint, decimalPlaces: number): string {
-  const negative = value < 0n
-  const magnitude = negative ? -value : value
-  const scale = 10n ** BigInt(decimalPlaces)
-  const whole = magnitude / scale
-  const fraction = magnitude % scale
-  const formatted = decimalPlaces === 0 ? whole.toString() : `${whole}.${fraction.toString().padStart(decimalPlaces, '0')}`
-  return negative ? `-${formatted}` : formatted
 }
 
 function writeTableRows(doc: InstanceType<typeof PDFDocument>, table: ExportTable, report: AccountingReport): void {

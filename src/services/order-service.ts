@@ -442,6 +442,35 @@ export class OrderService {
    *    difference until the Account accepts it. Repricing silently would mean the customer was charged something
    *    nobody agreed to.
    */
+  /**
+   * Record that the till tried to take this order's payment and was refused.
+   *
+   * Nothing was charged and no stock moved — the sale transaction rolled back before the approval request was raised —
+   * so there is no sale to look at later. But the attempt happened, and the daily audit has to be able to see it,
+   * because "the order was refused, and then somebody adjusted a line, and then it went through" is a pattern worth a
+   * Supervisor's attention while "the order was adjusted and then paid" is an ordinary day.
+   *
+   * It goes in `order_events`, which migration 16 made immutable in both directions, so neither half of that pattern
+   * can be edited afterwards. The host calls this from the same place it raises the approval request; it is not a
+   * client-reachable action, and the capability check below is the reason it cannot become one by accident.
+   */
+  recordPaymentRefusal(orderId: string, explanation: string, actor: PublicUser): void {
+    this.requireActor(actor)
+    this.requireCapability(actor, 'take_payment', 'attempt a payment')
+    const existing = this.database.prepare('SELECT id, status FROM orders WHERE id = ?').get(orderId) as
+      { id: string; status: OrderStatus } | undefined
+    if (!existing) throw new Error('That order could not be found.')
+    // A paid order cannot be attempted again, and recording a refusal against one would put a lie in an immutable log.
+    if (existing.status === 'PAID') return
+    const detail = typeof explanation === 'string' && explanation.trim()
+      ? explanation.trim().slice(0, 300)
+      : 'Payment refused.'
+    this.database.transaction(() => {
+      this.recordEvent(orderId, 'order.payment_refused', existing.status, existing.status, actor.id, detail)
+      this.audit(actor, 'order.payment_refused', { orderId, detail })
+    }).immediate()
+  }
+
   finalizeOrder(orderId: string, input: FinalizeOrderInput, actor: PublicUser, edition: Edition): FinalizeOrderResult {
     this.requireActor(actor)
     this.requireCapability(actor, 'take_payment', 'finalize an order and take payment')

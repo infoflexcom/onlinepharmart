@@ -48,6 +48,47 @@ export interface MobileDashboardStockAlert {
   unit: string
 }
 
+/**
+ * One business day nobody has attested to yet.
+ *
+ * Money crosses as text, like every other figure on this surface: the phone has no currency setting of its own and
+ * formats with the shop's definition from the header, so a bigint that survived JSON as a number would be a figure the
+ * phone has to guess the decimals of.
+ */
+export interface MobileUnauditedDay {
+  businessDate: string
+  accountName: string
+  transactions: number
+  salesMinor: string
+  currencyCode: string
+  openFlags: number
+  /** False until somebody has counted the cash, which is normally what makes a day ready to audit. */
+  dayClosed: boolean
+}
+
+export interface MobileOpenFlag {
+  id: string
+  businessDate: string
+  severity: 'NOTE' | 'CONCERN' | 'SERIOUS'
+  detail: string
+  raisedByName: string
+  raisedAt: string
+}
+
+/**
+ * The audit half of the dashboard.
+ *
+ * `null` means this Server has no audit service at all, which is a different fact from an empty list — an empty list
+ * means every day with activity has been audited. Collapsing the two would let a phone paired to a shop that has never
+ * been audited read as a shop with nothing outstanding, and that is the one wrong answer this block must never give.
+ */
+export interface MobileAuditSummary {
+  unauditedDays: MobileUnauditedDay[]
+  openFlags: MobileOpenFlag[]
+  /** How many days in the lookback window have been signed off, so "3 of 5 audited" is a fact and not a guess. */
+  auditedDays: number
+}
+
 export interface MobileDashboard {
   header: MobileShopHeader
   today: { date: string; totalSalesMinor: string; transactions: number; netSalesMinor: string }
@@ -60,6 +101,8 @@ export interface MobileDashboard {
     connectedDevices: number
   }
   salesByCashierToday: MobileDashboardCashier[]
+  /** Null when the Server this phone is paired to has no audit service; see `MobileAuditSummary`. */
+  audit: MobileAuditSummary | null
 }
 
 export interface MobileProductSummary {

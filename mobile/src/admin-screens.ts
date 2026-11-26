@@ -145,6 +145,8 @@ export function renderDashboard(value: MobileDashboard, handlers: DashboardHandl
   )
   page.append(counts)
 
+  page.append(renderAuditBlock(value, header))
+
   const cashiers = card(`Sales by cashier · ${formatDay(value.today.date)}`)
   if (value.salesByCashierToday.length === 0) {
     cashiers.append(emptyState('No sales yet today', 'Sales appear here as soon as a cashier rings one up at the till.'))
@@ -172,6 +174,88 @@ export function renderDashboard(value: MobileDashboard, handlers: DashboardHandl
   )
   page.append(quick)
   return page
+}
+
+/**
+ * The daily audit, on the phone.
+ *
+ * Three states, and they are deliberately not collapsed into two. A Server with no audit service says so; a shop where
+ * every day has been audited says *that*; and a shop with days outstanding lists them. The first two look identical if
+ * you only count rows, and an Admin who reads "nothing outstanding" on a phone paired to a shop that has never been
+ * audited has been told the opposite of the truth.
+ *
+ * The phone lists and does not sign. Signing a day off is an attestation that needs the whole screen — the findings, the
+ * drawer tie, the ledger sections — and a tile that invited it would be inviting a verdict given from a summary. So the
+ * block ends by saying where the verdict is actually made.
+ */
+function renderAuditBlock(value: MobileDashboard, header: CurrencyContext): HTMLElement {
+  const audit = value.audit
+  const block = card('Daily audit')
+
+  if (audit === null) {
+    block.append(notice('This Server has no audit service, so it cannot say whether any day has been audited.', 'stale'))
+    return block
+  }
+
+  const summary = el('div', 'pair')
+  summary.append(
+    metric('Days to audit', String(audit.unauditedDays.length), audit.unauditedDays.length === 1 ? 'Needs a look' : 'Need a look'),
+    metric('Audited', String(audit.auditedDays), 'In the last 30 days'),
+  )
+  block.append(summary)
+
+  if (audit.unauditedDays.length === 0) {
+    block.append(emptyState('Every day has been audited',
+      'A day appears here when something happened on it and nobody has attested to it yet.'))
+  } else {
+    const list = el('ul', 'row-list')
+    for (const day of audit.unauditedDays.slice(0, 8)) {
+      const item = el('li', 'row')
+      const text = el('div', 'row__text')
+      const details = [
+        `${day.transactions} sale${day.transactions === 1 ? '' : 's'}`,
+        day.dayClosed ? 'cash counted' : 'not counted yet',
+        day.openFlags > 0 ? `${day.openFlags} open flag${day.openFlags === 1 ? '' : 's'}` : '',
+      ].filter(Boolean).join(' · ')
+      text.append(
+        el('strong', 'row__title', `${formatDay(day.businessDate)} · ${day.accountName}`),
+        el('span', 'row__detail', details),
+      )
+      item.append(text, el('strong', 'row__amount', money(day.salesMinor, header)))
+      list.append(item)
+    }
+    block.append(list)
+    if (audit.unauditedDays.length > 8) {
+      block.append(el('p', 'muted', `And ${audit.unauditedDays.length - 8} more on the Server's audit screen.`))
+    }
+  }
+
+  if (audit.openFlags.length > 0) {
+    block.append(el('h2', 'card__title', 'Flags still open'))
+    const flags = el('ul', 'row-list row-list--compact')
+    for (const flag of audit.openFlags.slice(0, 5)) {
+      const item = el('li', 'row row--stacked')
+      const body = el('div', 'row__body')
+      body.append(
+        el('strong', 'row__title', `${severityWord(flag.severity)} · ${formatDay(flag.businessDate)}`),
+        el('span', 'row__detail', flag.detail),
+        el('span', 'row__detail', `${flag.raisedByName} · ${formatDateTime(flag.raisedAt)}`),
+      )
+      item.append(body)
+      flags.append(item)
+    }
+    block.append(flags)
+  }
+
+  block.append(el('p', 'muted', 'Signing a day off is done on the Server, where the whole day can be read first.'))
+  return block
+}
+
+/** Severity as a word a person repeats to somebody else, not as a colour only this screen can see. */
+function severityWord(severity: 'NOTE' | 'CONCERN' | 'SERIOUS'): string {
+  if (severity === 'SERIOUS') return 'Serious'
+  if (severity === 'CONCERN') return 'Concern'
+  return 'Note'
 }
 
 function countTile(label: string, count: number, detail: string, action: () => void, tone: 'calm' | 'warn' | 'bad'): HTMLElement {

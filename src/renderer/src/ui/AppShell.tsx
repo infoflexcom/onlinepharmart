@@ -10,6 +10,7 @@ import { PosWorkspace } from './PosWorkspace'
 import { OrderWorkflow } from './OrderWorkflow'
 import { ReturnsWorkspace } from './ReturnsWorkspace'
 import { ReportsWorkspace } from './ReportsWorkspace'
+import { DailyAuditWorkspace } from './DailyAuditWorkspace'
 import { MobileAccessWorkspace } from './MobileAccessWorkspace'
 import { MobileApprovalWatcher } from './MobileApprovalWatcher'
 
@@ -79,6 +80,8 @@ export function AppShell({ bridge, bootstrap, onLogout, onSettingsUpdated }: Pro
                 ? <UsersAndSeats bridge={bridge} currentUser={user} />
                 : activePage === 'reports'
                   ? <ReportsWorkspace bridge={bridge} bootstrap={bootstrap} user={user} />
+                  : activePage === 'audit'
+                    ? <DailyAuditWorkspace bridge={bridge} bootstrap={bootstrap} user={user} />
                   : activePage === 'mobile' && user.role === 'ADMIN'
                     ? <MobileAccessWorkspace bridge={bridge} bootstrap={bootstrap} />
                 : activePage === 'settings' && user.role === 'ADMIN'
@@ -107,7 +110,7 @@ function PlaceholderPage({ page, user, bootstrap }: { page: AppPage; user: Publi
 
 function NavGlyph({ page }: { page: AppPage }) {
   const symbols: Partial<Record<AppPage, string>> = {
-    dashboard: '◫', pos: '▣', products: '◈', stock: '▤', returns: '↶', customers: '◎', reports: '▥',
+    dashboard: '◫', pos: '▣', products: '◈', stock: '▤', returns: '↶', customers: '◎', reports: '▥', audit: '☑',
     users: '♙', mobile: '▯', settings: '⚙', departments: '▦', promotions: '✦', loyalty: '♡', shifts: '◷',
     batches: '⌁', approvals: '✓', orders: '⧉',
   }
@@ -117,7 +120,7 @@ function NavGlyph({ page }: { page: AppPage }) {
 function pageLabel(page: AppPage): string {
   const labels: Record<AppPage, string> = {
     dashboard: 'Dashboard', pos: 'Point of Sale', products: 'Products', stock: 'Stock / Purchases', returns: 'Returns',
-    customers: 'Customers', reports: 'Reports', users: 'Users', mobile: 'Mobile Access', settings: 'Settings',
+    customers: 'Customers', reports: 'Reports', audit: 'Daily Audit', users: 'Users', mobile: 'Mobile Access', settings: 'Settings',
     departments: 'Departments', promotions: 'Promotions', loyalty: 'Loyalty', shifts: 'Shifts', batches: 'Batches / Expiry', approvals: 'Approvals',
     orders: 'Orders / Receipts',
   }

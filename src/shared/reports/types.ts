@@ -112,6 +112,8 @@ export interface CashPositionSummary {
   cashSalesMinor: bigint
   cashRefundsMinor: bigint
   drawerAdjustmentsMinor: bigint
+  /** Cash taken from customers settling an old credit balance. In the drawer, but not a sale. */
+  debtorCashMinor: bigint
   expectedCashMinor: bigint
 }
 
@@ -145,6 +147,8 @@ export interface CashierShiftReportRow {
   cashSalesMinor: bigint
   cashRefundsMinor: bigint
   drawerAdjustmentsMinor: bigint
+  /** Cash collected against an old credit balance during the shift. In the drawer, but not a sale. */
+  debtorCashMinor: bigint
   expectedCashMinor: bigint
   countedCashMinor: bigint | null
   varianceMinor: bigint | null
@@ -338,6 +342,16 @@ export interface OpenCashierShiftInput {
 export interface CloseCashierShiftInput {
   shiftId: string
   countedCash: string
+  note?: string
+}
+
+export interface RecordDebtorPaymentInput {
+  customerId: string
+  /** In the shop's currency, as the till types it. */
+  amount: string
+  /** Cash is the only method that changes what should be in the drawer at the day close. */
+  method: 'CASH' | 'TRANSFER' | 'CARD'
+  reference?: string
   note?: string
 }
 

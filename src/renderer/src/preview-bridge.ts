@@ -16,7 +16,15 @@ import type {
 } from '@shared/orders/types'
 import type { SaleType } from '@shared/pos/types'
 import type { PrintLogEntry } from '../../services/print-gate-service'
-import { can } from '../../../packages/core/src/capabilities'
+import { drawerAdjustmentSigned, expectedDrawerCash } from '../../services/cash-drawer'
+import { can, resolveRole } from '../../../packages/core/src/index'
+import { createPreviewAudit } from './preview-audit'
+import { createAuditCsv } from '../../services/audit-export'
+import type {
+  AuditDayStatus, AuditDebtorPaymentRow, AuditExportInput, AuditExportResult, AuditFlagNoteInput, AuditFlagRow,
+  AuditNoteFindingInput, AuditSignOffRow, AuditSummaryForPhone, DailyAuditReport, DayAuditInput, RaiseAuditFlagInput,
+  ResolveAuditFlagInput, SignOffDayInput, UnauditedDay,
+} from '@shared/audit/types'
 import type {
   MobileAccessStatus, MobileConnectionTest, MobileKeepRunningSettings, MobileTotpEnrollment,
   PairedMobileDevice, PendingMobileApproval, TotpStatus,
@@ -29,6 +37,7 @@ import type {
   CloseDayInput,
   DayCloseRecord,
   OpenCashierShiftInput,
+  RecordDebtorPaymentInput,
   ReportExportInput,
   ReportPeriodInput,
 } from '@shared/reports/types'
@@ -169,6 +178,34 @@ export function createPreviewBridge(): InfoflexBridge {
   const previewShifts: CashierShiftReportRow[] = []
   const previewDayCloses = new Map<string, DayCloseRecord>()
   let nextPreviewCloseId = 0
+  /**
+   * The preview's daily audit.
+   *
+   * Constructed here rather than inside the returned object because the sources are closures over this state: the audit
+   * has to read the day as it stands when the screen asks, not as it stood when the bridge was built.
+   */
+  const previewAudit = createPreviewAudit({
+    receipts: () => [...previewReceipts.values()],
+    returns: () => previewReturns,
+    shifts: () => previewShifts,
+    dayCloses: () => previewDayCloses,
+    customers: () => previewCustomers,
+    products: () => inventoryProducts,
+    orders: () => previewOrders
+      .filter((order) => order.status === 'CANCELLED' || order.status === 'EXPIRED')
+      .map((order) => ({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        status: order.status === 'EXPIRED' ? 'EXPIRED' as const : 'CANCELLED' as const,
+        pickedByName: order.createdByName,
+        totalMinor: order.totalMinor,
+        at: order.createdAt,
+        reason: order.events.length > 0 ? order.events[order.events.length - 1]!.detail : '',
+      })),
+    users: () => [...accounts.values()].map(({ user }) => user),
+    settings: () => settings,
+    edition: () => edition,
+  })
   const previewIdempotency = new Map<string, number>()
   /**
    * The browser preview's copy of the order workflow.
@@ -398,8 +435,18 @@ export function createPreviewBridge(): InfoflexBridge {
     if (product.weighedItem && (!product.pluCode || product.pricePerKgMinor === null)) {
       throw new Error('Weighed items need a PLU code and price per kilogram.')
     }
-    if (existing) inventoryProducts[inventoryProducts.indexOf(existing)] = product
-    else inventoryProducts.push(product)
+    if (existing) {
+      // Only a price move is recorded, and only the price that was there before it. This is the preview's stand-in for
+      // the `product.updated` audit-log entries the Server writes: without it, an override could never be explained by a
+      // later price change, and correcting a spelling would look like one.
+      if (existing.retailPriceMinor !== product.retailPriceMinor
+        || existing.wholesalePriceMinor !== product.wholesalePriceMinor) {
+        previewAudit.notePriceChange(
+          product.id, existing.retailPriceMinor, existing.wholesalePriceMinor,
+        )
+      }
+      inventoryProducts[inventoryProducts.indexOf(existing)] = product
+    } else inventoryProducts.push(product)
     return inventoryProductView(user, product)
   }
 
@@ -1694,6 +1741,8 @@ export function createPreviewBridge(): InfoflexBridge {
         cashSalesMinor: 0n,
         cashRefundsMinor: 0n,
         drawerAdjustmentsMinor: 0n,
+        // No debts are collected in the preview; the field is here so the shape matches the real Server's.
+        debtorCashMinor: 0n,
         expectedCashMinor: openingFloatMinor,
         countedCashMinor: null,
         varianceMinor: null,
@@ -1732,13 +1781,102 @@ export function createPreviewBridge(): InfoflexBridge {
       const amount = previewMoney(input.amount)
       if (amount <= 0n) throw new Error('Drawer event amount must be greater than zero.')
       if (!input.note.trim()) throw new Error('Enter a drawer event note.')
-      const delta = input.type === 'PAID_OUT' || input.type === 'SAFE_DROP' ? -amount : amount
+      const delta = drawerAdjustmentSigned(input.type, amount)
       previewShifts[index] = {
         ...existing,
         drawerAdjustmentsMinor: existing.drawerAdjustmentsMinor + delta,
         expectedCashMinor: existing.expectedCashMinor + delta,
       }
     },
+    async recordDebtorPayment(input: RecordDebtorPaymentInput): Promise<AuditDebtorPaymentRow> {
+      const user = getActiveUser()
+      if (!canAccessPageForRole(user, 'customers', edition)) {
+        throw new Error('You do not have permission to take a payment against a customer balance.')
+      }
+      const amountMinor = previewMoney(input.amount)
+      return previewAudit.recordDebtorPayment({
+        customerId: input.customerId,
+        amountMinor,
+        method: input.method,
+        reference: input.reference,
+        note: input.note,
+      }, user)
+    },
+
+    async getDayAudit(input: DayAuditInput): Promise<DailyAuditReport> {
+      const user = getActiveUser()
+      if (!canAccessPageForRole(user, 'audit', edition)) throw new Error('You do not have permission to audit the day.')
+      return previewAudit.getDayAudit(input, user)
+    },
+    async listAuditDayStatuses(): Promise<AuditDayStatus[]> {
+      const user = getActiveUser()
+      if (!canAccessPageForRole(user, 'audit', edition)) throw new Error('You do not have permission to audit the day.')
+      return previewAudit.dayStatuses(user)
+    },
+    async listUnauditedDays(days?: number): Promise<UnauditedDay[]> {
+      const user = getActiveUser()
+      if (!canAccessPageForRole(user, 'audit', edition)) throw new Error('You do not have permission to audit the day.')
+      void days
+      return previewAudit.listUnauditedDays(user)
+    },
+    async getAuditSummary(): Promise<AuditSummaryForPhone> {
+      const user = getActiveUser()
+      if (!canAccessPageForRole(user, 'audit', edition)) throw new Error('You do not have permission to audit the day.')
+      return previewAudit.summaryForPhone(user)
+    },
+    async signOffAuditDay(input: SignOffDayInput): Promise<AuditSignOffRow> {
+      const user = getActiveUser()
+      if (!canAccessPageForRole(user, 'audit', edition)) throw new Error('You do not have permission to audit the day.')
+      return previewAudit.signOffDay(input, user)
+    },
+    async noteAuditFinding(input: AuditNoteFindingInput): Promise<AuditFlagRow> {
+      const user = getActiveUser()
+      if (!canAccessPageForRole(user, 'audit', edition)) throw new Error('You do not have permission to audit the day.')
+      return previewAudit.noteFinding(input, user)
+    },
+    async raiseAuditFlag(input: RaiseAuditFlagInput): Promise<AuditFlagRow> {
+      const user = getActiveUser()
+      if (!canAccessPageForRole(user, 'audit', edition)) throw new Error('You do not have permission to audit the day.')
+      return previewAudit.raiseFlag(input, user)
+    },
+    async addAuditFlagNote(input: AuditFlagNoteInput): Promise<AuditFlagRow> {
+      const user = getActiveUser()
+      if (!canAccessPageForRole(user, 'audit', edition)) throw new Error('You do not have permission to audit the day.')
+      return previewAudit.addFlagNote(input.flagId, input.detail, user)
+    },
+    async resolveAuditFlag(input: ResolveAuditFlagInput): Promise<AuditFlagRow> {
+      const user = getActiveUser()
+      if (!canAccessPageForRole(user, 'audit', edition)) throw new Error('You do not have permission to audit the day.')
+      return previewAudit.resolveFlag(input.flagId, input.resolutionNote, user)
+    },
+    async exportAudit(input: AuditExportInput): Promise<AuditExportResult> {
+      const user = getActiveUser()
+      if (!canAccessPageForRole(user, 'audit', edition)) throw new Error('You do not have permission to audit the day.')
+      if (!can(resolveRole(user.role) ?? 'USER', 'export_audit')) {
+        throw new Error('Your role may read the audit but not export it.')
+      }
+      // Built from the very report the caller was shown, which is the property that matters: an export is not a second
+      // opinion about the day. The encoding is the browser's own, since the file never leaves this tab.
+      const report = previewAudit.getDayAudit(input, user)
+      // The same writer the licensed host uses, so the file a reviewer downloads from the demo is byte-for-byte the
+      // shape the shop's own export has.
+      const csv = createAuditCsv(report)
+      const bytes = new TextEncoder().encode(csv)
+      let binary = ''
+      for (const byte of bytes) binary += String.fromCharCode(byte)
+      if (input.format === 'EXCEL') {
+        throw new Error('Excel export is available from the licensed desktop host, not this memory-only preview.')
+      }
+      return {
+        format: 'CSV',
+        contentBase64: btoa(binary),
+        fileName: `daily-audit-${report.businessDate}.csv`,
+        mimeType: 'text/csv;charset=utf-8',
+        storeName: report.header.storeName,
+        currencyCode: report.currencyCode,
+      }
+    },
+
     async updateStoreDetails(profile) {
       requireAdmin()
       settings = { ...settings, profile: normalizeShopProfile(profile) }
@@ -1918,7 +2056,13 @@ function buildPreviewAccountingReport(
     cashPosition: input.period === 'DAY' ? {
       businessDate: startDate, currencyCode: settings.currency.code, openingFloatMinor, cashSalesMinor,
       cashRefundsMinor, drawerAdjustmentsMinor,
-      expectedCashMinor: openingFloatMinor + cashSalesMinor - cashRefundsMinor + drawerAdjustmentsMinor,
+      // The preview has no debtor payments to collect, but the expectation is still the shared formula rather than a
+      // fourth spelling of the same sum: a preview that adds the numbers up its own way is a preview that can show a
+      // drawer total the real Server would never produce.
+      debtorCashMinor: zero,
+      expectedCashMinor: expectedDrawerCash({
+        openingFloatMinor, cashSalesMinor, cashRefundsMinor, drawerAdjustmentsMinor, debtorCashMinor: zero,
+      }),
     } : null,
     dayClose: selectedClose,
     shifts: visibleShifts,

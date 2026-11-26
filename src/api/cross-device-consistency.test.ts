@@ -9,6 +9,7 @@ import { ShopService } from '../services/shop-service'
 import { ProductInventoryService } from '../services/product-inventory-service'
 import { PointOfSaleService } from '../services/point-of-sale-service'
 import { ReturnService } from '../services/return-service'
+import { DailyAuditService } from '../services/daily-audit-service'
 import { AccountingReportService } from '../services/accounting-report-service'
 import { ApprovalQueueService } from '../services/approval-queue-service'
 import { UserService } from '../services/user-service'
@@ -80,6 +81,7 @@ function createHarness() {
   const surface = createMobileAdminSurface({
     database, shop, license: { getSnapshot: () => LICENCE } as never,
     inventory, pointOfSale, users, reports, approvals, returns,
+    audit: new DailyAuditService(database, repository, reports, { now: () => NOW }),
     countConnectedDevices: () => 1, listPairedDevices: () => [], revokePairedDevice: () => undefined,
   })
   const adminActor = { id: ADMIN_ID, username: 'admin', role: 'ADMIN' as const }

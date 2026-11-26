@@ -197,6 +197,31 @@ export const POLICY = {
   'ipc:reports:open-cashier-shift': entry(withCapability('do_cash_count'), 'A till operator opens their own shift; a USER does not handle cash.'),
   'ipc:reports:close-cashier-shift': entry(withCapability('do_cash_count'), 'A till operator closes their own shift; the host additionally refuses another person\'s shift.'),
   'ipc:reports:drawer-event': entry(withCapability('do_cash_count'), 'Recording a drawer event belongs to the person whose shift it is.'),
+  // Taking money off a customer's balance. Its own capability and not `take_payment`, because a picker who may
+  // finalise a sale at the till still may not move somebody's debt: this changes what the customer owes, and what the
+  // drawer is expected to hold, without a sale being involved at all.
+  'ipc:reports:debtor-payment': entry(withCapability('record_debtor_payment'), 'Settling part of a customer balance moves money and the balance together; the service additionally refuses more than is owed.'),
+
+  // ── Desktop IPC: the daily audit ────────────────────────────────────────────────────────────────────────
+  // Reading the day back is not the same permission as reading the reports. `REVIEW` is derived from `view_audit`,
+  // which is ADMIN and SUPERVISOR and no till operator: the audit is the control that says whether the money came in,
+  // and a control the person being controlled can run is not a control. The brief's own wording is the reason a
+  // SUPERVISOR sees this screen and not the accounting reports — "Audit and Stock (view)" with no reports.
+  'ipc:audit:get-day': entry(REVIEW, 'One day, every till or one Account, recomputed from the ledger. No cost or profit, because the Supervisor is not owed the margin.'),
+  'ipc:audit:day-statuses': entry(REVIEW, 'Which days are audited and by whom. The Admin reads it too, to see whether the Supervisor has looked.'),
+  'ipc:audit:unaudited-days': entry(REVIEW, 'The list of days nobody has attested to yet; it is the reason this screen exists.'),
+  'ipc:audit:summary': entry(REVIEW, 'The short version the phone asks for, and the desktop header. Same capability as the day itself: nothing here is more sensitive.'),
+  // Writing. A note or a sign-off is an attestation by somebody with the authority to make one. Both rows are also
+  // refused again inside the service, so this list is the first of two doors rather than the only one.
+  'ipc:audit:sign-off': entry(withCapability('write_audit_note'), 'Signing a day off is the attestation itself, and it is immutable once written.'),
+  'ipc:audit:note-finding': entry(withCapability('write_audit_note'), 'Noting a finding explains a verdict; only a Supervisor or the Admin may.'),
+  'ipc:audit:raise-flag': entry(withCapability('write_audit_note'), 'Raising a manual flag is a Supervisor or Admin judgement.'),
+  'ipc:audit:flag-note': entry(withCapability('write_audit_note'), 'Appending to a flag keeps the earlier words, and is the same authority as raising one.'),
+  'ipc:audit:resolve-flag': entry(withCapability('write_audit_note'), 'Closing a flag says the matter is settled; it does not delete it.'),
+  // An export, and never a print. There is no receipt in an audit: the one thing this screen must not be able to do is
+  // hand somebody a document. Hence `export_audit` on the export and no `print_documents` anywhere in this section,
+  // and the print gate refuses an audit document id whatever a caller claims about it.
+  'ipc:audit:export-csv': entry(withCapability('export_audit'), 'Exported as a file for the day, containing exactly the rows the same caller was shown.'),
 
   // ── Desktop IPC: settings ──────────────────────────────────────────────────────────────────────────────
   'ipc:settings:update-store-details': entry(ADMIN, 'Shop identity appears on every receipt.'),

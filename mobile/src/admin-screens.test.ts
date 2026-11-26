@@ -37,6 +37,18 @@ const dashboard: MobileDashboard = {
   salesByCashierToday: [
     { userId: 'u1', userName: 'Amaka Obi', username: 'amaka', transactions: 3, totalSalesMinor: '200000', netSalesMinor: '190000' },
   ],
+  // A day nobody has attested to, one that has not even been counted, and a flag still open: the three states the tile
+  // has to tell apart, because "nothing outstanding" and "no audit service here" are different facts.
+  audit: {
+    unauditedDays: [
+      { businessDate: '2026-11-16', accountName: 'Whole store', transactions: 18, salesMinor: '412300', currencyCode: 'NGN', openFlags: 1, dayClosed: true },
+      { businessDate: '2026-11-17', accountName: 'Amaka Obi', transactions: 4, salesMinor: '255000', currencyCode: 'NGN', openFlags: 0, dayClosed: false },
+    ],
+    openFlags: [
+      { id: 'f1', businessDate: '2026-11-16', severity: 'SERIOUS', detail: 'The drawer was short by ₦840.00', raisedByName: 'Sam Supervisor', raisedAt: '2026-11-16T19:05:00.000Z' },
+    ],
+    auditedDays: 12,
+  },
 }
 
 const product: MobileProductDetail = {
@@ -83,6 +95,57 @@ describe('the dashboard screen', () => {
     expect(text).toContain('Waiting for approval')
     expect(text).toContain('Amaka Obi')
     expect(text).toContain('2') // pending approvals count
+  })
+
+  // --- the daily audit block. Three states, and the phone must not collapse any two of them. ---
+
+  const handlers = {
+    onOpenStock: () => {}, onOpenApprovals: () => {}, onOpenReports: () => {}, onOpenSales: () => {},
+    onOpenDevices: () => {},
+  }
+
+  it('lists the days nobody has attested to, with what happened on them, in the shop currency', () => {
+    const text = textOf(renderDashboard(dashboard, handlers))
+    expect(text).toContain('Daily audit')
+    expect(text).toContain('Days to audit')
+    expect(text).toContain('2')
+    expect(text).toContain('Whole store')
+    expect(text).toContain('cash counted')
+    // The second day has not been counted yet, and the phone says so rather than showing a figure that implies it has.
+    expect(text).toContain('not counted yet')
+    expect(text).toContain('1 open flag')
+    expect(text).toContain('₦4,123.00')
+    expect(text).toContain('₦2,550.00')
+    expect(text).toContain('12') // days already audited
+  })
+
+  it('shows an open flag with its severity as a word, because the Admin has to repeat it to somebody else', () => {
+    const text = textOf(renderDashboard(dashboard, handlers))
+    expect(text).toContain('Flags still open')
+    expect(text).toContain('Serious')
+    expect(text).toContain('The drawer was short by ₦840.00')
+    expect(text).toContain('Sam Supervisor')
+  })
+
+  it('says where a day actually gets signed off, instead of offering a verdict from a summary', () => {
+    const text = textOf(renderDashboard(dashboard, handlers))
+    expect(text).toContain('Signing a day off is done on the Server')
+  })
+
+  it('tells "every day audited" apart from "this Server has no audit service"', () => {
+    const clean = textOf(renderDashboard({
+      ...dashboard,
+      audit: { unauditedDays: [], openFlags: [], auditedDays: 30 },
+    }, handlers))
+    expect(clean).toContain('Every day has been audited')
+    expect(clean).not.toContain('no audit service')
+
+    // Same row count, opposite meaning. A phone paired to a shop that has never been audited must not read as a shop
+    // with nothing outstanding, so the absence is stated rather than inferred from an empty list.
+    const absent = textOf(renderDashboard({ ...dashboard, audit: null }, handlers))
+    expect(absent).toContain('This Server has no audit service')
+    expect(absent).not.toContain('Every day has been audited')
+    expect(absent).not.toContain('Days to audit')
   })
 
   it('says "No sales yet today" instead of showing an empty table with a header', () => {

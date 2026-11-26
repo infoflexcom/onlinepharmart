@@ -78,6 +78,7 @@ export type AppPage =
   | 'returns'
   | 'customers'
   | 'reports'
+  | 'audit'
   | 'users'
   | 'mobile'
   | 'settings'

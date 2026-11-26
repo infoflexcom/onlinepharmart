@@ -32,7 +32,21 @@ export interface PrintGateOptions {
   now?: () => number
 }
 
+/**
+ * What may be printed, and it is a list of two.
+ *
+ * A receipt for a sale, and a credit note for a return. There is deliberately no third member: not `AUDIT`, not `REPORT`,
+ * not `DAY_CLOSE`. Those are files the Admin keeps, and the one thing this product must never be able to do is print
+ * something from an audit screen that could be handed across a counter and mistaken for a receipt.
+ *
+ * `print_log.document_kind` allows a wider set (`SALE`, `ORDER`, `RETURN`, `REPORT`) because the log is a *record* and
+ * the audit reads history from it, including rows this gate could not have written. Reading a wider schema is not the
+ * same as being able to write to it, and the runtime guard below is what keeps the two apart.
+ */
 export type PrintableDocumentKind = 'SALE' | 'RETURN'
+
+/** The same two, as a value, so the guard below checks against a list rather than against a memory of the type. */
+export const PRINTABLE_KINDS: readonly PrintableDocumentKind[] = ['SALE', 'RETURN']
 
 export interface PrintRequest {
   kind: PrintableDocumentKind
@@ -124,6 +138,14 @@ export class PrintGateService {
     this.requireActor(actor)
     if (!can(this.roleOf(actor), 'print_documents')) throw new PrintRefusedError(actor.role)
 
+    // Checked at runtime even though the type says it cannot happen, because the value arrives across an IPC boundary
+    // that casts, and because the branch below is an else: without this guard an unknown kind would not be refused, it
+    // would be treated as a return and printed as one. A guard the compiler already satisfies is cheap; the alternative
+    // is a document nobody asked for coming out of the printer.
+    const kind = request.kind as string
+    if (!(PRINTABLE_KINDS as readonly string[]).includes(kind)) {
+      throw new Error('Only a receipt or a credit note can be printed. An audit and a report are files, not documents to hand over.')
+    }
     const layout = request.layout
     if (!LAYOUTS.includes(layout)) throw new Error('Choose a receipt layout: 80 mm, 58 mm, A4 receipt or A4 invoice.')
     const documentId = String(request.documentId ?? '').trim()

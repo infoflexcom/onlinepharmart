@@ -21,6 +21,7 @@ import { ReturnService } from '../services/return-service'
 import { OrderService } from '../services/order-service'
 import { PrintGateService } from '../services/print-gate-service'
 import { AccountingReportService } from '../services/accounting-report-service'
+import { DailyAuditService } from '../services/daily-audit-service'
 import { ApprovalQueueService } from '../services/approval-queue-service'
 import { MobileAccessService } from '../services/mobile-access-service'
 import { RelayClient } from './relay-client'
@@ -237,6 +238,15 @@ app.whenReady().then(async () => {
     workstation: hostname(),
   })
   const accountingReportService = new AccountingReportService(database, repository)
+  /**
+   * The daily audit.
+   *
+   * Given the accounting service rather than allowed to read `cashier_shifts` itself, because an open shift has no
+   * expected cash in it yet — the figure is NULL until the count — and a second reader of a money rule that re-reads the
+   * columns instead of asking the service that owns them gets a crash or, worse, a plausible wrong number. Everything the
+   * audit shows about a shift comes from `shiftRowsForDay`, which is the same arithmetic the day close uses.
+   */
+  const dailyAuditService = new DailyAuditService(database, repository, accountingReportService)
   approvalQueue = new ApprovalQueueService(database)
   // The optional demonstration catalogue. Its edition comes from the live licence, never from a setting, so a
   // Pharmacy shop can never load supermarket products.
@@ -264,6 +274,7 @@ app.whenReady().then(async () => {
     pointOfSale: pointOfSaleService,
     users: userService,
     reports: accountingReportService,
+    audit: dailyAuditService,
     approvals: approvalQueue,
     returns: returnService,
     countConnectedDevices: () => mobileAccessService?.connectedDeviceCount() ?? 0,
@@ -343,6 +354,7 @@ app.whenReady().then(async () => {
     appRole,
     orderService,
     printGateService,
+    dailyAuditService,
   )
   await hostController.initialize()
   licenseManager.startBackgroundCheckIns()

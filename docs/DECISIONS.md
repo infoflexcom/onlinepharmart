@@ -1442,3 +1442,107 @@ same reason the real service does. A preview that reached a sale by a different 
 product does not have — which is worse than no preview, because it is believed.
 
 It is in memory and says so. It exists to show the workflow, not to stand in for the Server.
+
+## A day's figures are recomputed at every read, and the only thing stored about them is a digest
+
+`DailyAuditService` writes no totals anywhere. A day's gross sales, discounts, returns, credit sales, debtor payments,
+payment-method breakdown and expected drawer cash are all queries, run when the day is opened. What a sign-off stores is
+`subject_digest`: a SHA-256 of the figures the signer was shown.
+
+The alternative — writing the totals down at sign-off time and reading them back — was rejected because it creates two
+numbers for one day, and the day it disagrees with the ledger is the day somebody has to decide which one is the record.
+A recomputed figure cannot drift, so "the totals agree with the sales ledger" is a property of the reading rather than a
+promise made once. The digest is what makes the *other* question answerable: the day can move after it was signed (a
+return posted late, a price corrected), and when it does the screen and the export both say **"The day still reads as it
+did when signed" → "No — sales have moved since"**. That warning is not suppressible, because a suppressed warning on an
+attestation is a signature on a document nobody read.
+
+The digest's *content* lives in `audit-digest.ts` — the business date, the currency, the account id or `STORE`, nine
+totals, the expected and counted cash, two reconciliation figures and the findings as `code:count` — NUL-joined into a
+key. Hashing it is the Server's job; the browser preview compares the key directly, because a synchronous SHA-256 in a
+tab would be a second implementation of the same hash for no benefit. Which figures make a day *the day that was signed*
+is a rule, and a rule gets one spelling.
+
+## An audit is a file, and the print gate refuses a kind it cannot name
+
+`exportAudit` writes CSV or Excel. There is no PDF path and none is planned: a PDF is a document designed to be handed to
+somebody, and the requirement this phase answers is that nothing leaves an audit screen in a form that could be mistaken
+for a receipt across a counter. The audit screen has no print button and *says so on screen* — "No printing from this
+screen. An audit is a file, not a receipt." — because an unexplained missing control reads as a broken one and invites a
+workaround.
+
+Not offering a button is not a guarantee, so the guarantee lives where the printer is. `PrintGateService` dispatched on a
+ternary: a `SALE` went to the receipt renderer and **everything else** went to the returns renderer. A kind outside the
+closed union `'SALE' | 'RETURN'` was therefore not refused — it was treated as a return and printed as one. TypeScript
+protects compile-time callers; a print request crosses an IPC boundary that casts. The gate now checks against
+`PRINTABLE_KINDS`, the two kinds as a *value*, before reading anything about the document. A guard the compiler already
+satisfies is free; the alternative is a document nobody asked for coming out of the printer. With the guard disabled the
+caller got "Only a completed return can be printed" — a true sentence about the wrong refusal, and one that tells a
+determined caller the kind was accepted and the document was not found.
+
+`print_log.document_kind` still allows `REPORT`. The log is a record and the audit reads history from it, including rows
+this gate could no longer write. Reading a wider schema is not the same as being able to write to it.
+
+## The phone lists the days to audit and never signs one off
+
+The Admin dashboard shows unaudited days (at most eight) and open flags (at most five), says when there are more, and ends
+with "Signing a day off is done on the Server, where the whole day can be read first." There is no sign-off control on the
+phone. That is not a missing feature: a tile that invited a verdict would invite an attestation made from a summary, and
+the attestation is the one thing in this phase that cannot be taken back — `audit_signoffs` is immutable on update and
+delete by trigger.
+
+Two consequences follow, and both are load-bearing. **Money crosses to the phone as text**, not as a number: the phone
+formats with the shop's currency definition from the header, and a bigint that survived JSON as a number would be a figure
+whose decimals the phone has to guess. And **`null` is not an empty list**: `audit: null` means this Server has no audit
+service and renders as "This Server has no audit service", while an empty list means every day with activity has been
+audited and renders as "Every day has been audited". Collapsing the two would tell an Admin on an old Server that
+somebody had finished the work.
+
+`MobileAdminSurfaceDeps.audit` is **required**, not optional, for the same reason. An optional dependency compiles
+everywhere and quietly produces the "no audit service" message on a perfectly healthy install — a true sentence about a
+mis-wired one. Making it required named all three stale test fixtures immediately. `MobileAdminHost.getAuditSummary` stays
+optional only because older hosts must keep compiling, and its absence maps to `null`, never to an empty list.
+
+## The export contains exactly what the caller was shown, including the absence of things
+
+`buildAuditExportTables` is built from an already permission-gated report rather than from a second query, so a
+Supervisor's file carries no cost and no margin — not because the exporter redacts them, but because the report it was
+given never had them. A test asserts no column heading contains `cost` or `profit`, and a second asserts that none of
+`cost of goods`, `cogs`, `gross profit`, `margin` or `unit cost` appears anywhere in the CSV — a heading is where a
+column would advertise itself, and the text is where a stray figure would hide. Redaction in the exporter would be a second place to get this wrong.
+
+An empty section never reads as an unchecked one. The checks table always lists all six codes, with "Nothing found"
+beside the quiet ones and "Not run for this day" where a check genuinely did not run; the flags table says "No flags were
+raised on this day." in a row of its own. A heading with nothing under it is the shape of a document that stopped early,
+and an auditor reading it a month later cannot tell the difference. Percentages leave as **text** so nobody sums them, and
+a cell beginning with `=`, `+` or `@` is neutralised, because a receipt number pasted into Excel is not a receipt number
+if it can also be a formula.
+
+## A second reader of a money rule calls the service that owns it
+
+The audit needs each shift's expected cash. `cashier_shifts.expected_cash` is NULL while a shift is OPEN — the figure does
+not exist yet — and a second reader selecting that column threw `TypeError: Cannot convert null to a BigInt`. The fix was
+not a null check in the reader; it was `AccountingReportService.shiftRowsForDay`, which reports the stored figure for a
+CLOSED shift and recomputes it for an OPEN one, and is the only place that knows which is which. A null check would have
+silently reported zero expected cash for every open shift, which is the figure that makes a full drawer look like a
+surplus.
+
+## A price override is measured against the price at the time of the sale
+
+A line charged below catalogue is compared against the catalogue price *as it was when the sale was rung up*,
+reconstructed from `audit_log` rows of `product.updated` whose metadata carries the old and new prices. Today's price is
+the wrong comparator in both directions: it flags every legitimate price change made after the sale, and it excuses every
+undercharge made after a fraudulent one. `products.updated_at` is not evidence of what the price was at noon on Tuesday,
+and a raw `UPDATE products` leaves no trace at all — which is why the tests change prices through
+`inventory.updateProduct` rather than with SQL. A guard is only as good as the path that has to pass it.
+
+## A class name is not a string the compiler sees, and neither is a fragment of one
+
+`css-coverage.test.ts` reads every string literal inside a `className={…}` expression as a class name, which is what makes
+it able to find `.audit-verdict--signed` being used by a component and never defined. It also reads the operands of a
+ternary in that expression: `className={\`badge--${ok ? 'clean' : 'issues'}\`}` reports `clean` and `issues` as unstyled
+classes, because to the extractor they are.
+
+The fix is to move the fragments into named helper functions — `outcomeClass(outcome)`, `flagBadgeClass(flag)` — where the
+extractor cannot see them, and to keep the template inside the helper. The wrong fix is adding the component to
+`KNOWN_UNSTYLED`, a list that may only shrink and exists to name debt, not to absorb it.

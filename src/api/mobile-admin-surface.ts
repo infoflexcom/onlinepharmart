@@ -3,6 +3,7 @@ import type { ProductInventoryService } from '../services/product-inventory-serv
 import type { PointOfSaleService } from '../services/point-of-sale-service'
 import type { UserService } from '../services/user-service'
 import type { AccountingReportService } from '../services/accounting-report-service'
+import type { DailyAuditService } from '../services/daily-audit-service'
 import type { ApprovalQueueService } from '../services/approval-queue-service'
 import type { ReturnService } from '../services/return-service'
 import type { ShopService } from '../services/shop-service'
@@ -25,6 +26,14 @@ export interface MobileAdminSurfaceDeps {
   pointOfSale: PointOfSaleService
   users: UserService
   reports: AccountingReportService
+  /**
+   * The daily audit, required rather than optional.
+   *
+   * Optional here would have compiled everywhere and quietly produced a phone that reports "no audit service on this
+   * Server" — a true sentence about a mis-wired installation, and the kind of true sentence nobody reads twice. Making
+   * it a required dependency turns that into a compile error at the one place the surface is built.
+   */
+  audit: DailyAuditService
   approvals: ApprovalQueueService
   returns: ReturnService
   /** The device registry, for the "connected devices" count on the dashboard. */
@@ -105,6 +114,9 @@ export function createMobileAdminSurface(deps: MobileAdminSurfaceDeps): MobileAd
     getAlerts: (currentEdition) => deps.inventory.getAlerts(currentEdition),
 
     getReport: (input, caller) => deps.reports.getDashboard(input, actor(caller), edition() ?? 'PHARMACY'),
+    // The same service the desktop audit screen asks, so a day outstanding on the till is outstanding in the Admin's
+    // pocket. The phone gets the summary and no more: signing a day off needs the whole screen, not a tile.
+    getAuditSummary: (caller) => deps.audit.summaryForPhone(caller, edition() ?? 'PHARMACY'),
     exportReportPdf: async (input, caller) =>
       await deps.reports.exportPdf({ ...input, section: 'summary' }, actor(caller), edition() ?? 'PHARMACY'),
 

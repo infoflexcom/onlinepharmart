@@ -9,7 +9,8 @@ import type { ProductDraft, ProductRecord } from '../shared/inventory/types'
 import { ProductInventoryService } from './product-inventory-service'
 import { PointOfSaleService } from './point-of-sale-service'
 import { ReturnService } from './return-service'
-import { PrintGateService, PrintRefusedError } from './print-gate-service'
+import { PRINTABLE_KINDS, PrintGateService, PrintRefusedError } from './print-gate-service'
+import { POLICY } from '../../packages/core/src/policy'
 import { can } from '../../packages/core/src/capabilities'
 
 /**
@@ -405,5 +406,97 @@ describe('the layout is validated before anything is printed', () => {
       }, ACCOUNT), layout).not.toThrow()
     }
     expect(logRows(harness).map((row) => row.copy_no)).toEqual([1, 2, 3, 4])
+  })
+})
+
+describe('nothing that is not a receipt or a credit note can reach the printer', () => {
+  /**
+   * The brief's requirement is "no receipt printing from the audit and report screens". The desktop answers it by never
+   * offering a print button on those screens — but a screen that does not offer something is not a guarantee, and the
+   * guarantee has to live where the printer is. These tests are that guarantee.
+   */
+
+  // Derived from the exported list rather than written out, so adding a printable kind is a change that has to be made
+  // in the service and breaks this test on the way past.
+  it('offers exactly two kinds of document, and neither is an audit or a report', () => {
+    expect([...PRINTABLE_KINDS].sort()).toEqual(['RETURN', 'SALE'])
+    for (const forbidden of ['AUDIT', 'REPORT', 'DAY_CLOSE', 'SIGN_OFF', 'FLAG']) {
+      expect(PRINTABLE_KINDS).not.toContain(forbidden as never)
+    }
+  })
+
+  it.each(['AUDIT', 'REPORT', 'DAY_CLOSE'])('refuses a %s subject, even for the Admin who may print everything else', (kind) => {
+    const harness = createHarness()
+    const sale = completedSale(harness)
+    expect(() => harness.gate.print({
+      // A real sale id, so what is being refused is the *kind* and not a document that happens not to exist. Without
+      // this, the test would pass for the wrong reason: an unknown kind used to fall into the returns branch and fail
+      // there with "that return could not be found", which is a different sentence with a different meaning.
+      kind: kind as never, documentId: sale.saleId, layout: 'THERMAL_80',
+    }, ADMIN)).toThrowError('Only a receipt or a credit note can be printed. An audit and a report are files, not documents to hand over.')
+    expect(logRows(harness), 'a refused kind leaves no log row').toHaveLength(0)
+  })
+
+  it('refuses an audit subject before reading anything about the document', () => {
+    const harness = createHarness()
+    // Nothing has been sold, so there is no document to read at all. The refusal is still the kind refusal, which proves
+    // the order: a caller learns nothing about whether an id exists.
+    expect(() => harness.gate.print({
+      kind: 'AUDIT' as never, documentId: '999999', layout: 'A4_INVOICE',
+    }, ADMIN)).toThrowError(/Only a receipt or a credit note can be printed/u)
+    expect(logRows(harness)).toHaveLength(0)
+  })
+
+  it('refuses the Supervisor, who is the person the audit screen belongs to', () => {
+    const harness = createHarness()
+    const sale = completedSale(harness)
+    // The auditor holds view_audit, write_audit_note and export_audit, and no printing capability at all. That is not a
+    // gap in the role table: a Supervisor who could print a receipt could produce a document nobody at the till made.
+    expect(can('SUPERVISOR', 'print_documents')).toBe(false)
+    expect(can('SUPERVISOR', 'view_audit')).toBe(true)
+    expect(can('SUPERVISOR', 'export_audit')).toBe(true)
+    expect(() => harness.gate.print({ kind: 'SALE', documentId: sale.saleId, layout: 'THERMAL_80' }, SUPERVISOR))
+      .toThrowError(PrintRefusedError)
+    expect(logRows(harness)).toHaveLength(0)
+  })
+
+  it('has no audit channel in the policy table that could print, and no print channel an auditor can reach', () => {
+    const auditChannels = Object.keys(POLICY).filter((key) => key.startsWith('ipc:audit:'))
+    expect(auditChannels.length).toBeGreaterThan(0)
+    for (const channel of auditChannels) {
+      expect(channel, `${channel} looks like a print channel`).not.toMatch(/print/u)
+    }
+    // And the way back: every channel that does print is closed to a Supervisor, so the audit's own role cannot reach a
+    // printer through some other door.
+    const printChannels = Object.keys(POLICY).filter((key) => key.includes('print'))
+    expect(printChannels.length).toBeGreaterThan(0)
+    for (const channel of printChannels) {
+      const entry = POLICY[channel as keyof typeof POLICY]
+      if (channel === 'ipc:print:log') {
+        // Reading the log is the auditor's business; making an entry in it is not. The distinction is the capability.
+        expect(entry.roles).toContain('SUPERVISOR')
+        expect(can('SUPERVISOR', 'print_documents')).toBe(false)
+        continue
+      }
+      expect(entry.roles, `${channel} is reachable by a Supervisor`).not.toContain('SUPERVISOR')
+    }
+  })
+
+  it('can read a REPORT row from the log without being able to write one', () => {
+    const harness = createHarness()
+    // The schema is wider than the gate on purpose: print_log records history, and a REPORT row written by an earlier
+    // build is still a fact about the shop. The audit reads those rows; the gate can no longer produce them.
+    harness.database.prepare(`
+      INSERT INTO print_log (document_kind, document_id, copy_no, duplicate, printed_by, printed_at, reprint_reason)
+      VALUES ('REPORT', 'day-2026-11-17', 1, 0, ?, '2026-11-17T12:00:00.000Z', '')
+    `).run(ADMIN.id)
+    expect(harness.database.prepare(`
+      SELECT COUNT(*) AS n FROM print_log WHERE document_kind = 'REPORT'
+    `).get()).toEqual({ n: 1 })
+    expect(() => harness.gate.print({
+      kind: 'REPORT' as never, documentId: 'day-2026-11-17', layout: 'A4_RECEIPT',
+    }, ADMIN)).toThrowError(/Only a receipt or a credit note can be printed/u)
+    // The pre-existing row is untouched and no second one appeared.
+    expect(harness.database.prepare('SELECT COUNT(*) AS n FROM print_log').get()).toEqual({ n: 1 })
   })
 })
