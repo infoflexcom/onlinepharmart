@@ -398,7 +398,9 @@ your hardware.
 ### 4.6 Negative checks
 
 1. Switch off **Bank transfer** in Settings → receipt settings; try a transfer tender at the till: refused.
-2. Set the discount limit to 5%; try a 10% manual discount as an Admin: refused.
+2. Set the discount limit to 5%; try a 10% manual discount at the till: the sale is held and the Admin is asked to
+   authorize the excess, rather than refused outright (Phase 18 replaced the flat refusal), and the till states the 5%
+   ceiling above the cart before any discount is typed.
 3. Rename the manifest on one backup file and try to restore it: refused, nothing changes.
 
 ---
@@ -973,6 +975,26 @@ for an ACCOUNT they are not. These rows are about the Reports screen's own files
 | The Admin may close any shift | Signed in as an Admin, that same shift offers a counted-cash field and **Close**, and the confirmation names the cashier and the over/short | ☐ pass ☐ fail |
 | One open shift each | A cashier who already has a shift open is not offered **Open my cashier shift** again | ☐ pass ☐ fail |
 | The drawer needs a reason | The drawer-event form appears only while a shift is open, and its button stays disabled until both an amount and a reason are typed | ☐ pass ☐ fail |
+
+### The discount ceiling, at a real till
+
+The ceiling is the stricter of the cashier's own **Maximum discount (%)** and the shop-wide limit in Settings. The till
+states it rather than enforcing it; what happens above it is the Server's decision, and since Phase 18 that decision is to
+ask the Admin rather than to refuse.
+
+| Check | Expected on the machine | Status |
+| --- | --- | --- |
+| The ceiling is stated | Above the cart, in words, before any discount is typed; the same words are on the discount field's hover text | ☐ pass ☐ fail |
+| The tighter ceiling wins | With the shop at 5% and the cashier at 20%, the till says 5% and names the shop limit as the tighter of the two | ☐ pass ☐ fail |
+| No shop limit set | On a database where Settings has no shop discount limit, a cashier discounts up to their own limit without the Admin being asked — an unconfigured limit means no shop ceiling, not no discounts | ☐ pass ☐ fail |
+| Both ceilings equal | With the shop and the cashier both at 5%, the till says 5% and does not name Settings as the tighter of the two | ☐ pass ☐ fail |
+| The shop is not blamed when it is not binding | With the cashier at 5% and the shop at 100%, the till says 5% and does not mention the shop limit | ☐ pass ☐ fail |
+| A zero ceiling can still ask | A cashier whose Maximum discount is 0 can type a discount; the field is not dead, the till says every discount asks the Admin first, and completing raises a request | ☐ pass ☐ fail |
+| Above the ceiling | Completing a sale with a discount above the ceiling shows the Server's own sentence and raises a request naming the excess, not the whole discount | ☐ pass ☐ fail |
+| A retried sale is not sold twice | With the Server briefly unreachable, completing the same unchanged cart twice produces one sale and one stock movement | ☐ pass ☐ fail |
+| A corrected sale is a new one | After a failed attempt, adding another unit and completing sells the corrected quantity rather than replaying the earlier attempt | ☐ pass ☐ fail |
+| An inactive product | A product made inactive is not offered at the till at all, rather than being offered and then refused | ☐ pass ☐ fail |
+| The browser preview agrees | In the web preview, set a shop limit of 5% on its own Settings screen and confirm a cashier with 20% is held at 5% — the preview used to read only the cashier's own row | ☐ pass ☐ fail |
 
 ### The phone, over the shop's own LAN
 

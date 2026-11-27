@@ -1670,6 +1670,58 @@ The date assertions read the screen's own date field rather than a date written 
 today, and today in this sandbox is not the business date the fixtures use, so a hard-coded expectation would make the
 test pass or fail on the calendar instead of on the code.
 
+**The till was stating a discount rule it had spelled itself.** `PosWorkspace` is the largest screen in the product and
+had no test, so it was next; writing one found a third spelling of a rule Phase 19 had already collected into one module.
+The discount field was switched off by `user.role === 'ADMIN' || user.permissions.maxDiscountBasisPoints > 0` — a boolean
+made out of a ceiling, with the shop-wide ceiling from Settings missing from it altogether.
+
+Two things followed, and they pull in opposite directions. A cashier whose limit the Admin had set to 0 could not type a
+discount at all, so could not ask — and the Server would have asked for them, because exceeding a ceiling raises an
+approval rather than refusing, which is precisely what Phase 18 turned the flat refusal into. The comment in the service
+says why: a cashier who hit the old refusal "had one option — take the discount off and overcharge the customer". A
+disabled box produces that outcome without even producing the record of an attempt. And a cashier with 20% of their own in
+a shop capped at 5% saw an enabled box, typed 10%, and met the ceiling only when Complete sale came back with it.
+
+Wholesale and credit are different and were left alone: each is a flat refusal on the Server, so a boolean on the screen
+mirrors them faithfully, and both already say so when they are off. The discount ceiling is now read from `discount-cap` —
+the module the till and the audit both read — stated above the cart in words that say what happens *above* the ceiling
+rather than forbidding it, and repeated in the field's own hover text. The screen no longer decides whether discounting is
+allowed; it says what the ceiling is and leaves the consequence to the Server. One test derives the sentence from the
+module for every combination of the two ceilings across all three roles rather than from a list of cases written out,
+because a hand-written list here would be the second spelling this change exists to remove.
+
+Writing the till's test also exposed a hole under it. `discount-cap` is the one spelling of a money rule that the till,
+the sale path, the order path and the daily audit all read, and it had no test of its own. Mutating it proved the gap:
+making the shop limit win ties, and reading an unconfigured shop limit as 0 rather than as no ceiling, survived the twenty
+suites that reach it. Both change money behaviour, and neither was caught, because the assertions that exist are derived —
+the till's sentence is checked against `resolveDiscountCap` itself, so a wrong module moves the expectation with it.
+`discount-cap.test.ts` now pins the absolutes: 12 tests, every expected number written out, and each of the surviving
+mutations killed by exactly one of them.
+
+The same grep found two more spellings of the rule, in the browser preview. `preview-bridge.ts` computed the ceiling
+inline at both of its sale sites — `subtotal * BigInt(user.role === 'ADMIN' ? 10_000 :
+user.permissions.maxDiscountBasisPoints) / 10_000n` — from the cashier's own permission row alone, so a ceiling an Admin
+set on the preview's own Settings screen did nothing at the preview's till. Both now read `discount-cap` through one
+helper inside the factory that owns `settings`. `preview-bridge` had no test at all; `preview-bridge-discount.test.ts` is
+6 tests that drive the preview the way the screens do — first run, a product, stock, a cashier, a shop limit, a login, a
+quote — and three of them fail against the pre-fix file.
+
+One divergence is left open deliberately and recorded in the file rather than closed: above the ceiling the preview
+refuses outright, where the installed Server raises an approval request and completes the sale once the Admin accepts.
+The preview models approvals for returns and has the list and resolve machinery for them, so this is not a missing
+capability. It is a judgement that a memory-only host for looking at screens does not have to rehearse the approval flow,
+in a file nothing else tests — but the *number* it enforces is not a matter of taste, and that now comes from the module.
+
+`PosWorkspace.test.tsx` is 21 tests over the guards that decide whose act something is and what the screen sends: the
+wholesale and credit switches and the sentences that go with them, an inactive product not being offered at all rather
+than being offered and refused, the cart showing the Server's line total rather than one computed on screen, checkout
+held until a quote has arrived, a prescription warning holding the sale until it is acknowledged, and the idempotency key
+— reused when a lost attempt is retried, and replaced when the sale changed. Eight guards were disabled one at a time and
+each was caught. The first sweep caught only seven: the test for a changed sale edited the quantity through a field that
+clears the pending submission outright, so it passed while proving the wrong guard, and the fingerprint comparison had to
+be reached by a path that does not clear it — clicking the product again. A test can pass for a reason other than the one
+it claims, and the way to find that out is to break the guard and watch.
+
 The browser preview asks this question in a different vocabulary from the licensed host — by page access, keyed to
 `take_payment`, where the host's policy row requires `record_debtor_payment` — so the relationship between the two is
 asserted in the generated permission matrix rather than left to coincidence: for every role in every edition, whatever the

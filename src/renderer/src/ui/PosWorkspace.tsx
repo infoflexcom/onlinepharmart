@@ -18,6 +18,7 @@ import type {
   SaleType,
 } from '@shared/pos/types'
 import { formatPosQuantity } from '@shared/pos/receipt-format'
+import { actorDiscountBasisPoints, resolveDiscountCap, shopDiscountLimit } from '../../../services/discount-cap'
 import { PosReceiptDocument } from './PosReceiptDocument'
 
 interface Props {
@@ -47,15 +48,47 @@ const LAYOUT_OPTIONS: Array<{ value: ReceiptLayout; label: string }> = [
   { value: 'A4_INVOICE', label: 'Wholesale A4 invoice' },
 ]
 
+/**
+ * The ceiling in words, for the line above the cart and for the discount field's own hover text.
+ *
+ * It says what happens above the ceiling rather than forbidding it, because that is what the Server does: an Admin is
+ * asked. Naming the shop limit only when it is the tighter of the two follows `resolveDiscountCap`, which does not blame
+ * a setting that is not stopping anything.
+ */
+export function discountCeilingSentence(cap: { limitBasisPoints: number; limitPercent: number; setBy: 'USER_PERMISSION' | 'SHOP_SETTINGS' }): string {
+  const above = cap.limitBasisPoints === 0
+    ? 'Every manual discount asks the Admin first.'
+    : `Manual discounts up to ${cap.limitPercent}% go through; above that the Admin is asked.`
+  return cap.setBy === 'SHOP_SETTINGS' ? `${above} The shop limit in Settings is the tighter of the two.` : above
+}
+
 export function PosWorkspace({ bridge, bootstrap, user, onNavigate }: Props) {
   const currency = bootstrap.settings.currency
   const display = bootstrap.settings.display
   const edition = bootstrap.setupContext.edition ?? bootstrap.appInfo.edition ?? 'PHARMACY'
   const supermarket = edition === 'SUPERMARKET' || edition === 'BOTH'
   const pharmacy = edition === 'PHARMACY' || edition === 'BOTH'
+  // Wholesale and credit are switches on the Server - each is a flat refusal - so a boolean here mirrors them faithfully.
   const canWholesale = user.role === 'ADMIN' || user.permissions.allowWholesale
-  const canDiscount = user.role === 'ADMIN' || user.permissions.maxDiscountBasisPoints > 0
   const canCredit = user.role === 'ADMIN' || user.permissions.allowCreditSales
+
+  /**
+   * The discount ceiling, read from the module the till and the audit both read.
+   *
+   * This line used to be `user.role === 'ADMIN' || user.permissions.maxDiscountBasisPoints > 0`: a boolean made out of a
+   * ceiling, with the shop-wide ceiling from Settings missing from it entirely. Two things followed. A cashier whose limit
+   * the Admin set to 0 had the box disabled and so could not ask - and the Server would have asked for them, because
+   * exceeding a ceiling raises an approval rather than refusing, which is what Phase 18 turned the flat refusal into. And
+   * a cashier with 20% of their own in a shop capped at 5% saw an enabled box, typed 10%, and met the ceiling only when
+   * Complete sale came back with it.
+   *
+   * So the screen no longer decides whether discounting is allowed. It states the ceiling and leaves what happens above it
+   * to the Server, which is the division of labour the rest of this screen already follows.
+   */
+  const discountCap = resolveDiscountCap(
+    actorDiscountBasisPoints(user.role, user.permissions.maxDiscountBasisPoints),
+    shopDiscountLimit(bootstrap.settings),
+  )
   const searchRef = useRef<HTMLInputElement>(null)
   const pendingSubmission = useRef<{ fingerprint: string; key: string } | null>(null)
 
@@ -494,6 +527,8 @@ export function PosWorkspace({ bridge, bootstrap, user, onNavigate }: Props) {
             <small>Available: {selectedCustomer.loyaltyPointsBalance} pts</small>
           </label>}
 
+          <p className="pos-discount-ceiling">{discountCeilingSentence(discountCap)}</p>
+
           <div className="pos-cart-lines">
             {cart.length === 0 ? <div className="pos-empty-cart"><span className="pos-empty-cart-icon">▣</span><strong>Your cart is empty</strong><span>Scan a barcode or choose a product to start a sale.</span></div>
               : cart.map((line) => {
@@ -506,7 +541,7 @@ export function PosWorkspace({ bridge, bootstrap, user, onNavigate }: Props) {
                   </div>
                   <div className="pos-cart-line__fields">
                     <label><span>Qty{product.weighedItem && supermarket ? ' / kg' : ''}</span><input type="number" inputMode="decimal" min="0.001" step="0.001" value={line.quantity} onChange={(event) => updateLine(line.productId, { quantity: event.currentTarget.value })} /></label>
-                    <label><span>Discount</span><input type="text" inputMode="decimal" value={line.manualDiscount} disabled={!canDiscount} onChange={(event) => updateLine(line.productId, { manualDiscount: event.currentTarget.value })} aria-label={`${product.name} manual discount`} /></label>
+                    <label><span>Discount</span><input type="text" inputMode="decimal" value={line.manualDiscount} title={discountCeilingSentence(discountCap)} onChange={(event) => updateLine(line.productId, { manualDiscount: event.currentTarget.value })} aria-label={`${product.name} manual discount`} /></label>
                     <div className="pos-cart-line__total"><span>Line total</span><strong>{quoteLine ? formatMoney(quoteLine.lineTotalMinor, currency, display) : '—'}</strong></div>
                   </div>
                   {quoteLine && (quoteLine.promotionDiscountMinor > 0n || quoteLine.loyaltyDiscountMinor > 0n) && <small className="pos-cart-line__deal">{quoteLine.promotionDiscountMinor > 0n ? 'Promotion applied' : ''}{quoteLine.loyaltyDiscountMinor > 0n ? ' Loyalty reward applied' : ''}</small>}

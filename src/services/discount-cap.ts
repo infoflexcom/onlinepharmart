@@ -3,10 +3,14 @@ import type { ShopSettings } from '../shared/shop/types'
 /**
  * The discount ceiling, in one place.
  *
- * Two readers need the same answer: the till, which refuses a discount above it, and the audit, which reports one that
- * got through or came close. When each computed the cap itself, "above the cap" on the audit screen meant "above a
- * number the audit invented", and a change to the till's rule would have silently moved the meaning of a finding
- * without a single test failing. So the rule lives here and both sides import it.
+ * Two readers need the same answer: the till, which holds a sale that discounts above it and asks the Admin about the
+ * excess, and the audit, which reports one that got through or came close. When each computed the cap itself, "above the
+ * cap" on the audit screen meant "above a number the audit invented", and a change to the till's rule would have silently
+ * moved the meaning of a finding without a single test failing. So the rule lives here and both sides import it.
+ *
+ * The till also states the ceiling to the cashier, in words, before a discount is typed. Stating it from this module is
+ * what keeps the third reader honest: a screen that re-derived the number to display would drift from the one enforced
+ * the moment either moved.
  */
 
 export type DiscountCapSource = 'USER_PERMISSION' | 'SHOP_SETTINGS'

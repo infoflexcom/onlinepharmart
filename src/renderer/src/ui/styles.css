@@ -1158,3 +1158,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
    failed to load. */
 .reports-note { margin: 12px 0 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
 .reports-note strong { color: var(--ink); font-weight: 700; }
+
+/* The discount ceiling, stated once above the cart rather than discovered at Complete sale. Muted and small: it is a
+   fact about the till, not a warning, and it is on screen while the cart is empty too. */
+.pos-discount-ceiling { margin: 2px 0 10px; color: var(--muted); font-size: 12.5px; line-height: 1.5; }

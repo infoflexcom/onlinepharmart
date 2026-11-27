@@ -1651,3 +1651,79 @@ figure but a wrong label on a document that outlives the screen that produced it
 A test asserts the name and the requested section agree, by reading the date off the screen's own date field rather than
 writing a date into the test: that field defaults to today, and today in the sandbox is not the business date the fixtures
 use, so a hard-coded expectation would pass or fail on the calendar instead of on the code.
+
+## A ceiling is not a switch
+
+The till's discount field was switched off by `user.permissions.maxDiscountBasisPoints > 0`. That reads a ceiling as a
+boolean, and it lost two things on the way. The shop-wide ceiling from Settings was not in the expression at all, so the
+number on screen was not the number the till enforces. And a ceiling of zero — the Admin saying "nothing without asking
+me" — became "nothing, and no way to ask", which is the outcome Phase 18 removed from the Server when it turned the flat
+refusal into an approval request.
+
+The screen now reads the ceiling from `discount-cap`, the module the till and the daily audit both read, states it in
+words above the cart, and leaves what happens above it to the Server. The sentence says what happens rather than what is
+forbidden — "Manual discounts up to 5% go through; above that the Admin is asked" — because the ceiling is not a wall.
+
+The distinction worth keeping is that this was not a general rule about disabling controls. Wholesale and credit are
+switches on the Server: each is a flat refusal, so a boolean on the screen mirrors them faithfully, and both already say
+why when they are off. Only the discount had been turned into a boolean when the thing it came from was a limit. Before
+disabling a control because of a permission, it is worth asking whether the Server refuses the act or merely asks about
+it — the two look identical in a permissions table and behave nothing alike at a till.
+
+The sentence is tested by deriving it from `resolveDiscountCap` across every combination of the two ceilings and all three
+roles, rather than from a list of expected sentences written into the test. A written-out list is a second spelling of the
+rule, which is the thing this change exists to remove; a derived one fails when the module changes and passes when it does
+not, which is the only useful behaviour for a test of a shared rule.
+
+## A test can pass while proving the wrong guard
+
+The first sweep of the till's guards caught seven of eight. The one that slipped was the idempotency key: the test changed
+the sale by editing the quantity, and editing a line clears the pending submission outright — so the key changed whether or
+not the fingerprint comparison existed. The test passed, the assertion was true, and it said nothing about the guard it was
+written for.
+
+Reaching the same outcome by clicking the product again, a path that does *not* clear the pending sale, makes the
+fingerprint comparison load-bearing, and breaking it now fails that test alone.
+
+The general form is worth more than the instance: an assertion can hold for a reason other than the one claimed, and the
+only way to know which reason is to disable the guard and watch. That is why the bar here is not "the tests pass" but
+"each guard, disabled, fails a test that names it" — and why a sweep that catches fewer guards than there are is a result
+to investigate rather than a near miss to accept.
+
+## A test that derives its expectation from the code cannot catch the code being wrong
+
+The till's ceiling sentence is asserted by deriving the expected words from `resolveDiscountCap` across every combination
+of the two ceilings and all three roles. That was the right call for what it tests: a hand-written list of sentences would
+be a second spelling of the rule, and the whole point of the change was to leave one spelling. But it is worth stating
+plainly what it cannot do. Both sides of each assertion come from the same call, so when the module is wrong they move
+together and the test stays green.
+
+Making the shop limit win ties, and reading an unconfigured shop limit as 0 instead of as "no ceiling", were both tried
+against the whole suite — twenty files that reach the module through the till, the sale path, the order path and the audit
+— and neither was caught by anything. Both change money behaviour. The first sends a cashier to Settings to fix a ceiling
+their own permission row set; the second would turn "the Admin has not configured a shop limit" into "every discount in
+the shop needs the Admin", on every till at once, silently.
+
+So `discount-cap.ts` now has its own test, with every expectation written out — `5`, `9n`, `USER_PERMISSION`, `10_000` —
+rather than computed. A module that owns a rule needs one test that would fail if the rule were wrong, and that test
+cannot ask the module what the rule is.
+
+The two halves are complementary and neither replaces the other. The derived matrix catches a screen that stops reading
+the module, or renders it carelessly; the absolutes catch a module that is wrong. A reader of either test should know
+which failure it is able to report, because the reassuring one is the one that is green.
+
+## A demo host may simplify a flow but not a number
+
+The browser preview refused an over-ceiling discount outright, where the installed Server raises an approval request and
+completes the sale once the Admin accepts. That was left alone: the preview is a memory-only host for looking at screens,
+it already models approvals for returns, and rehearsing the sale-approval flow there would be work on a file nothing
+else exercises.
+
+What was not left alone is the ceiling itself. The preview computed it inline, twice, from the cashier's own permission
+row, ignoring the shop-wide limit in Settings — so a limit set on the preview's own Settings screen changed nothing at the
+preview's till. Both sites now read `discount-cap`.
+
+The line between those two decisions is worth keeping. A flow is a sequence of screens and states, and a demo may shorten
+one without lying about money. A number is the product's answer to "how much may this person take off", and two readers
+that disagree about it are two products. Where a simplification is kept, it is written down next to the code, because the
+alternative is a reader who cannot tell whether the divergence is a decision or an oversight.

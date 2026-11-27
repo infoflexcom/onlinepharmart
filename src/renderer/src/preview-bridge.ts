@@ -17,6 +17,8 @@ import type {
 import type { SaleType } from '@shared/pos/types'
 import type { PrintLogEntry } from '../../services/print-gate-service'
 import { drawerAdjustmentSigned, expectedDrawerCash } from '../../services/cash-drawer'
+import { actorDiscountBasisPoints, maximumDiscountFor, resolveDiscountCap, shopDiscountLimit } from '../../services/discount-cap'
+import type { DiscountCap } from '../../services/discount-cap'
 import { can, resolveRole } from '../../../packages/core/src/index'
 import { createPreviewAudit } from './preview-audit'
 import { createAuditCsv } from '../../services/audit-export'
@@ -166,6 +168,27 @@ export function createPreviewBridge(): InfoflexBridge {
   const previewMobileDevices: PairedMobileDevice[] = []
   let previewKeepRunning: MobileKeepRunningSettings = { keepRunning: true, startWithWindows: true, preventSleep: true }
   const previewApprovals: ApprovalRequestView[] = []
+
+  /**
+   * The discount ceiling for a quote or a sale in the preview, from the module that owns the rule.
+   *
+   * This used to be written out twice, inline, as `subtotal * BigInt(user.role === 'ADMIN' ? 10_000 :
+   * user.permissions.maxDiscountBasisPoints) / 10_000n` — the cashier's own permission row alone, with the shop-wide
+   * ceiling missing from both. That is the same defect the installed till had: a number re-derived where it is used, so
+   * it drifts from the one the rule's owner produces. Reading `resolveDiscountCap` costs nothing here and means a limit
+   * set on the preview's own Settings screen is a limit the preview till honours.
+   *
+   * What the preview still does differently, deliberately: above the ceiling it refuses outright, where the installed
+   * Server raises an approval request and completes the sale once the Admin accepts. The preview is a memory-only host
+   * for looking at the screens, not a stand-in for the approval flow, and nothing here is tested. This is recorded
+   * rather than closed.
+   */
+  function previewDiscountCap(user: PublicUser): DiscountCap {
+    return resolveDiscountCap(
+      actorDiscountBasisPoints(user.role, user.permissions.maxDiscountBasisPoints),
+      shopDiscountLimit(settings),
+    )
+  }
   let nextId = 0
   let nextProductId = 0
   const inventoryProducts: ProductRecord[] = []
@@ -1093,7 +1116,7 @@ export function createPreviewBridge(): InfoflexBridge {
       })
       const subtotalMinor = lines.reduce((sum, line) => sum + line.gross, 0n)
       const manualDiscountMinor = lines.reduce((sum, line) => sum + line.manualDiscount, 0n)
-      const limit = subtotalMinor * BigInt(user.role === 'ADMIN' ? 10_000 : user.permissions.maxDiscountBasisPoints) / 10_000n
+      const limit = maximumDiscountFor(subtotalMinor, previewDiscountCap(user).limitBasisPoints)
       if (manualDiscountMinor > limit) throw new Error('The manual discount exceeds your permission limit.')
       const customer = input.customerId ? previewCustomers.find((candidate) => candidate.id === input.customerId) : undefined
       const warnings = lines.filter((line) => line.product.prescriptionRequired).map((line) => `Prescription required: ${line.product.name}`)
@@ -1136,7 +1159,7 @@ export function createPreviewBridge(): InfoflexBridge {
       })
       const subtotal = lines.reduce((sum, line) => sum + line.gross, 0n)
       const manualDiscount = lines.reduce((sum, line) => sum + line.discount, 0n)
-      const maximum = subtotal * BigInt(user.role === 'ADMIN' ? 10_000 : user.permissions.maxDiscountBasisPoints) / 10_000n
+      const maximum = maximumDiscountFor(subtotal, previewDiscountCap(user).limitBasisPoints)
       if (manualDiscount > maximum || lines.some((line) => line.discount > line.gross)) throw new Error('The manual discount exceeds your permission limit.')
       const total = subtotal - manualDiscount
       let nonCash = 0n
