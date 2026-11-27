@@ -1727,3 +1727,50 @@ The line between those two decisions is worth keeping. A flow is a sequence of s
 one without lying about money. A number is the product's answer to "how much may this person take off", and two readers
 that disagree about it are two products. Where a simplification is kept, it is written down next to the code, because the
 alternative is a reader who cannot tell whether the divergence is a decision or an oversight.
+
+## Asking twice is one question
+
+A till that raises a request tells the cashier to press Complete again once the Admin accepts. So pressing it again is
+the instructed thing to do — and pressing it *before* anybody has answered used to file a second request, then a third.
+The Admin's queue and the phone's badge showed one question several times over, and approving one of them left the rest
+pending against a sale that had already completed: phantoms somebody had to reject by hand.
+
+The queue now answers a repeated question with the request already waiting. Same question means same kind, same asker,
+still waiting, identical payload. The payload carries the idempotency key and the exact excess, so a cashier who raises
+the discount and tries again is asking something new and gets a new row — an Admin who authorized 500 must never be
+recorded as having authorized 1,000.
+
+Three choices inside that are worth keeping.
+
+The check runs inside the raising transaction. A double click is two near-simultaneous raises, which is precisely the
+case a check-then-insert outside the transaction loses; an IMMEDIATE transaction makes the second wait for the first to
+commit and then see its row.
+
+Reuse does not emit `approval.created`. The event is what refreshes the desktop queue and rings the Admin's phone, and
+announcing a row that already exists says there is new work when there is not. So `raiseInTransaction` reports whether it
+inserted, and the caller announces only when it did.
+
+The check is scoped to the person asking, and that is not tidiness. An approval only ever unlocks an attempt by the
+cashier it was filed for, so folding a second cashier's identical question into the first one's row would leave the
+second waiting on a decision that can never reach them. The test gives both cashiers the same display name so that what
+separates them has to be who asked rather than a string that happens to differ.
+
+A related one: a waiting row whose payload cannot be parsed is never treated as a match. Two unreadable payloads might be
+the same question or might not, and guessing wrong swallows a real request — so the safe direction is to file a new one.
+The same reasoning appears wherever this codebase has to decide what to do with data it cannot read: refuse or repeat,
+never assume.
+
+Not audited, deliberately. The question is already on the record from the first attempt, and writing an audit row per
+repeat press would move the clutter from the Admin's queue into the audit log while telling nobody anything new.
+
+Worth recording why this landed in the queue and not everywhere. A sale that crosses a limit **rolls back**, so there is
+no row for a second attempt to be idempotent against — the request is the only trace the first attempt left, and it is
+raised after the rollback precisely so that it survives it. Nothing else in the path can notice that the question was
+already asked.
+
+A return above the cashier's limit is the opposite shape: its request is written inside a transaction that commits, and
+the return carries its own `idempotency_key` and `request_hash`, so a repeated submit finds the return it already made
+and its approval with it. Its Submit button is disabled while the request is in flight, as the till's Complete is. Both
+screens are protected against a double click; what the till could not be protected against is the *instructed* second
+press — the one that happens after the first attempt has come back, with the button live again and the customer still
+standing there. That is the press this rule exists for.

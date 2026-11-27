@@ -1722,6 +1722,32 @@ clears the pending submission outright, so it passed while proving the wrong gua
 be reached by a path that does not clear it — clicking the product again. A test can pass for a reason other than the one
 it claims, and the way to find that out is to break the guard and watch.
 
+Following the ceiling into the Server's side of the conversation found one more thing. An over-cap discount is answered
+with a request and a message that tells the cashier what to do: *"An approval request has been sent to the Admin
+(1a2b3c4d). Once it is accepted, complete this sale again — nothing has been charged and no stock has moved."* Pressing
+Complete again is therefore the instructed thing to do — and pressing it *before* the Admin has answered, or twice, or
+nervously while a customer waits, filed a fresh request every time. Three presses left three identical rows in the
+Admin's queue and three on the phone's badge; approving one of them let the sale through and left two pending against a
+sale that had already completed, for somebody to reject by hand. The audit trail carried three `approvals.requested`
+entries for one question.
+
+`ApprovalQueueService` now answers a repeated question with the request that is already waiting rather than inserting
+another row. Same question means same kind, same asker, still waiting, and an identical payload — and the payload is what
+carries the idempotency key and the exact excess for a sale, so a cashier who raises the discount and tries again gets a
+new request, and an Admin who authorized 500 is never recorded as authorizing 1,000. The check runs inside the raising
+transaction because a double click *is* two near-simultaneous raises, which is the case a check-then-insert outside it
+loses. Reuse does not emit `approval.created`: announcing a row that already exists tells every listening screen, and the
+Admin's phone, that there is new work when there is not.
+
+Two details are load-bearing and are tested rather than trusted. The check is scoped to the asker, because an approval
+only ever unlocks an attempt by the person it was filed for — folding a second cashier's identical question into the
+first one's row would leave the second waiting on a decision that can never reach them, and the test gives both cashiers
+the same display name so that what separates them has to be who asked. And a waiting row whose payload cannot be parsed
+is never treated as a match: guessing that damaged bytes are the same question would swallow a real one, so the safe
+direction is to file a new request.
+
+Six tests at the queue and two through the host cover it, and three of the eight fail against the pre-fix service.
+
 The browser preview asks this question in a different vocabulary from the licensed host — by page access, keyed to
 `take_payment`, where the host's policy row requires `record_debtor_payment` — so the relationship between the two is
 asserted in the generated permission matrix rather than left to coincidence: for every role in every edition, whatever the

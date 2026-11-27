@@ -190,6 +190,82 @@ describe('a sale that crosses a limit an Admin can lift', () => {
     }
   })
 
+  it('asks the Admin once, however many times the cashier presses Complete while it waits', async () => {
+    const harness = createHost()
+    try {
+      await harness.signInAdmin()
+      harness.setShopDiscountLimit(500) // 5%
+      const product = harness.makeProduct()
+      const attempt = {
+        idempotencyKey: 'apr-discount-repeat-0001',
+        saleType: 'RETAIL' as const,
+        items: [{ productId: product.id, quantity: '1', manualDiscount: '10.00' }],
+        payments: [{ method: 'CASH' as const, amount: '100.00' }],
+      }
+      // The message tells the cashier to press Complete again once the Admin accepts, so pressing it again is the
+      // instructed thing to do — including before anybody has answered.
+      const messages: string[] = []
+      for (const _ of [1, 2, 3]) {
+        try {
+          harness.host.completePosSale(1, attempt)
+          throw new Error('the sale should not have completed while the request waits')
+        } catch (error) {
+          messages.push((error as Error).message)
+        }
+      }
+
+      const pending = harness.host.listPendingApprovals(1)
+      expect(pending, 'one question, asked three times').toHaveLength(1)
+      // Every attempt names the same request, so a cashier reading the screen aloud to the Admin over the phone is
+      // reading the id of the row that is actually waiting.
+      // Anything up to the closing bracket, not a hex class: the id is a uuid in the product and a fixture counter here.
+      const ids = messages.map((message) => /to the Admin \(([^)]+)\)/u.exec(message)?.[1])
+      expect(new Set(ids).size, 'the same id every time').toBe(1)
+      expect(ids[0]).toBe(pending[0]!.id.slice(0, 8))
+      // And one entry in the audit trail, not one per press.
+      const asked = harness.database.prepare(`SELECT COUNT(*) AS count FROM audit_log WHERE action = 'approvals.requested'`)
+        .get() as { count: number }
+      expect(asked.count).toBe(1)
+
+      // Nothing sold and nothing moved across all three attempts, and the single request still unlocks the sale.
+      expect(harness.saleCount()).toBe(0)
+      expect(harness.stockOf(product.id)?.quantity_milli).toBe(50_000)
+      await adminApprovesEverything(harness)
+      expect(harness.host.completePosSale(1, attempt).receipt.receiptNumber).toMatch(/^R-/u)
+      expect(harness.saleCount()).toBe(1)
+      expect(harness.host.listPendingApprovals(1), 'no phantom left behind for the Admin to reject').toHaveLength(0)
+    } finally {
+      harness.close()
+    }
+  })
+
+  it('files a fresh request when the retry asks for more than the one already waiting', async () => {
+    const harness = createHost()
+    try {
+      await harness.signInAdmin()
+      harness.setShopDiscountLimit(500) // 5%
+      const product = harness.makeProduct()
+      const sale = (key: string, discount: string) => ({
+        idempotencyKey: key,
+        saleType: 'RETAIL' as const,
+        items: [{ productId: product.id, quantity: '1', manualDiscount: discount }],
+        payments: [{ method: 'CASH' as const, amount: '100.00' }],
+      })
+
+      expect(() => harness.host.completePosSale(1, sale('apr-discount-grew-0001', '10.00'))).toThrowError(/exceeds the 5% shop limit/u)
+      expect(harness.host.listPendingApprovals(1)).toHaveLength(1)
+      // A cashier who raises the discount and tries again is asking a different question, and an Admin who authorized
+      // 500 must not find themselves recorded as authorizing 1,000.
+      expect(() => harness.host.completePosSale(1, sale('apr-discount-grew-0001', '15.00'))).toThrowError(/exceeds the 5% shop limit/u)
+
+      const pending = harness.host.listPendingApprovals(1)
+      expect(pending).toHaveLength(2)
+      expect(pending.map((request) => request.amountMinor)).toEqual(['500', '1000'])
+    } finally {
+      harness.close()
+    }
+  })
+
   it('refuses a retry that asks for more than the Admin approved', async () => {
     const harness = createHost()
     try {

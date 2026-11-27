@@ -26,6 +26,31 @@ const KIND_LABEL: Record<ApprovalKind, string> = {
   VOID: 'Void a completed sale',
 }
 
+/**
+ * One payload, serialized with its keys in a fixed order.
+ *
+ * Two requests ask the same question when their payloads carry the same facts, and the facts arrive as an object built
+ * by whoever raised them. Comparing the stored strings would make that depend on the order the keys happened to be
+ * written in, so the comparison canonicalizes instead: sorted keys at every level, and a payload this cannot read is
+ * never treated as a match, because guessing that an unreadable row is the same question would swallow a real one.
+ */
+function canonicalJson(value: unknown): string | null {
+  try {
+    return JSON.stringify(sortDeep(value))
+  } catch {
+    return null
+  }
+}
+
+function sortDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortDeep)
+  if (value && typeof value === 'object') {
+    const source = value as Record<string, unknown>
+    return Object.fromEntries(Object.keys(source).sort().map((key) => [key, sortDeep(source[key])]))
+  }
+  return value
+}
+
 interface RequestRow {
   id: string
   request_type: string
@@ -46,6 +71,17 @@ export interface RaiseApprovalInput {
   /** Amount in integer minor units, used for display and ordering only; never for arithmetic on floats. */
   amountMinor?: bigint
   currencyCode: string
+}
+
+/** What a raise produced: a new request, or the one already waiting on the same question. */
+export interface RaiseApprovalResult {
+  request: ApprovalRequestView
+  /**
+   * True when nothing was inserted because this person has already asked this exact question and nobody has answered
+   * it yet. Callers announce a request only when this is false: emitting "created" for a row that already exists tells
+   * every listening screen, and the Admin's phone, that there is new work when there is not.
+   */
+  reused: boolean
 }
 
 export interface ApprovalListener {
@@ -74,11 +110,12 @@ export class ApprovalQueueService {
   /**
    * Inserts the request inside the caller's transaction, so a sale/return and its approval request cannot
    * diverge. Callers that use this must call `announce()` after committing; `raise()` does both for them.
+   *
+   * Returns the request already waiting when this person has asked this exact question before and nobody has answered
+   * it, instead of inserting a second row. See `findWaitingRequest`.
    */
-  raiseInTransaction(input: RaiseApprovalInput): ApprovalRequestView {
+  raiseInTransaction(input: RaiseApprovalInput): RaiseApprovalResult {
     const actor = requireActor(input.actor)
-    const createdAt = this.now().toISOString()
-    const id = this.newId()
     const payload = {
       ...input.payload,
       kind: input.kind,
@@ -87,19 +124,73 @@ export class ApprovalQueueService {
       currencyCode: input.currencyCode,
       ...(input.amountMinor === undefined ? {} : { amountMinor: input.amountMinor.toString() }),
     }
+    const waiting = this.findWaitingRequest(input.kind, actor.id, payload)
+    if (waiting) return { request: this.read(waiting.id), reused: true }
+
+    const createdAt = this.now().toISOString()
+    const id = this.newId()
     this.database.prepare(`
       INSERT INTO approval_requests (id, request_type, requested_by, status, payload_json, created_at)
       VALUES (?, ?, ?, 'PENDING', ?, ?)
     `).run(id, input.kind, actor.id, JSON.stringify(payload), createdAt)
     this.audit(actor.username, 'approvals.requested', { ...payload, requestId: id })
-    return this.read(id)
+    return { request: this.read(id), reused: false }
+  }
+
+  /**
+   * The request already waiting on this exact question from this exact person, or `null`.
+   *
+   * The till tells a cashier whose discount is over the ceiling to press Complete again once the Admin accepts, so
+   * pressing it again is the instructed thing to do — and pressing it *before* the Admin has answered, or twice, or
+   * nervously while a customer waits, used to file a fresh request every time. The Admin's queue and the phone's badge
+   * then showed one question three times over; approving one of them left the others pending against a sale that had
+   * already completed, for somebody to reject by hand.
+   *
+   * Scoped to the asker, and that is load-bearing rather than tidy: an approval only ever unlocks an attempt by the
+   * person it was filed for (`hasApprovedOverride` matches `requested_by`), so folding a second cashier's identical
+   * question into the first cashier's row would leave the second one waiting on a decision that can never reach them.
+   *
+   * Compared on the whole payload, which is what carries the idempotency key and the exact excess for a sale and the
+   * sale id for a void. Two attempts that differ in any of those are two different questions and still get two rows, so
+   * a cashier who raises the discount and tries again gets a new request rather than an answer about the old one.
+   *
+   * Called inside the raising transaction on purpose. A double click is two near-simultaneous raises, which is exactly
+   * the case a check-then-insert outside the transaction loses; `raise` opens an IMMEDIATE one, so the second waits for
+   * the first to commit and then sees its row.
+   *
+   * Deliberately not audited. The question is already on the record from the first attempt, and writing a row for every
+   * repeat press would move the clutter from the Admin's queue into the audit log without telling anybody anything new.
+   */
+  private findWaitingRequest(
+    kind: ApprovalKind,
+    requesterId: string,
+    payload: Record<string, unknown>,
+  ): { id: string } | null {
+    const wanted = canonicalJson(payload)
+    if (wanted === null) return null
+    const rows = this.database.prepare(`
+      SELECT id, payload_json FROM approval_requests
+      WHERE request_type = ? AND requested_by = ? AND status = 'PENDING'
+      ORDER BY created_at ASC, id ASC LIMIT 200
+    `).all(kind, requesterId) as Array<{ id: string; payload_json: string }>
+    for (const row of rows) {
+      let stored: unknown
+      try {
+        stored = JSON.parse(row.payload_json)
+      } catch {
+        continue
+      }
+      if (canonicalJson(stored) === wanted) return row
+    }
+    return null
   }
 
   raise(input: RaiseApprovalInput): ApprovalRequestView {
-    const view = this.database.transaction(() => this.raiseInTransaction(input)).immediate()
-    // Announced only after the row is committed, so no listener can react to a request that then rolls back.
-    this.emit({ type: 'approval.created', request: view })
-    return view
+    const { request, reused } = this.database.transaction(() => this.raiseInTransaction(input)).immediate()
+    // Announced only after the row is committed, so no listener can react to a request that then rolls back — and only
+    // when this call is what created it, so a repeated attempt does not ring the Admin's phone about work already there.
+    if (!reused) this.emit({ type: 'approval.created', request })
+    return request
   }
 
   listPending(actor: PublicUser): ApprovalRequestView[] {

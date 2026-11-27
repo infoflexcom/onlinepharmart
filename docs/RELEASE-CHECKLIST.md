@@ -910,6 +910,10 @@ no cash drawer and no Windows machine in the environment where this was built.
 | Pharmacy FEFO | Finalizing an order draws the earliest-expiring batch first, across two batches received out of date order | ☐ pass ☐ fail |
 | Approval on the Server | An over-cap discount raises a request the Admin accepts on the Server, and the same attempt then completes | ☐ pass ☐ fail |
 | Approval from the phone | The same request accepted from the Admin's phone app unlocks the same attempt | ☐ pass ☐ fail |
+| Pressing Complete again while it waits | A cashier who presses Complete three times before the Admin answers leaves **one** request in the queue and on the phone's badge, and the till names the same request id every time | ☐ pass ☐ fail |
+| A changed basket asks again | Raising the discount after a request is already waiting files a second request for the new excess; approving the first does not authorize the second | ☐ pass ☐ fail |
+| Two cashiers, one question | The same over-cap basket attempted by two cashiers leaves two requests, and approving one unlocks only the attempt of the cashier it was filed for | ☐ pass ☐ fail |
+| Nothing left behind | Once the Admin approves and the sale completes, the queue and the badge are empty — no leftover request for somebody to reject by hand | ☐ pass ☐ fail |
 | Receipts in four currencies | Receipts print with the shop's own store name and in NGN, USD, JPY and KWD, each correctly formatted | ☐ pass ☐ fail |
 | Renaming the store | Renaming the store changes **new** receipts only; reprinting an old one still shows the name it was sold under | ☐ pass ☐ fail |
 

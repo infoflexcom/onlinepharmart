@@ -93,6 +93,99 @@ describe('the approvals queue', () => {
     expect(events).toEqual(['approval.created:RETURN', 'approval.resolved:RETURN'])
   })
 
+  // A till that raises a request tells the cashier to press Complete again once the Admin accepts, so pressing it again
+  // is the instructed thing to do. Pressing it *before* anybody has answered — twice, or nervously while a customer
+  // waits — used to file a fresh request every time, and the Admin's queue and the phone's badge showed one question
+  // several times over. Approving one of them left the rest pending against a sale that had already completed.
+  it('keeps one request waiting when the same person asks the same question again', () => {
+    const { service } = setup()
+    const question = {
+      kind: 'DISCOUNT' as const, actor: CASHIER, currencyCode: 'NGN', amountMinor: 500n,
+      payload: { idempotencyKey: 'key-1', excessMinor: '500', subtotalMinor: '10000' },
+    }
+    const first = service.raise(question)
+    const second = service.raise(question)
+    const third = service.raise(question)
+    // The same row handed back, so the till names the same request every time rather than a new id per attempt.
+    expect(second.id).toBe(first.id)
+    expect(third.id).toBe(first.id)
+    expect(service.listPending(ADMIN)).toHaveLength(1)
+  })
+
+  it('announces a request once, however many times it is asked', () => {
+    const { service } = setup()
+    const events: string[] = []
+    service.subscribe((event) => events.push(`${event.type}:${event.request.id}`))
+    const question = { kind: 'CREDIT' as const, actor: CASHIER, currencyCode: 'NGN', amountMinor: 900n, payload: { idempotencyKey: 'key-2' } }
+    const first = service.raise(question)
+    service.raise(question)
+    service.raise(question)
+    // A second "created" for a row that already exists would ring the Admin's phone about work that is already on it.
+    expect(events).toEqual([`approval.created:${first.id}`])
+  })
+
+  it('files a second request when the question is a different one', () => {
+    const { service } = setup()
+    service.raise({ kind: 'DISCOUNT', actor: CASHIER, currencyCode: 'NGN', amountMinor: 500n, payload: { idempotencyKey: 'key-3', excessMinor: '500' } })
+    // A bigger excess is a different decision: an Admin who authorized 500 must not be shown it as 1,000, and a
+    // cashier who raised the discount and tried again is asking something new.
+    service.raise({ kind: 'DISCOUNT', actor: CASHIER, currencyCode: 'NGN', amountMinor: 1_000n, payload: { idempotencyKey: 'key-3', excessMinor: '1000' } })
+    // Another checkout key is another sale, so it cannot hide behind the first one's request either.
+    service.raise({ kind: 'DISCOUNT', actor: CASHIER, currencyCode: 'NGN', amountMinor: 500n, payload: { idempotencyKey: 'key-4', excessMinor: '500' } })
+    const pending = service.listPending(ADMIN)
+    expect(pending).toHaveLength(3)
+    expect(pending.map((request) => request.amountMinor)).toEqual(['500', '1000', '500'])
+  })
+
+  it('files a separate request for a second person asking the same thing', () => {
+    const { database, service } = setup()
+    // Same display name on purpose. The payload carries the asker's name, so two people who happen to share one would
+    // look identical to a comparison that forgot the person: what has to separate them is who asked, because an
+    // approval only ever unlocks an attempt by the person it was filed for.
+    const other = user('CASHIER', 'cashier-2', CASHIER.fullName)
+    database.prepare('INSERT INTO users (id, full_name, username, password_hash, role) VALUES (?, ?, ?, ?, ?)')
+      .run(other.id, other.fullName, other.username, 'hash', other.role)
+    const question = { idempotencyKey: 'key-5', excessMinor: '500' }
+
+    const first = service.raise({ kind: 'DISCOUNT', actor: CASHIER, currencyCode: 'NGN', amountMinor: 500n, payload: question })
+    const second = service.raise({ kind: 'DISCOUNT', actor: other, currencyCode: 'NGN', amountMinor: 500n, payload: question })
+
+    expect(second.id, 'the second cashier gets a decision that can reach them').not.toBe(first.id)
+    const pending = service.listPending(ADMIN)
+    expect(pending).toHaveLength(2)
+    expect(pending.map((request) => request.requestedBy).sort()).toEqual([CASHIER.id, other.id].sort())
+  })
+
+  it('asks again once the Admin has answered, whichever way they answered', () => {
+    const { service } = setup()
+    const question = { kind: 'DISCOUNT' as const, actor: CASHIER, currencyCode: 'NGN', amountMinor: 500n, payload: { idempotencyKey: 'key-6', excessMinor: '500' } }
+    const rejected = service.raise(question)
+    service.resolve(rejected.id, 'REJECT', ADMIN)
+    // A rejection is an answer, not a wall: asking again is how a cashier puts a case back to the Admin, and swallowing
+    // the second attempt would leave them told to wait for a decision that has already been made against them.
+    const askedAgain = service.raise(question)
+    expect(askedAgain.id).not.toBe(rejected.id)
+    expect(askedAgain.status).toBe('PENDING')
+    expect(service.listPending(ADMIN)).toHaveLength(1)
+
+    service.resolve(askedAgain.id, 'APPROVE', ADMIN)
+    const afterApproval = service.raise(question)
+    expect(afterApproval.id, 'an answered request is not a waiting one').not.toBe(askedAgain.id)
+    expect(afterApproval.status).toBe('PENDING')
+  })
+
+  it('never matches a waiting request it cannot read', () => {
+    const { database, service } = setup()
+    const question = { kind: 'VOID' as const, actor: CASHIER, currencyCode: 'NGN', payload: { saleId: 7 } }
+    const first = service.raise(question)
+    // A row damaged in place — a truncated write, a hand edit, a payload from a version this one cannot parse. Guessing
+    // that it is the same question would swallow a real request, so the safe direction is to file a new one.
+    database.prepare('UPDATE approval_requests SET payload_json = ? WHERE id = ?').run('{ not json', first.id)
+    const second = service.raise(question)
+    expect(second.id).not.toBe(first.id)
+    expect(service.listPending(ADMIN).map((request) => request.id)).toContain(second.id)
+  })
+
   it('keeps the audit trail of who asked and who decided', () => {
     const { database, service } = setup()
     const request = service.raise({ kind: 'CREDIT', actor: CASHIER, currencyCode: 'NGN', amountMinor: 900n, payload: { customer: 'Walk-in' } })
